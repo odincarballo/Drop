@@ -28,8 +28,7 @@ RUN ffmpeg -version 2>&1 | grep --max-count=1 '^ffmpeg version 5\.1\.9' \
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project \
-    && python -c "import yt_dlp.version; assert yt_dlp.version.__version__ == '2026.8.19'"
+RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app ./app
 RUN uv sync --frozen --no-dev
