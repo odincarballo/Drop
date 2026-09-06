@@ -34,6 +34,7 @@ async def test_mock_provider_is_deterministic() -> None:
     assert first == await provider.analyze(url)
     assert first.id != (await provider.analyze(HttpUrl("https://example.com/other"))).id
     assert isinstance(first.thumbnail, str)
+    assert first.provider == "mock"
     image = base64.b64decode(first.thumbnail.split(",", 1)[1], validate=True)
     assert image.startswith(b"\x89PNG\r\n\x1a\n")
     streams = await provider.get_available_streams(url)
@@ -55,6 +56,7 @@ async def test_direct_provider_reports_verified_http_metadata(settings: Settings
     analysis = await provider.analyze(url)
     assert analysis.title == "My Video.mp4"
     assert analysis.source == "direct"
+    assert analysis.provider == "direct"
     assert analysis.duration is None
     assert analysis.estimated_size == 1234
     assert len(analysis.video_formats) == 1

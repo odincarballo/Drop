@@ -3,8 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { config } from '@/config';
 import type { DownloadJob, MediaAnalysis } from '@/models/media';
 import {
-  isSelectionComplete,
-  selectedFormatId,
+  selectedDownloadRequest,
   type DownloadSelection,
 } from '@/models/selection';
 import { ApiError, jobError } from '@/services/errors';
@@ -70,15 +69,15 @@ export function useMediaDownload() {
 
   async function start(media: MediaAnalysis, selection: DownloadSelection) {
     if (active.current) return;
-    if (media.source !== 'direct') {
+    if (media.source !== 'direct' && media.source !== 'youtube') {
       setState({
         status: 'error',
         message: 'Los datos simulados no contienen un archivo descargable.',
       });
       return;
     }
-    const formatId = selectedFormatId(selection, media);
-    if (!isSelectionComplete(selection, media) || !formatId) return;
+    const downloadRequest = selectedDownloadRequest(media, selection);
+    if (!downloadRequest) return;
 
     active.current = true;
     const currentOperation = ++operation.current;
@@ -87,15 +86,16 @@ export function useMediaDownload() {
     setState({ status: 'creating' });
     try {
       let job = await createDownloadJob(
-        {
-          mediaId: media.id,
-          downloadType: selection.type,
-          formatId,
-        },
+        downloadRequest,
         requestController.signal,
       );
       jobId.current = job.id;
-      while (job.status === 'PENDING' || job.status === 'DOWNLOADING') {
+      while (
+        job.status === 'PENDING' ||
+        job.status === 'PREPARING' ||
+        job.status === 'DOWNLOADING' ||
+        job.status === 'PROCESSING'
+      ) {
         if (mounted.current && operation.current === currentOperation) {
           setState({ status: 'downloading', job });
         }

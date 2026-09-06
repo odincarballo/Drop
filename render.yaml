@@ -15,11 +15,17 @@ services:
       - key: MEDIADROP_API_TOKEN
         sync: false
       - key: MEDIADROP_ANALYSIS_PROVIDER
-        value: direct
+        value: auto
       - key: MEDIADROP_ANALYSIS_TIMEOUT_SECONDS
-        value: "10"
+        value: "30"
       - key: MAX_FILE_SIZE
         value: "104857600"
+      - key: MAX_INPUT_BYTES
+        value: "104857600"
+      - key: MAX_OUTPUT_BYTES
+        value: "104857600"
+      - key: MAX_TEMP_WORK_BYTES
+        value: "230686720"
       - key: DOWNLOAD_TIMEOUT
         value: "120"
       - key: CONNECT_TIMEOUT
@@ -36,6 +42,18 @@ services:
         value: "60"
       - key: MAX_ACTIVE_JOBS
         value: "2"
+      - key: MAX_PROCESSING_JOBS
+        value: "1"
+      - key: MEDIADROP_MEDIA_PROCESSING_TIMEOUT_SECONDS
+        value: "300"
+      - key: MEDIADROP_FFMPEG_PATH
+        value: ffmpeg
+      - key: MEDIADROP_FFPROBE_PATH
+        value: ffprobe
+      - key: MEDIADROP_YOUTUBE_SOCKET_TIMEOUT_SECONDS
+        value: "10"
+      - key: MEDIADROP_YOUTUBE_RETRIES
+        value: "1"
       - key: MEDIADROP_RATE_LIMIT_REQUESTS
         value: "180"
       - key: MEDIADROP_RATE_LIMIT_WINDOW_SECONDS

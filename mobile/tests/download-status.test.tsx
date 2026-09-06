@@ -63,3 +63,46 @@ test('shows completed filename and actions', async () => {
   expect(share).toHaveBeenCalledTimes(1);
   expect(reset).toHaveBeenCalledTimes(1);
 });
+
+test('shows backend processing phase without inventing a percentage', async () => {
+  await render(
+    <DownloadStatusCard
+      state={{
+        status: 'downloading',
+        job: {
+          ...job,
+          status: 'PROCESSING',
+          phase: 'MUXING',
+          progress: null,
+          message: 'Combinando video y audio…',
+        },
+      }}
+      onCancel={jest.fn()}
+      onShare={jest.fn()}
+      onReset={jest.fn()}
+    />,
+  );
+  expect(screen.getByText('Combinando video y audio…')).toBeTruthy();
+  expect(screen.queryByText(/%/)).toBeNull();
+  expect(screen.queryByText('38 MB / 60 MB')).toBeNull();
+});
+
+test('shows the current YouTube stream download phase', async () => {
+  await render(
+    <DownloadStatusCard
+      state={{
+        status: 'downloading',
+        job: {
+          ...job,
+          phase: 'DOWNLOADING_VIDEO',
+          message: 'Descargando video…',
+        },
+      }}
+      onCancel={jest.fn()}
+      onShare={jest.fn()}
+      onReset={jest.fn()}
+    />,
+  );
+  expect(screen.getByText('Descargando video…')).toBeTruthy();
+  expect(screen.getByText('38 MB / 60 MB')).toBeTruthy();
+});

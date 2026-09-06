@@ -13,6 +13,10 @@ class MediaProvider(ABC):
         """Recognize a URL without making network requests."""
 
     @abstractmethod
+    def owns(self, media_id: str) -> bool:
+        """Return whether this provider created the opaque analysis capability."""
+
+    @abstractmethod
     async def analyze(self, url: HttpUrl) -> MediaAnalysis:
         """Return metadata; use null for unknown values."""
 

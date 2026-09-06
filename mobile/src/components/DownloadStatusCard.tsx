@@ -91,12 +91,21 @@ export function DownloadStatusCard({
       ? state.totalBytes
       : state.job.totalBytes;
   const progress =
-    isCreating || total === null || total <= 0
-      ? state.status === 'downloading'
-        ? state.job.progress
-        : null
-      : Math.min(downloaded / total, 1);
+    state.status === 'downloading'
+      ? state.job.progress
+      : isCreating || total === null || total <= 0
+        ? null
+        : Math.min(downloaded / total, 1);
   const percentage = progress === null ? null : Math.round(progress * 100);
+  const backendHeading =
+    state.status === 'downloading'
+      ? (state.job.message ??
+        (state.job.status === 'PROCESSING'
+          ? 'Procesando…'
+          : state.job.status === 'PREPARING'
+            ? 'Preparando descarga…'
+            : 'Descargando…'))
+      : null;
 
   return (
     <View
@@ -113,7 +122,7 @@ export function DownloadStatusCard({
           ? 'Preparando descarga…'
           : isTransferring
             ? 'Guardando en el iPhone…'
-            : 'Descargando…'}
+            : (backendHeading ?? 'Descargando…')}
       </Text>
       {percentage !== null && (
         <Text
@@ -134,12 +143,18 @@ export function DownloadStatusCard({
           ]}
         />
       </View>
-      {!isCreating && (
+      {!isCreating && state.status !== 'downloading' ? (
         <Text style={[styles.detail, { color: colors.secondary }]}>
           {formatSize(downloaded)}
           {total !== null ? ` / ${formatSize(total)}` : ''}
         </Text>
-      )}
+      ) : state.status === 'downloading' &&
+        state.job.status === 'DOWNLOADING' ? (
+        <Text style={[styles.detail, { color: colors.secondary }]}>
+          {formatSize(downloaded)}
+          {total !== null ? ` / ${formatSize(total)}` : ''}
+        </Text>
+      ) : null}
       <ActionButton label="Cancelar" secondary onPress={onCancel} />
     </View>
   );

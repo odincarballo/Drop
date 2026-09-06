@@ -37,7 +37,9 @@ async def health(request: Request) -> HealthResponse:
     "/analyze",
     response_model=MediaAnalysis,
     dependencies=[Depends(require_api_access)],
-    responses={code: {"model": ErrorResponse} for code in (400, 401, 403, 413, 422, 429, 500, 504)},
+    responses={
+        code: {"model": ErrorResponse} for code in (400, 401, 403, 413, 422, 429, 500, 502, 504)
+    },
 )
 async def analyze(
     body: AnalyzeRequest,

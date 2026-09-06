@@ -85,6 +85,44 @@ test('job service creates and cancels a typed job', async () => {
   );
 });
 
+test('job service sends typed YouTube audio conversion choices', async () => {
+  const pendingJob = {
+    id: 'job-youtube',
+    status: 'PREPARING',
+    phase: 'PREPARING',
+    progress: 0,
+    bytesDownloaded: 0,
+    totalBytes: 3000000,
+    fileName: 'Authorized video.mp3',
+    fileSize: null,
+    error: null,
+    downloadUrl: null,
+    message: 'Preparando descarga…',
+  };
+  const fetchSpy = jest
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValue(jsonResponse(pendingJob));
+  await createDownloadJob({
+    mediaId: 'youtube-demo',
+    downloadType: 'AUDIO_ONLY',
+    formatId: '140',
+    audioOutputFormat: 'MP3',
+    audioBitrate: 256000,
+  });
+  expect(fetchSpy).toHaveBeenCalledWith(
+    `${config.apiBaseUrl}/jobs`,
+    expect.objectContaining({
+      body: JSON.stringify({
+        mediaId: 'youtube-demo',
+        downloadType: 'AUDIO_ONLY',
+        formatId: '140',
+        audioOutputFormat: 'MP3',
+        audioBitrate: 256000,
+      }),
+    }),
+  );
+});
+
 test('reusable API client supports GET, normalizes base URL and returns typed data', async () => {
   const fetcher = jest.fn().mockResolvedValue(jsonResponse({ status: 'ok' }));
   const client = createApiClient({

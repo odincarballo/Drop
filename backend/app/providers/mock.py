@@ -21,11 +21,15 @@ class MockMediaProvider(MediaProvider):
     def supports(self, url: HttpUrl) -> bool:
         return url.scheme in {"http", "https"}
 
+    def owns(self, media_id: str) -> bool:
+        return media_id.startswith("mock-")
+
     async def get_available_streams(self, url: HttpUrl) -> AvailableStreams:
         return AvailableStreams(
             video_formats=[
                 VideoFormat(
                     id="mock-video-360p",
+                    format_id="mock-video-360p",
                     resolution="640x360",
                     container="mp4",
                     codec="h264",
@@ -34,6 +38,7 @@ class MockMediaProvider(MediaProvider):
                 ),
                 VideoFormat(
                     id="mock-video-720p",
+                    format_id="mock-video-720p",
                     resolution="1280x720",
                     container="mp4",
                     codec="h264",
@@ -42,6 +47,7 @@ class MockMediaProvider(MediaProvider):
                 ),
                 VideoFormat(
                     id="mock-video-1080p",
+                    format_id="mock-video-1080p",
                     resolution="1920x1080",
                     container="mp4",
                     codec="h264",
@@ -52,6 +58,7 @@ class MockMediaProvider(MediaProvider):
             audio_formats=[
                 AudioFormat(
                     id="mock-audio-128k",
+                    format_id="mock-audio-128k",
                     container="m4a",
                     codec="aac",
                     bitrate=128_000,
@@ -59,6 +66,7 @@ class MockMediaProvider(MediaProvider):
                 ),
                 AudioFormat(
                     id="mock-audio-256k",
+                    format_id="mock-audio-256k",
                     container="m4a",
                     codec="aac",
                     bitrate=256_000,
@@ -71,6 +79,7 @@ class MockMediaProvider(MediaProvider):
         streams = await self.get_available_streams(url)
         return MediaAnalysis(
             id=f"mock-{uuid5(NAMESPACE_URL, str(url))}",
+            provider="mock",
             title="MediaDrop Demo Video",
             duration=154,
             source="mock",

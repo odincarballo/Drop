@@ -20,11 +20,15 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
         if key.startswith("MEDIADROP_") or key in {
             "PORT",
             "MAX_FILE_SIZE",
+            "MAX_INPUT_BYTES",
+            "MAX_OUTPUT_BYTES",
+            "MAX_TEMP_WORK_BYTES",
             "DOWNLOAD_TIMEOUT",
             "CONNECT_TIMEOUT",
             "MAX_REDIRECTS",
             "TEMP_FILE_TTL",
             "MAX_ACTIVE_JOBS",
+            "MAX_PROCESSING_JOBS",
             "LOG_LEVEL",
         }:
             monkeypatch.delenv(key)

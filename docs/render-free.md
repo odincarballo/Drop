@@ -1,5 +1,7 @@
 # Despliegue personal en Render Free
 
+El servicio público actual sigue ejecutando MediaDrop 0.5. El commit 0.6 debe desplegarse manualmente solo después de revisar el build; `autoDeployTrigger: "off"` evita que el push lo cambie por sí solo.
+
 `render.yaml` define exactamente un recurso:
 
 - un Web Service llamado `mediadrop-api`;
@@ -42,6 +44,10 @@ tolerar el arranque en frío de Free; por eso el ejemplo móvil de producción u
 Los despliegues automáticos están desactivados para no consumir minutos de build
 por cada push. Los siguientes despliegues deben iniciarse manualmente desde el
 Dashboard y siempre se debe conservar el plan Free.
+
+La fase 0.6 añade FFmpeg/ffprobe 5.1.9, Node 22.23.2 y yt-dlp 2026.8.19 a la imagen. En Free, la CPU y memoria reducidas hacen que mux y especialmente MP3/M4A convertido sean más lentos. `MAX_PROCESSING_JOBS=1`, el timeout de 300 segundos y los límites de 100 MiB evitan trabajo intensivo concurrente, pero no garantizan que cualquier video termine dentro de esos recursos.
+
+Un origen como YouTube puede limitar o desafiar IPs de centros de datos. MediaDrop no usa cookies, login ni proxies para evitarlo; en ese caso devuelve un error claro y la integración requerirá una actualización legítima de yt-dlp o esperar, no debilitar controles.
 
 Para detener el backend, selecciona el servicio y usa **Suspend**. Para retirarlo
 definitivamente, elimina primero cualquier referencia al Blueprint y después

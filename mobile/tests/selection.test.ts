@@ -1,10 +1,12 @@
 import {
   availableDownloadTypes,
+  estimatedSelectionSize,
   initialSelection,
   isSelectionComplete,
   reduceSelection,
+  selectedDownloadRequest,
 } from '@/models/selection';
-import { demoMedia } from './fixtures/media';
+import { demoMedia, youtubeMedia } from './fixtures/media';
 
 test('initial mode is video + audio with no quality silently chosen', () => {
   const selection = initialSelection();
@@ -45,7 +47,12 @@ test('mode changes discard inapplicable fields and preserve applicable selection
     { kind: 'type', value: 'AUDIO_ONLY' },
     demoMedia,
   );
-  expect(audio).toEqual({ type: 'AUDIO_ONLY', audioIndex: null });
+  expect(audio).toEqual({
+    type: 'AUDIO_ONLY',
+    audioIndex: null,
+    audioOutputFormat: null,
+    audioBitrate: null,
+  });
   expect(isSelectionComplete(audio, demoMedia)).toBe(false);
   expect(
     isSelectionComplete(
@@ -74,12 +81,25 @@ test('empty lists and out-of-range selections cannot enable downloading', () => 
     isSelectionComplete(selected, { ...demoMedia, videoFormats: [] }),
   ).toBe(false);
   expect(
-    isSelectionComplete({ type: 'AUDIO_ONLY', audioIndex: 99 }, demoMedia),
+    isSelectionComplete(
+      {
+        type: 'AUDIO_ONLY',
+        audioIndex: 99,
+        audioOutputFormat: null,
+        audioBitrate: null,
+      },
+      demoMedia,
+    ),
   ).toBe(false);
 });
 
 test('audio-only ignores video events', () => {
-  const selection = { type: 'AUDIO_ONLY', audioIndex: 0 } as const;
+  const selection = {
+    type: 'AUDIO_ONLY',
+    audioIndex: 0,
+    audioOutputFormat: null,
+    audioBitrate: null,
+  } as const;
   expect(
     reduceSelection(selection, { kind: 'video', index: 1 }, demoMedia),
   ).toEqual(selection);
@@ -103,5 +123,103 @@ test('direct video exposes only its intact format and direct audio starts audio-
   expect(initialSelection(directAudio)).toEqual({
     type: 'AUDIO_ONLY',
     audioIndex: null,
+    audioOutputFormat: null,
+    audioBitrate: null,
+  });
+});
+
+test('YouTube selects real 720p and best compatible audio by default', () => {
+  const selection = initialSelection(youtubeMedia);
+  expect(selection).toEqual({
+    type: 'VIDEO_AUDIO',
+    videoIndex: 1,
+    audioIndex: 0,
+  });
+  expect(availableDownloadTypes(youtubeMedia)).toEqual([
+    'VIDEO_AUDIO',
+    'VIDEO_ONLY',
+    'AUDIO_ONLY',
+  ]);
+  expect(isSelectionComplete(selection, youtubeMedia)).toBe(true);
+  expect(selectedDownloadRequest(youtubeMedia, selection)).toEqual({
+    mediaId: 'youtube-demo',
+    downloadType: 'VIDEO_AUDIO',
+    formatId: '136',
+    audioFormatId: '140',
+  });
+  expect(estimatedSelectionSize(youtubeMedia, selection)).toBe(23000000);
+});
+
+test('YouTube progressive video does not require a separate audio stream', () => {
+  const media = { ...youtubeMedia, audioFormats: [] };
+  const selection = {
+    type: 'VIDEO_AUDIO',
+    videoIndex: 0,
+    audioIndex: null,
+  } as const;
+  expect(availableDownloadTypes(media)).toContain('VIDEO_AUDIO');
+  expect(isSelectionComplete(selection, media)).toBe(true);
+  expect(estimatedSelectionSize(media, selection)).toBe(8000000);
+});
+
+test('YouTube video-only request keeps the selected real format id', () => {
+  const selection = reduceSelection(
+    initialSelection(youtubeMedia),
+    { kind: 'type', value: 'VIDEO_ONLY' },
+    youtubeMedia,
+  );
+  expect(selectedDownloadRequest(youtubeMedia, selection)).toEqual({
+    mediaId: 'youtube-demo',
+    downloadType: 'VIDEO_ONLY',
+    formatId: '136',
+  });
+  expect(estimatedSelectionSize(youtubeMedia, selection)).toBe(20000000);
+});
+
+test('YouTube M4A and MP3 keep explicit, typed output choices', () => {
+  const audio = reduceSelection(
+    initialSelection(youtubeMedia),
+    { kind: 'type', value: 'AUDIO_ONLY' },
+    youtubeMedia,
+  );
+  expect(selectedDownloadRequest(youtubeMedia, audio)).toEqual({
+    mediaId: 'youtube-demo',
+    downloadType: 'AUDIO_ONLY',
+    formatId: '140',
+    audioOutputFormat: 'M4A',
+  });
+
+  const mp3 = reduceSelection(
+    audio,
+    { kind: 'audioOutput', value: 'MP3' },
+    youtubeMedia,
+  );
+  expect(selectedDownloadRequest(youtubeMedia, mp3)).toEqual({
+    mediaId: 'youtube-demo',
+    downloadType: 'AUDIO_ONLY',
+    formatId: '251',
+    audioOutputFormat: 'MP3',
+    audioBitrate: 192000,
+  });
+  expect(estimatedSelectionSize(youtubeMedia, mp3)).toBe(3696000);
+  const mp3At256 = reduceSelection(
+    mp3,
+    { kind: 'audioBitrate', value: 256000 },
+    youtubeMedia,
+  );
+  expect(selectedDownloadRequest(youtubeMedia, mp3At256)).toMatchObject({
+    audioBitrate: 256000,
+  });
+});
+
+test('YouTube never selects 4K automatically when no 720p-or-lower option exists', () => {
+  const only4k = {
+    ...youtubeMedia,
+    videoFormats: youtubeMedia.videoFormats.slice(3, 4),
+  };
+  expect(initialSelection(only4k)).toEqual({
+    type: 'VIDEO_AUDIO',
+    videoIndex: null,
+    audioIndex: 0,
   });
 });

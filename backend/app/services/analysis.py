@@ -28,10 +28,11 @@ class AnalysisService:
             raise ApplicationError(
                 "ANALYSIS_TIMEOUT", "El análisis tardó demasiado. Inténtalo de nuevo.", 504
             ) from exc
-        sizes = [analysis.estimated_size]
-        sizes.extend(stream.estimated_size for stream in analysis.video_formats)
-        sizes.extend(stream.estimated_size for stream in analysis.audio_formats)
-        if any(size is not None and size > self.settings.max_file_size for size in sizes):
+        # Multi-format providers enforce limits after the user selects a concrete plan.
+        if (
+            analysis.estimated_size is not None
+            and analysis.estimated_size > self.settings.max_file_size
+        ):
             raise ApplicationError("MEDIA_TOO_LARGE", "El recurso supera el tamaño permitido.", 413)
         if (
             analysis.duration is not None

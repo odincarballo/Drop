@@ -11,7 +11,7 @@ import {
   downloadJobFile,
   shareLocalFile,
 } from '@/services/jobs';
-import { demoMedia } from './fixtures/media';
+import { demoMedia, youtubeMedia } from './fixtures/media';
 
 jest.mock('@/services/media', () => ({ analyzeMedia: jest.fn() }));
 jest.mock('@/services/jobs', () => ({
@@ -153,6 +153,67 @@ test('direct file downloads to iPhone storage and can be shared', async () => {
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Compartir' }));
   expect(shareLocalFile).toHaveBeenCalledWith('file:///cache/clip.mp4');
+});
+
+test('YouTube offers real resolution, automatic audio, M4A and MP3 output', async () => {
+  const completedJob = {
+    id: 'job-youtube',
+    status: 'COMPLETED' as const,
+    phase: 'FINALIZING' as const,
+    progress: 1,
+    bytesDownloaded: 23000000,
+    totalBytes: 23000000,
+    fileName: 'Authorized YouTube video.mp4',
+    fileSize: 22500000,
+    error: null,
+    downloadUrl: '/jobs/job-youtube/file',
+    message: 'Descarga completada',
+  };
+  jest.mocked(analyzeMedia).mockResolvedValue(youtubeMedia);
+  jest.mocked(createDownloadJob).mockResolvedValue(completedJob);
+  jest.mocked(downloadJobFile).mockResolvedValue({
+    uri: 'file:///cache/youtube.mp4',
+    size: 22500000,
+  });
+
+  await render(<HomeScreen />);
+  await analyzeExample();
+  expect(screen.getByText('Fuente: YouTube')).toBeTruthy();
+  expect(screen.getByRole('radio', { name: /720p/ })).toBeChecked();
+  expect(screen.getByText('Mejor pista compatible disponible')).toBeTruthy();
+  expect(screen.getByText('Tamaño estimado: ~23 MB')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Descargar' })).toBeEnabled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(await screen.findByText('✓ Descarga completada')).toBeTruthy();
+  expect(createDownloadJob).toHaveBeenLastCalledWith(
+    {
+      mediaId: 'youtube-demo',
+      downloadType: 'VIDEO_AUDIO',
+      formatId: '136',
+      audioFormatId: '140',
+    },
+    expect.any(AbortSignal),
+  );
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Nueva descarga' }));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+  expect(screen.getByRole('radio', { name: 'M4A' })).toBeChecked();
+  await fireEvent.press(screen.getByRole('radio', { name: 'MP3' }));
+  expect(screen.getByRole('radio', { name: '192 kbps' })).toBeChecked();
+  await fireEvent.press(screen.getByRole('radio', { name: '256 kbps' }));
+  expect(screen.getByText('Bitrate de salida')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Descargar' })).toBeEnabled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(createDownloadJob).toHaveBeenLastCalledWith(
+    {
+      mediaId: 'youtube-demo',
+      downloadType: 'AUDIO_ONLY',
+      formatId: '251',
+      audioOutputFormat: 'MP3',
+      audioBitrate: 256000,
+    },
+    expect.any(AbortSignal),
+  );
 });
 
 test('each single-track mode requires only its own quality', async () => {

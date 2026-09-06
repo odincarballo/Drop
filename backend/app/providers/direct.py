@@ -8,6 +8,7 @@ from app.models.media import (
     AudioFormat,
     AvailableStreams,
     DownloadRequest,
+    DownloadSource,
     DownloadType,
     MediaAnalysis,
     PreparedDownload,
@@ -28,6 +29,9 @@ class DirectMediaProvider(MediaProvider):
     def supports(self, url: HttpUrl) -> bool:
         return url.scheme in {"http", "https"}
 
+    def owns(self, media_id: str) -> bool:
+        return media_id.startswith("direct-")
+
     async def analyze(self, url: HttpUrl) -> MediaAnalysis:
         metadata = await self.http_client.probe(url)
         media_id = f"direct-{token_urlsafe(24)}"
@@ -47,6 +51,7 @@ class DirectMediaProvider(MediaProvider):
         )
         return MediaAnalysis(
             id=media_id,
+            provider="direct",
             title=metadata.file_name,
             source="direct",
             estimated_size=metadata.content_length,
@@ -60,6 +65,12 @@ class DirectMediaProvider(MediaProvider):
 
     async def prepare_download(self, request: DownloadRequest) -> PreparedDownload:
         resource = self.catalog.get(request.media_id)
+        if not isinstance(resource, DirectMediaResource):
+            raise ApplicationError(
+                "MEDIA_EXPIRED",
+                "El análisis ya no está disponible. Analiza de nuevo el enlace.",
+                404,
+            )
         if (
             request.format_id != resource.format_id
             or request.download_type != resource.download_type
@@ -68,7 +79,17 @@ class DirectMediaProvider(MediaProvider):
                 "INVALID_FORMAT", "El formato seleccionado ya no está disponible."
             )
         return PreparedDownload(
-            source_url=resource.url,
+            provider="direct",
+            sources=[
+                DownloadSource(
+                    role="media",
+                    source_url=resource.url,
+                    content_type=resource.content_type,
+                    internal_name=f"input-media{_extension(resource.content_type)}",
+                    expected_size=resource.content_length,
+                    estimated_size=resource.content_length,
+                )
+            ],
             content_type=resource.content_type,
             filename=resource.file_name,
             expected_size=resource.content_length,
@@ -82,6 +103,7 @@ class DirectMediaProvider(MediaProvider):
                     video_formats=[
                         VideoFormat(
                             id=format_id,
+                            format_id=format_id,
                             resolution="Original",
                             container="mp4",
                             codec=None,
@@ -104,6 +126,7 @@ class DirectMediaProvider(MediaProvider):
                 audio_formats=[
                     AudioFormat(
                         id=format_id,
+                        format_id=format_id,
                         container=container,
                         codec=codec,
                         bitrate=None,
@@ -113,3 +136,12 @@ class DirectMediaProvider(MediaProvider):
             ),
             DownloadType.AUDIO_ONLY,
         )
+
+
+def _extension(content_type: str) -> str:
+    return {
+        "video/mp4": ".mp4",
+        "audio/mpeg": ".mp3",
+        "audio/mp4": ".m4a",
+        "audio/aac": ".aac",
+    }[content_type]

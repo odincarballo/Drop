@@ -39,7 +39,9 @@ export function MetadataCard({ state }: { state: AnalysisState }) {
               ? 'Mock Provider'
               : analysis.source === 'direct'
                 ? 'Archivo directo'
-                : analysis.source?.trim() || 'Fuente desconocida'}
+                : analysis.source === 'youtube'
+                  ? 'YouTube'
+                  : analysis.source?.trim() || 'Fuente desconocida'}
           </Text>
         </>
       ) : (

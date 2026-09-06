@@ -15,11 +15,26 @@ const messages = {
   AUTH_INVALID: 'El token de acceso no es válido. Revisa la configuración.',
   RATE_LIMITED: 'Se hicieron demasiadas solicitudes. Espera un momento.',
   SERVER_BUSY: 'El servidor está ocupado. Inténtalo de nuevo más tarde.',
+  PROCESSING_BUSY:
+    'MediaDrop está procesando otra descarga. Inténtalo nuevamente en unos momentos.',
   INVALID_REQUEST:
     'El enlace no es válido. Revisa la URL e inténtalo de nuevo.',
   UNSAFE_URL:
     'Utiliza un enlace público. No se permiten direcciones locales o privadas.',
   UNSUPPORTED_URL: 'Esta fuente todavía no es compatible.',
+  PLAYLIST_NOT_SUPPORTED: 'Las playlists todavía no son compatibles.',
+  LIVE_NOT_SUPPORTED: 'Las transmisiones en vivo todavía no son compatibles.',
+  VIDEO_UNAVAILABLE: 'Este video no está disponible.',
+  PRIVATE_CONTENT: 'Este video es privado y no puede procesarse.',
+  LOGIN_REQUIRED:
+    'Este contenido requiere iniciar sesión y no puede procesarse.',
+  DRM_NOT_SUPPORTED: 'Este contenido no puede procesarse.',
+  FORMAT_NOT_AVAILABLE: 'El formato seleccionado ya no está disponible.',
+  PROCESSING_FAILED: 'No se pudo generar el archivo multimedia.',
+  PROCESSING_UNAVAILABLE:
+    'El motor multimedia no está disponible temporalmente.',
+  YOUTUBE_EXTRACTION_FAILED:
+    'No se pudo analizar el video de YouTube. Inténtalo de nuevo.',
   URL_TOO_LONG: 'La URL es demasiado larga.',
   MEDIA_TOO_LARGE: 'El archivo supera el tamaño permitido.',
   MEDIA_TOO_LONG: 'El recurso supera la duración permitida.',

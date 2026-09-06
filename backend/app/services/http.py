@@ -21,12 +21,16 @@ from app.services.url_safety import PublicDestination, URLSafetyPolicy
 
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 ALLOWED_MIME_TYPES = frozenset({"video/mp4", "audio/mpeg", "audio/mp4", "audio/aac"})
+DOWNLOAD_MIME_TYPES = ALLOWED_MIME_TYPES | frozenset({"video/webm", "audio/webm"})
 MIME_EXTENSIONS = {
     "video/mp4": ".mp4",
     "audio/mpeg": ".mp3",
     "audio/mp4": ".m4a",
     "audio/aac": ".aac",
+    "video/webm": ".webm",
+    "audio/webm": ".webm",
 }
+SAFE_STREAM_HEADERS = frozenset({"user-agent", "referer", "origin", "accept-language"})
 PROBE_BYTES = 4096
 
 logger = logging.getLogger(__name__)
@@ -323,6 +327,8 @@ class SafeHTTPClient:
         expected_length: int | None,
         write: Callable[[bytes], object],
         progress: Callable[[int, int | None], None],
+        headers: Mapping[str, str] | None = None,
+        max_bytes: int | None = None,
     ) -> int:
         try:
             async with asyncio.timeout(self.settings.download_timeout):
@@ -332,6 +338,8 @@ class SafeHTTPClient:
                     expected_length=expected_length,
                     write=write,
                     progress=progress,
+                    headers=headers,
+                    max_bytes=max_bytes,
                 )
         except TimeoutError as exc:
             raise ApplicationError(
@@ -346,10 +354,21 @@ class SafeHTTPClient:
         expected_length: int | None,
         write: Callable[[bytes], object],
         progress: Callable[[int, int | None], None],
+        headers: Mapping[str, str] | None,
+        max_bytes: int | None,
     ) -> int:
-        opened = await self._open_following_redirects(
-            "GET", url, {"Accept-Encoding": "identity", "User-Agent": "MediaDrop/0.3"}
-        )
+        request_headers = {"Accept-Encoding": "identity", "User-Agent": "MediaDrop/0.6"}
+        for name, value in (headers or {}).items():
+            if (
+                name.lower() not in SAFE_STREAM_HEADERS
+                or len(value) > 2048
+                or "\r" in value
+                or "\n" in value
+            ):
+                raise ApplicationError("INVALID_FORMAT", "Los metadatos del stream no son válidos.")
+            request_headers[name] = value
+        limit = max_bytes if max_bytes is not None else self.settings.max_file_size
+        opened = await self._open_following_redirects("GET", url, request_headers)
         response = opened.response
         try:
             _ensure_success(response.status)
@@ -361,7 +380,7 @@ class SafeHTTPClient:
                 )
             _ensure_identity_encoding(response.headers)
             length = _content_length(response.headers)
-            self._ensure_size(length)
+            self._ensure_size(length, limit)
             if expected_length is not None and length is not None and expected_length != length:
                 raise ApplicationError(
                     "RESOURCE_CHANGED",
@@ -369,11 +388,11 @@ class SafeHTTPClient:
                 )
             raw_type = _content_type(response.headers)
             needs_sniffing = raw_type == "application/octet-stream"
-            if raw_type not in ALLOWED_MIME_TYPES and not needs_sniffing:
+            if raw_type not in DOWNLOAD_MIME_TYPES and not needs_sniffing:
                 raise ApplicationError(
                     "UNSUPPORTED_MIME", "El servidor ya no entrega un archivo compatible."
                 )
-            if raw_type in ALLOWED_MIME_TYPES and raw_type != expected_type:
+            if raw_type in DOWNLOAD_MIME_TYPES and raw_type != expected_type:
                 raise ApplicationError(
                     "RESOURCE_CHANGED",
                     "El archivo cambió desde que fue analizado. Analízalo de nuevo.",
@@ -384,7 +403,7 @@ class SafeHTTPClient:
             type_confirmed = not needs_sniffing
             async for chunk in response.iter_bytes(64 * 1024):
                 downloaded += len(chunk)
-                if downloaded > self.settings.max_file_size:
+                if downloaded > limit:
                     raise ApplicationError(
                         "FILE_TOO_LARGE", "El archivo supera el tamaño máximo permitido.", 413
                     )
@@ -435,8 +454,9 @@ class SafeHTTPClient:
         finally:
             await response.close()
 
-    def _ensure_size(self, length: int | None) -> None:
-        if length is not None and length > self.settings.max_file_size:
+    def _ensure_size(self, length: int | None, limit: int | None = None) -> None:
+        maximum = self.settings.max_file_size if limit is None else limit
+        if length is not None and length > maximum:
             raise ApplicationError(
                 "FILE_TOO_LARGE", "El archivo supera el tamaño máximo permitido.", 413
             )
@@ -539,6 +559,9 @@ def sniff_media_type(sample: bytes | bytearray, extension_hint: str | None = Non
         return "audio/mpeg"
     if len(data) >= 2 and data[0] == 0xFF and data[1] & 0xF6 == 0xF0:
         return "audio/aac"
+    if data.startswith(b"\x1aE\xdf\xa3"):
+        if extension_hint == ".webm":
+            return "audio/webm"
     return None
 
 

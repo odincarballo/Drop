@@ -7,7 +7,7 @@ from pydantic import HttpUrl
 from app.api.routes import get_analysis_service
 from app.core.config import Settings
 from app.main import create_app
-from app.models.media import MediaAnalysis
+from app.models.media import MediaAnalysis, VideoFormat
 from app.providers.mock import MockMediaProvider
 from app.services.analysis import AnalysisService
 from app.services.url_safety import URLSafetyPolicy
@@ -23,6 +23,28 @@ class SlowProvider(MockMediaProvider):
 class FailingProvider(MockMediaProvider):
     async def analyze(self, url: HttpUrl) -> MediaAnalysis:
         raise RuntimeError("signed URL must not leak")
+
+
+class MultiFormatProvider(MockMediaProvider):
+    async def analyze(self, url: HttpUrl) -> MediaAnalysis:
+        return MediaAnalysis(
+            id="youtube-test",
+            provider="youtube",
+            source="youtube",
+            estimated_size=None,
+            video_formats=[
+                VideoFormat(
+                    id="large-option",
+                    resolution="2160p",
+                    estimated_size=200_000_000,
+                ),
+                VideoFormat(
+                    id="allowed-option",
+                    resolution="720p",
+                    estimated_size=20_000_000,
+                ),
+            ],
+        )
 
 
 @pytest.mark.parametrize(
@@ -60,3 +82,14 @@ def test_internal_errors_are_sanitized(settings: Settings) -> None:
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "INTERNAL_ERROR"
     assert "signed URL" not in response.text
+
+
+async def test_multiformat_analysis_defers_size_limit_until_selection(
+    settings: Settings,
+) -> None:
+    service = AnalysisService(MultiFormatProvider(), URLSafetyPolicy(settings), settings)
+    analysis = await service.analyze(HttpUrl("https://youtube.com/watch?v=dQw4w9WgXcQ"))
+    assert [item.id for item in analysis.video_formats] == [
+        "large-option",
+        "allowed-option",
+    ]
