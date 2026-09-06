@@ -9,7 +9,6 @@ services:
     dockerContext: ./backend
     healthCheckPath: /health
     autoDeployTrigger: "off"
-    maxShutdownDelaySeconds: 30
     envVars:
       - key: MEDIADROP_ENVIRONMENT
         value: production
