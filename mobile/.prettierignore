@@ -1,0 +1,4 @@
+.expo/
+dist/
+ios/
+node_modules/

@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "MediaDrop",
+    "slug": "mediadrop",
+    "version": "0.3.0",
+    "scheme": "mediadrop",
+    "icon": "./assets/icon.png",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios"],
+    "ios": {
+      "bundleIdentifier": "com.odincarballo.mediadrop",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "MediaDrop se conecta al backend de desarrollo en tu red local."
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      "expo-sharing",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
