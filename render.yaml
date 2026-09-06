@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: mediadrop-api
+    runtime: docker
+    plan: free
+    region: ohio
+    numInstances: 1
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: MEDIADROP_ENVIRONMENT
+        value: production
+      - key: MEDIADROP_API_TOKEN
+        sync: false
+      - key: MEDIADROP_ANALYSIS_PROVIDER
+        value: direct
+      - key: MEDIADROP_ANALYSIS_TIMEOUT_SECONDS
+        value: "10"
+      - key: MAX_FILE_SIZE
+        value: "104857600"
+      - key: DOWNLOAD_TIMEOUT
+        value: "120"
+      - key: CONNECT_TIMEOUT
+        value: "10"
+      - key: MAX_REDIRECTS
+        value: "3"
+      - key: MEDIADROP_MAX_MEDIA_DURATION_SECONDS
+        value: "600"
+      - key: MEDIADROP_MAX_URL_LENGTH
+        value: "2048"
+      - key: TEMP_FILE_TTL
+        value: "3600"
+      - key: MEDIADROP_TEMP_CLEANUP_INTERVAL_SECONDS
+        value: "60"
+      - key: MAX_ACTIVE_JOBS
+        value: "2"
+      - key: MEDIADROP_RATE_LIMIT_REQUESTS
+        value: "180"
+      - key: MEDIADROP_RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: LOG_LEVEL
+        value: INFO

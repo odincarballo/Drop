@@ -2,7 +2,7 @@
 
 Aplicación Expo para iPhone y backend FastAPI para analizar y descargar archivos multimedia directos autorizados. El flujo real de la fase 0.3 se conserva sin FFmpeg, conversión ni separación de pistas.
 
-La fase 0.5 deja preparado el backend como contenedor de una sola instancia, añade acceso Bearer privado y guarda el token en el llavero de iOS mediante Expo SecureStore. El despliegue público y la instalación Release deben completarse después de elegir el hosting y obtener su URL HTTPS.
+La fase 0.5 deja preparado el backend como contenedor de una sola instancia para Render Free, añade acceso Bearer privado y guarda el token en el llavero de iOS mediante Expo SecureStore. El despliegue público y la instalación Release siguen pendientes hasta obtener y verificar una URL HTTPS real.
 
 ## Estructura
 
@@ -24,6 +24,7 @@ backend/
   tests/
   Dockerfile
 docs/
+render.yaml           # Un único Web Service Render Free
 ```
 
 ## Requisitos en macOS
@@ -136,6 +137,14 @@ El `Dockerfile` instala dependencias con `uv.lock`, incluye certificados CA, eje
 
 No hay Docker instalado actualmente en este Mac, por lo que la imagen debe construirse en el hosting o después de instalar Docker Desktop manualmente.
 
+## Render Free
+
+[`render.yaml`](render.yaml) define un solo Web Service Docker con `plan: free`, una instancia, `/health` y despliegues automáticos desactivados. No crea base de datos, disco, worker ni ningún recurso de pago. Render proporciona `PORT` automáticamente.
+
+`MEDIADROP_API_TOKEN` está declarado con `sync: false`: su valor se introduce manualmente en Render y nunca se guarda en el Blueprint. Consulta las [instrucciones de Render Free](docs/render-free.md) antes de crear el servicio.
+
+No compiles ni instales la Release del iPhone mientras `EXPO_PUBLIC_API_URL` siga usando `backend.example.com`.
+
 ## Variables del backend
 
 | Variable | Predeterminado | Función |
@@ -224,4 +233,4 @@ El rate limiter y `MAX_ACTIVE_JOBS` son controles de una sola instancia, adecuad
 
 No hay YouTube, yt-dlp, FFmpeg, conversiones, separación de pistas, múltiples resoluciones, playlists, cuentas, base de datos, historial, pagos, App Store ni TestFlight.
 
-Consulta [arquitectura](docs/architecture.md) y [verificación](docs/verification.md).
+Consulta [arquitectura](docs/architecture.md), [verificación](docs/verification.md) y [despliegue Render Free](docs/render-free.md).

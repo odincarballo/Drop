@@ -1,10 +1,11 @@
-# Arquitectura y seguridad de MediaDrop 0.3
+# Arquitectura y seguridad de MediaDrop 0.5
 
 ## Flujo
 
 ```text
 iPhone
   HomeScreen
+    ├─ SecureStore → Bearer token local al dispositivo
     ├─ useMediaAnalysis → services/media → POST /analyze
     └─ useMediaDownload → services/jobs → POST/GET/DELETE /jobs
                                                 └─ GET /jobs/{id}/file
@@ -20,7 +21,7 @@ SafeHTTPClient → URLSafetyPolicy → IPs públicas validadas
                └─ AiohttpPinnedTransport (sin redirect automático)
 ```
 
-Los endpoints solo validan, delegan y serializan. Los proveedores no conocen FastAPI. `create_app()` compone configuración, política de URL, transporte, catálogo efímero, proveedor, almacenamiento y gestor de jobs. `MockMediaProvider` sigue disponible con `MEDIADROP_ANALYSIS_PROVIDER=mock`, pero los jobs solo aceptan capacidades emitidas por `DirectMediaProvider`.
+Los endpoints solo validan, delegan y serializan. `/health` es público; análisis, jobs y archivos exigen el Bearer token configurado en el servidor. Los proveedores no conocen FastAPI. `create_app()` compone configuración, acceso, rate limiting, política de URL, transporte, catálogo efímero, proveedor, almacenamiento y gestor de jobs. `MockMediaProvider` sigue disponible con `MEDIADROP_ANALYSIS_PROVIDER=mock`, pero los jobs solo aceptan capacidades emitidas por `DirectMediaProvider`.
 
 La app mantiene una única ruta. La UI no hace HTTP: `services/api.ts` centraliza JSON, timeout, cancelación y Zod; `services/media.ts` analiza; `services/jobs.ts` gestiona jobs, Expo FileSystem y Expo Sharing. Los hooks contienen estados discriminados para impedir solicitudes o descargas simultáneas.
 
@@ -95,4 +96,4 @@ El caché no es almacenamiento permanente. **Nueva descarga** elimina la copia l
 
 ## Exclusiones
 
-No hay proxy arbitrario, autenticación, base de datos, historial, concurrencia de descargas, YouTube, yt-dlp, FFmpeg, extracción, conversión, merge, playlists, DRM bypass ni integraciones con plataformas de terceros.
+No hay proxy arbitrario, cuentas de usuario, base de datos, historial, concurrencia de descargas desde un mismo cliente, YouTube, yt-dlp, FFmpeg, extracción, conversión, merge, playlists, DRM bypass ni integraciones con plataformas de terceros. La autenticación de esta fase es un único Bearer token personal almacenado en SecureStore.
