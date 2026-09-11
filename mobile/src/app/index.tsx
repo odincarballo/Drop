@@ -13,9 +13,12 @@ import { BackendAccessCard } from '@/components/BackendAccessCard';
 import { DownloadOptions } from '@/components/DownloadOptions';
 import { DownloadStatusCard } from '@/components/DownloadStatusCard';
 import { MetadataCard } from '@/components/MetadataCard';
+import { LocalYoutubeSpikeCard } from '@/components/LocalYoutubeSpikeCard';
 import { config } from '@/config';
 import { useMediaAnalysis } from '@/hooks/useMediaAnalysis';
 import { useMediaDownload } from '@/hooks/useMediaDownload';
+import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
+import { hasLocalYoutubeEngine } from '@/services/onDeviceYoutube';
 import { useTheme } from '@/theme';
 
 export default function HomeScreen() {
@@ -31,7 +34,8 @@ export default function HomeScreen() {
     select,
   } = useMediaAnalysis();
   const download = useMediaDownload();
-  const isBusy = isAnalyzing || download.isActive;
+  const spike = useLocalYoutubeSpike();
+  const isBusy = isAnalyzing || download.isActive || spike.isBusy;
 
   function changeUrl(value: string) {
     download.reset();
@@ -39,7 +43,7 @@ export default function HomeScreen() {
   }
 
   async function runAnalysis() {
-    if (download.isActive) return;
+    if (download.isActive || spike.isBusy) return;
     download.reset();
     await analyze();
   }
@@ -131,6 +135,15 @@ export default function HomeScreen() {
               Utiliza únicamente recursos autorizados.
             </Text>
           </View>
+          {hasLocalYoutubeEngine() && (
+            <LocalYoutubeSpikeCard
+              spike={spike}
+              disabled={isBusy}
+              onAnalyze={() => {
+                if (!isBusy) void spike.analyze(url);
+              }}
+            />
+          )}
           <MetadataCard state={state} />
           {state.status === 'success' &&
             download.state.status !== 'completed' &&
@@ -139,7 +152,7 @@ export default function HomeScreen() {
                 media={state.data}
                 selection={state.selection}
                 onSelect={select}
-                disabled={download.isActive}
+                disabled={download.isActive || spike.isBusy}
                 onDownload={() =>
                   void download.start(state.data, state.selection)
                 }

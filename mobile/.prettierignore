@@ -2,3 +2,4 @@
 dist/
 ios/
 node_modules/
+modules/on-device-youtube/vendor/

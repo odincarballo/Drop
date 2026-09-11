@@ -1,0 +1,149 @@
+import { fireEvent, render, screen } from '@testing-library/react-native';
+import { requireOptionalNativeModule } from 'expo';
+
+import { LocalYoutubeSpikeCard } from '@/components/LocalYoutubeSpikeCard';
+import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
+import { localYoutubeResultSchema } from '@/models/onDeviceYoutube';
+import {
+  analyzeYoutubeOnDevice,
+  cancelLocalYoutube,
+} from '@/services/onDeviceYoutube';
+
+jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
+const native = { analyze: jest.fn(), cancel: jest.fn() };
+const metadata = {
+  id: 'AWGPaFraPN4',
+  title: 'Video autorizado',
+  duration: 754,
+  thumbnail: null,
+  videoFormats: [
+    {
+      id: '137',
+      container: 'mp4',
+      codec: 'avc1',
+      resolution: '1080p',
+      height: 1080,
+      width: 1920,
+      fps: 30,
+      hasAudio: false,
+      bitrateKbps: null,
+      estimatedSize: null,
+      protocol: 'https',
+    },
+  ],
+  audioFormats: [],
+  resolutions: [1080],
+};
+const result = {
+  metadata,
+  deviceRuntime: 'ios-device',
+  engine: 'CPython / QuickJS-NG',
+  jsChallengeCalls: 1,
+  networkRequests: 3,
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  native.analyze.mockResolvedValue(JSON.stringify(result));
+});
+
+test('metadata uses the native module without HTTP client, token or backend fallback', async () => {
+  const fetchSpy = jest.spyOn(global, 'fetch');
+  expect(
+    await analyzeYoutubeOnDevice(' https://youtu.be/AWGPaFraPN4 '),
+  ).toMatchObject(result);
+  expect(native.analyze).toHaveBeenCalledWith('https://youtu.be/AWGPaFraPN4');
+  expect(fetchSpy).not.toHaveBeenCalled();
+  fetchSpy.mockRestore();
+});
+
+test('missing native module fails without falling back to Render', async () => {
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(null);
+  await expect(
+    analyzeYoutubeOnDevice('https://youtu.be/AWGPaFraPN4'),
+  ).rejects.toThrow('no incluye');
+});
+
+test('empty URL is rejected before native work', async () => {
+  await expect(analyzeYoutubeOnDevice(' ')).rejects.toThrow('Introduce');
+  expect(native.analyze).not.toHaveBeenCalled();
+});
+
+test('invalid native response is rejected', async () => {
+  native.analyze.mockResolvedValue('{}');
+  await expect(
+    analyzeYoutubeOnDevice('https://youtu.be/AWGPaFraPN4'),
+  ).rejects.toThrow('inválida');
+});
+
+test('schema rejects ambiguous outcomes and unsafe thumbnails', () => {
+  expect(
+    localYoutubeResultSchema.safeParse({
+      ...result,
+      error: { code: 'LOGIN_REQUIRED' },
+    }).success,
+  ).toBe(false);
+  expect(
+    localYoutubeResultSchema.safeParse({
+      metadata: { ...metadata, thumbnail: 'http://127.0.0.1/a' },
+    }).success,
+  ).toBe(false);
+});
+
+test('cancel delegates to the native engine', () => {
+  cancelLocalYoutube();
+  expect(native.cancel).toHaveBeenCalledTimes(1);
+});
+
+function TestCard() {
+  const spike = useLocalYoutubeSpike();
+  return (
+    <LocalYoutubeSpikeCard
+      spike={spike}
+      disabled={spike.isBusy}
+      onAnalyze={() => void spike.analyze('https://youtu.be/AWGPaFraPN4')}
+    />
+  );
+}
+
+test('local metadata card shows actual formats and has no download action', async () => {
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  expect(screen.getByText('Video autorizado')).toBeTruthy();
+  expect(screen.getByText(/1080p · mp4 · avc1/)).toBeTruthy();
+  expect(screen.getByText(/12:34/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Descargar' })).toBeNull();
+});
+
+test('local LOGIN_REQUIRED stays specific, with no login suggestion', async () => {
+  native.analyze.mockResolvedValue(
+    JSON.stringify({ error: { code: 'LOGIN_REQUIRED' } }),
+  );
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    /Este contenido requiere iniciar sesión y no puede procesarse\./,
+  );
+});
+
+test('pending local analysis prevents a second request and exposes cancellation', async () => {
+  native.analyze.mockReturnValue(new Promise(() => {}));
+  const view = await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  expect(
+    screen.getByRole('button', { name: 'Analizando en el iPhone…' }),
+  ).toBeDisabled();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Cancelar análisis local' }),
+  );
+  expect(native.analyze).toHaveBeenCalledTimes(1);
+  expect(native.cancel).toHaveBeenCalledTimes(1);
+  await view.unmount();
+});
