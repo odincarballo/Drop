@@ -20,6 +20,8 @@ export const localYoutubeResultSchema = z
     metadata: z
       .object({
         id: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+        analysisId: z.string().regex(/^[a-f0-9]{32}$/),
+        preferredAudioFormatId: z.string().max(80).nullable(),
         title: z.string().max(240),
         duration: optionalNumber,
         thumbnail: z
@@ -53,6 +55,34 @@ export const localYoutubeResultSchema = z
   .refine((value) => Boolean(value.metadata) !== Boolean(value.error));
 
 export type LocalYoutubeResult = z.infer<typeof localYoutubeResultSchema>;
+
+export const localAudioDownloadEventSchema = z.object({
+  jobId: z.string().uuid(),
+  status: z.enum([
+    'PREPARING',
+    'DOWNLOADING',
+    'COMPLETED',
+    'FAILED',
+    'CANCELLED',
+  ]),
+  formatId: z.string().max(80).optional(),
+  container: z.literal('m4a').optional(),
+  codec: z.string().max(100).optional(),
+  bytesDownloaded: z.number().int().nonnegative().optional(),
+  totalBytes: z.number().int().nonnegative().optional(),
+  progress: z.number().min(0).max(1).optional(),
+  fileName: z.string().max(120).optional(),
+  fileSize: z.number().int().nonnegative().optional(),
+  localUri: z.string().startsWith('file://').optional(),
+  errorCode: z
+    .string()
+    .regex(/^[A-Z_]+$/)
+    .optional(),
+});
+
+export type LocalAudioDownloadEvent = z.infer<
+  typeof localAudioDownloadEventSchema
+>;
 
 export const localEjsFixtureResultSchema = z
   .object({

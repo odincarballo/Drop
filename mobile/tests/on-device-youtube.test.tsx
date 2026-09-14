@@ -1,4 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react-native';
 import { requireOptionalNativeModule } from 'expo';
 
 import { LocalYoutubeSpikeCard } from '@/components/LocalYoutubeSpikeCard';
@@ -9,15 +15,26 @@ import {
   cancelLocalYoutube,
   testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
+import { shareLocalFile } from '@/services/jobs';
 
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
+jest.mock('@/services/jobs', () => ({ shareLocalFile: jest.fn() }));
+let audioListener: ((event: unknown) => void) | null = null;
 const native = {
   analyze: jest.fn(),
   testEjsFixture: jest.fn(),
+  startAudioDownload: jest.fn(),
+  cancelAudioDownload: jest.fn(),
   cancel: jest.fn(),
+  addListener: jest.fn((_name: string, listener: (event: unknown) => void) => {
+    audioListener = listener;
+    return { remove: jest.fn() };
+  }),
 };
 const metadata = {
   id: 'AWGPaFraPN4',
+  analysisId: 'a'.repeat(32),
+  preferredAudioFormatId: '140',
   title: 'Video autorizado',
   duration: 754,
   thumbnail: null,
@@ -36,7 +53,21 @@ const metadata = {
       protocol: 'https',
     },
   ],
-  audioFormats: [],
+  audioFormats: [
+    {
+      id: '140',
+      container: 'm4a',
+      codec: 'mp4a.40.2',
+      resolution: null,
+      height: null,
+      width: null,
+      fps: null,
+      hasAudio: true,
+      bitrateKbps: 129,
+      estimatedSize: 2_000_000,
+      protocol: 'https',
+    },
+  ],
   resolutions: [1080],
 };
 const result = {
@@ -50,7 +81,12 @@ const result = {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  audioListener = null;
   native.analyze.mockResolvedValue(JSON.stringify(result));
+  native.startAudioDownload.mockReturnValue(
+    'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+  );
+  jest.mocked(shareLocalFile).mockResolvedValue();
   native.testEjsFixture.mockResolvedValue(
     JSON.stringify({
       fixture: {
@@ -176,15 +212,91 @@ function TestCard() {
   );
 }
 
-test('local metadata card shows actual formats and has no download action', async () => {
+test('local metadata card selects direct M4A without exposing a stream URL', async () => {
   await render(<TestCard />);
   await fireEvent.press(
     screen.getByRole('button', { name: 'Analizar en este iPhone' }),
   );
+  await screen.findByText('Video autorizado');
   expect(screen.getByText('Video autorizado')).toBeTruthy();
   expect(screen.getByText(/1080p · mp4 · avc1/)).toBeTruthy();
   expect(screen.getByText(/12:34/)).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Descargar' })).toBeNull();
+  expect(screen.getByText(/Seleccionado: M4A · mp4a.40.2/)).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Descargar audio en este iPhone',
+    }),
+  );
+  expect(native.startAudioDownload).toHaveBeenCalledWith('a'.repeat(32), '140');
+  expect(JSON.stringify(native.startAudioDownload.mock.calls)).not.toContain(
+    'googlevideo',
+  );
+});
+
+test('native audio progress completes, shares, and cancellation delegates', async () => {
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  await screen.findByText('Video autorizado');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Descargar audio en este iPhone' }),
+  );
+  expect(audioListener).not.toBeNull();
+  await act(() => {
+    audioListener?.({
+      jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+      status: 'DOWNLOADING',
+      formatId: '140',
+      container: 'm4a',
+      codec: 'mp4a.40.2',
+      bytesDownloaded: 1_000_000,
+      totalBytes: 2_000_000,
+      progress: 0.5,
+    });
+  });
+  expect(screen.getByText('Descargando… 50 %')).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Cancelar descarga de audio' }),
+  );
+  expect(native.cancelAudioDownload).toHaveBeenCalledTimes(1);
+
+  await act(() => {
+    audioListener?.({
+      jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+      status: 'COMPLETED',
+      formatId: '140',
+      container: 'm4a',
+      codec: 'mp4a.40.2',
+      bytesDownloaded: 2_000_000,
+      totalBytes: 2_000_000,
+      progress: 1,
+      fileName: 'Own audio.m4a',
+      fileSize: 2_000_000,
+      localUri: 'file:///cache/Own%20audio.m4a',
+    });
+  });
+  expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Compartir audio' }),
+  );
+  await waitFor(() =>
+    expect(shareLocalFile).toHaveBeenCalledWith(
+      'file:///cache/Own%20audio.m4a',
+    ),
+  );
+});
+
+test('invalid local audio events are ignored', async () => {
+  await render(<TestCard />);
+  await act(() => {
+    audioListener?.({
+      jobId: 'not-a-job',
+      status: 'COMPLETED',
+      localUri: 'https://signed.googlevideo.com/file',
+    });
+  });
+  expect(screen.queryByText('✓ Descarga completada')).toBeNull();
 });
 
 test('physical EJS action displays the validated provider result', async () => {

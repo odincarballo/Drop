@@ -337,4 +337,15 @@ static BOOL mdInitialize(void) {
 + (void)testEJS:(void (^)(NSString *))completion {
   [self invokePythonMethod:@"run_ejs_fixture" argument:nil completion:completion];
 }
+
++ (void)prepareAudioDownload:(NSString *)analysisId
+                    formatId:(NSString *)formatId
+                  completion:(void (^)(NSString *))completion {
+  NSDictionary *request = @{ @"analysisId": analysisId, @"formatId": formatId };
+  NSData *data = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
+  NSString *argument = data
+    ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+    : @"{}";
+  [self invokePythonMethod:@"prepare_audio_download" argument:argument completion:completion];
+}
 @end

@@ -1,12 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
+  LocalAudioDownloadEvent,
   LocalEjsFixtureResult,
   LocalYoutubeResult,
 } from '@/models/onDeviceYoutube';
+import { shareLocalFile } from '@/services/jobs';
 import {
   analyzeYoutubeOnDevice,
+  cancelLocalAudioDownload,
   cancelLocalYoutube,
+  localAudioError,
+  observeLocalAudioDownload,
+  startLocalAudioDownload,
   testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
 
@@ -22,21 +28,106 @@ type EjsState =
   | { status: 'result'; result: LocalEjsFixtureResult }
   | { status: 'error'; message: string };
 
+export type LocalAudioState =
+  | { status: 'idle' }
+  | { status: 'preparing'; jobId: string; formatId: string }
+  | {
+      status: 'downloading';
+      jobId: string;
+      formatId: string;
+      container: 'm4a';
+      codec: string | null;
+      bytesDownloaded: number;
+      totalBytes: number | null;
+      progress: number | null;
+    }
+  | {
+      status: 'completed';
+      jobId: string;
+      formatId: string;
+      container: 'm4a';
+      codec: string | null;
+      fileName: string;
+      fileSize: number;
+      localUri: string;
+      actionError: string | null;
+    }
+  | { status: 'cancelled' }
+  | { status: 'error'; message: string; code: string };
+
 export function useLocalYoutubeSpike() {
   const [state, setState] = useState<State>({ status: 'idle' });
   const [ejsState, setEjsState] = useState<EjsState>({ status: 'idle' });
+  const [audioState, setAudioState] = useState<LocalAudioState>({
+    status: 'idle',
+  });
   const busy = useRef(false);
+  const audioJobId = useRef<string | null>(null);
   const mounted = useRef(true);
+
+  const handleAudioEvent = useCallback((event: LocalAudioDownloadEvent) => {
+    if (!mounted.current) return;
+    if (audioJobId.current && audioJobId.current !== event.jobId) return;
+    audioJobId.current = event.jobId;
+    if (event.status === 'PREPARING') {
+      setAudioState({
+        status: 'preparing',
+        jobId: event.jobId,
+        formatId: event.formatId ?? '',
+      });
+    } else if (event.status === 'DOWNLOADING') {
+      setAudioState({
+        status: 'downloading',
+        jobId: event.jobId,
+        formatId: event.formatId ?? '',
+        container: 'm4a',
+        codec: event.codec ?? null,
+        bytesDownloaded: event.bytesDownloaded ?? 0,
+        totalBytes: event.totalBytes ?? null,
+        progress: event.progress ?? null,
+      });
+    } else if (
+      event.status === 'COMPLETED' &&
+      event.fileName &&
+      event.fileSize !== undefined &&
+      event.localUri
+    ) {
+      audioJobId.current = null;
+      setAudioState({
+        status: 'completed',
+        jobId: event.jobId,
+        formatId: event.formatId ?? '',
+        container: 'm4a',
+        codec: event.codec ?? null,
+        fileName: event.fileName,
+        fileSize: event.fileSize,
+        localUri: event.localUri,
+        actionError: null,
+      });
+    } else if (event.status === 'CANCELLED') {
+      audioJobId.current = null;
+      setAudioState({ status: 'cancelled' });
+    } else if (event.status === 'FAILED') {
+      audioJobId.current = null;
+      const code = event.errorCode ?? 'AUDIO_DOWNLOAD_FAILED';
+      setAudioState({ status: 'error', code, message: localAudioError(code) });
+    }
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
+    const subscription = observeLocalAudioDownload(handleAudioEvent);
     return () => {
       mounted.current = false;
       if (busy.current) cancelLocalYoutube();
+      if (audioJobId.current) cancelLocalAudioDownload();
+      subscription.remove();
     };
-  }, []);
+  }, [handleAudioEvent]);
   async function analyze(url: string) {
     if (busy.current) return;
     busy.current = true;
+    setAudioState({ status: 'idle' });
     setState({ status: 'loading' });
     try {
       const result = await analyzeYoutubeOnDevice(url);
@@ -69,12 +160,74 @@ export function useLocalYoutubeSpike() {
       busy.current = false;
     }
   }
+
+  function downloadAudio() {
+    if (busy.current || audioJobId.current || state.status !== 'result') return;
+    const metadata = state.result.metadata;
+    if (!metadata?.preferredAudioFormatId) {
+      setAudioState({
+        status: 'error',
+        code: 'AUDIO_FORMAT_NOT_SUPPORTED',
+        message: localAudioError('AUDIO_FORMAT_NOT_SUPPORTED'),
+      });
+      return;
+    }
+    try {
+      const jobId = startLocalAudioDownload(
+        metadata.analysisId,
+        metadata.preferredAudioFormatId,
+      );
+      audioJobId.current = jobId;
+      setAudioState({
+        status: 'preparing',
+        jobId,
+        formatId: metadata.preferredAudioFormatId,
+      });
+    } catch (error) {
+      setAudioState({
+        status: 'error',
+        code: 'AUDIO_DOWNLOAD_FAILED',
+        message:
+          error instanceof Error
+            ? error.message
+            : localAudioError('AUDIO_DOWNLOAD_FAILED'),
+      });
+    }
+  }
+
+  function cancelAudio() {
+    if (!audioJobId.current) return;
+    cancelLocalAudioDownload();
+  }
+
+  async function shareAudio() {
+    if (audioState.status !== 'completed') return;
+    try {
+      await shareLocalFile(audioState.localUri);
+    } catch {
+      if (mounted.current && audioState.status === 'completed') {
+        setAudioState({
+          ...audioState,
+          actionError: 'No se pudo abrir la hoja de compartir.',
+        });
+      }
+    }
+  }
+
   return {
     state,
     ejsState,
+    audioState,
     analyze,
     testEjs,
+    downloadAudio,
+    cancelAudio,
+    shareAudio,
     cancel: cancelLocalYoutube,
-    isBusy: state.status === 'loading' || ejsState.status === 'loading',
+    isBusy:
+      state.status === 'loading' ||
+      ejsState.status === 'loading' ||
+      audioState.status === 'preparing' ||
+      audioState.status === 'downloading',
   };
 }

@@ -17,6 +17,10 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
   const { colors } = useTheme();
   const result = spike.state.status === 'result' ? spike.state.result : null;
   const metadata = result?.metadata;
+  const selectedAudio = metadata?.audioFormats.find(
+    (format) => format.id === metadata.preferredAudioFormatId,
+  );
+  const audio = spike.audioState;
   const ejsResult =
     spike.ejsState.status === 'result' ? spike.ejsState.result : null;
   const nativeDiagnostics = ejsResult?.diagnostics.native;
@@ -34,8 +38,8 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
         YouTube · prueba local
       </Text>
       <Text style={{ color: colors.secondary }}>
-        Usa el enlace pegado arriba. Solo metadatos, sin Render ni descargas.
-        Mantén MediaDrop abierta.
+        Usa el enlace pegado arriba. El análisis y la prueba de audio ocurren en
+        este iPhone, sin Render. Mantén MediaDrop abierta.
       </Text>
       <ActionButton
         label={
@@ -160,6 +164,115 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
               style={{ color: colors.secondary }}
             >{`${format.container} · ${format.codec ?? 'Codec desconocido'}${format.bitrateKbps ? ` · ${Math.round(format.bitrateKbps)} kbps` : ''} · ID ${format.id}`}</Text>
           ))}
+          <View style={[styles.audioSpike, { borderColor: colors.border }]}>
+            <Text style={[styles.title, { color: colors.text }]}>
+              Audio directo
+            </Text>
+            {selectedAudio ? (
+              <Text style={{ color: colors.secondary }}>
+                {`Seleccionado: M4A · ${selectedAudio.codec ?? 'AAC'}${selectedAudio.bitrateKbps ? ` · ${Math.round(selectedAudio.bitrateKbps)} kbps` : ''} · ID ${selectedAudio.id}`}
+              </Text>
+            ) : (
+              <Text style={{ color: colors.secondary }}>
+                No hay un audio M4A/AAC directo compatible para esta prueba.
+              </Text>
+            )}
+            {audio.status === 'idle' && (
+              <ActionButton
+                label="Descargar audio en este iPhone"
+                onPress={spike.downloadAudio}
+                disabled={disabled || !selectedAudio}
+                secondary
+              />
+            )}
+            {audio.status === 'preparing' && (
+              <>
+                <Text style={{ color: colors.text }}>
+                  Preparando enlace seguro…
+                </Text>
+                <ActionButton
+                  label="Cancelar descarga de audio"
+                  onPress={spike.cancelAudio}
+                  secondary
+                />
+              </>
+            )}
+            {audio.status === 'downloading' && (
+              <>
+                <Text style={{ color: colors.text }}>
+                  {audio.progress === null
+                    ? 'Descargando…'
+                    : `Descargando… ${Math.round(audio.progress * 100)} %`}
+                </Text>
+                <View
+                  accessibilityRole="progressbar"
+                  accessibilityValue={
+                    audio.progress === null
+                      ? undefined
+                      : { min: 0, max: 100, now: audio.progress * 100 }
+                  }
+                  style={[
+                    styles.progressTrack,
+                    { backgroundColor: colors.border },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        backgroundColor: colors.accent,
+                        width: `${Math.max(2, (audio.progress ?? 0) * 100)}%`,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={{ color: colors.secondary }}>
+                  {`${formatSize(audio.bytesDownloaded)}${audio.totalBytes ? ` / ${formatSize(audio.totalBytes)}` : ''}`}
+                </Text>
+                <ActionButton
+                  label="Cancelar descarga de audio"
+                  onPress={spike.cancelAudio}
+                  secondary
+                />
+              </>
+            )}
+            {audio.status === 'completed' && (
+              <>
+                <Text style={[styles.title, { color: colors.accent }]}>
+                  ✓ Descarga completada
+                </Text>
+                <Text style={{ color: colors.secondary }}>
+                  {`${audio.fileName}\n${formatSize(audio.fileSize)} · M4A${audio.codec ? ` · ${audio.codec}` : ''}`}
+                </Text>
+                <ActionButton
+                  label="Compartir audio"
+                  onPress={() => void spike.shareAudio()}
+                  secondary
+                />
+                {audio.actionError && (
+                  <Text
+                    accessibilityRole="alert"
+                    style={{ color: colors.error }}
+                  >
+                    {audio.actionError}
+                  </Text>
+                )}
+              </>
+            )}
+            {audio.status === 'cancelled' && (
+              <Text
+                accessibilityRole="alert"
+                style={{ color: colors.secondary }}
+              >
+                Descarga cancelada.
+              </Text>
+            )}
+            {audio.status === 'error' && (
+              <Text accessibilityRole="alert" style={{ color: colors.error }}>
+                {`${audio.message}\nCódigo: ${audio.code}`}
+              </Text>
+            )}
+          </View>
         </>
       )}
       {result && (
@@ -187,4 +300,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 17, fontWeight: '600' },
   diagnostics: { fontSize: 12, lineHeight: 19 },
   fixture: { borderTopWidth: 1, paddingTop: 14, gap: 8 },
+  audioSpike: { borderTopWidth: 1, paddingTop: 14, gap: 12 },
+  progressTrack: { height: 8, borderRadius: 4, overflow: 'hidden' },
+  progressFill: { height: 8, borderRadius: 4 },
 });

@@ -24,6 +24,7 @@ from yt_dlp.networking.exceptions import TransportError  # noqa: E402
 
 class SpikeTests(unittest.TestCase):
     def setUp(self):
+        spike.analysis_sessions.clear()
         native.check.reset_mock(side_effect=True)
         native.run_js.reset_mock(side_effect=True)
         native.get_js_diagnostics.reset_mock(side_effect=True)
@@ -38,6 +39,26 @@ class SpikeTests(unittest.TestCase):
                 "completedNormally": True,
             }
         )
+
+    @staticmethod
+    def audio_payload(**format_overrides):
+        audio = {
+            "format_id": "140",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "mp4a.40.2",
+            "protocol": "https",
+            "abr": 129,
+            "filesize": 2_000_000,
+            "url": "https://rr1.googlevideo.com/videoplayback?signature=secret",
+            "http_headers": {"User-Agent": "MediaDrop test", "Accept": "*/*"},
+        }
+        audio.update(format_overrides)
+        return {
+            "id": "AWGPaFraPN4",
+            "title": "Own / audio",
+            "formats": [audio],
+        }
 
     @staticmethod
     def js_bridge(response):
@@ -101,6 +122,111 @@ class SpikeTests(unittest.TestCase):
         self.assertFalse(value["videoFormats"][0]["hasAudio"])
         self.assertEqual(value["audioFormats"][0]["id"], "140")
         self.assertNotIn("signed-secret", json.dumps(value))
+
+    def test_analysis_creates_opaque_catalog_and_selects_compatible_audio(self):
+        payload = self.audio_payload()
+        with patch.object(spike.LocalYoutubeDL, "extract_info", return_value=payload):
+            result = json.loads(spike.analyze("https://youtu.be/AWGPaFraPN4"))
+        metadata = result["metadata"]
+        self.assertRegex(metadata["analysisId"], r"^[a-f0-9]{32}$")
+        self.assertEqual(metadata["preferredAudioFormatId"], "140")
+        self.assertNotIn("videoplayback", json.dumps(metadata))
+        self.assertNotIn("http_headers", json.dumps(metadata))
+
+    def test_audio_selection_accepts_https_url_when_protocol_is_unset(self):
+        payload = self.audio_payload(protocol=None)
+
+        self.assertEqual(spike.preferred_audio(payload["formats"])["format_id"], "140")
+
+    def test_audio_selection_rejects_non_m4a_and_manifest(self):
+        for changes in [
+            {"ext": "webm", "acodec": "opus"},
+            {"protocol": "m3u8_native"},
+            {"fragments": [{"url": "https://rr1.googlevideo.com/f"}]},
+        ]:
+            with self.subTest(changes=changes):
+                self.assertFalse(
+                    spike.is_direct_m4a_audio(
+                        self.audio_payload(**changes)["formats"][0]
+                    )
+                )
+
+    def test_oversize_audio_is_not_preselected_and_is_rejected_for_download(self):
+        payload = self.audio_payload(filesize=spike.MAX_AUDIO_BYTES + 1)
+        self.assertIsNone(spike.preferred_audio(payload["formats"]))
+        with self.assertRaisesRegex(ValueError, "AUDIO_FILE_TOO_LARGE"):
+            spike.build_audio_descriptor(payload, "140")
+
+    def test_prepare_reextracts_exact_format_and_keeps_descriptor_native(self):
+        payload = self.audio_payload()
+        analysis_id, _ = spike.create_session(
+            "https://www.youtube.com/watch?v=AWGPaFraPN4", payload
+        )
+        with patch.object(
+            spike.LocalYoutubeDL, "extract_info", return_value=payload
+        ) as extract:
+            prepared = json.loads(
+                spike.prepare_audio_download(
+                    json.dumps({"analysisId": analysis_id, "formatId": "140"})
+                )
+            )
+        extract.assert_called_once()
+        self.assertEqual(prepared["descriptor"]["formatId"], "140")
+        self.assertEqual(prepared["descriptor"]["container"], "m4a")
+        self.assertEqual(
+            prepared["descriptor"]["url"], payload["formats"][0]["url"]
+        )
+        self.assertNotIn("Cookie", prepared["descriptor"]["headers"])
+
+    def test_prepare_rejects_invalid_analysis_and_missing_format(self):
+        invalid = json.loads(
+            spike.prepare_audio_download(
+                json.dumps({"analysisId": "invalid", "formatId": "140"})
+            )
+        )
+        self.assertEqual(invalid["error"]["code"], "ANALYSIS_NOT_FOUND")
+        analysis_id, _ = spike.create_session(
+            "https://www.youtube.com/watch?v=AWGPaFraPN4", self.audio_payload()
+        )
+        missing = json.loads(
+            spike.prepare_audio_download(
+                json.dumps({"analysisId": analysis_id, "formatId": "251"})
+            )
+        )
+        self.assertEqual(missing["error"]["code"], "FORMAT_NOT_AVAILABLE")
+
+    def test_prepare_rejects_expired_analysis(self):
+        analysis_id, _ = spike.create_session(
+            "https://www.youtube.com/watch?v=AWGPaFraPN4", self.audio_payload()
+        )
+        spike.analysis_sessions[analysis_id]["created"] -= spike.ANALYSIS_TTL_SECONDS
+        prepared = json.loads(
+            spike.prepare_audio_download(
+                json.dumps({"analysisId": analysis_id, "formatId": "140"})
+            )
+        )
+        self.assertEqual(prepared["error"]["code"], "ANALYSIS_NOT_FOUND")
+
+    def test_descriptor_rejects_non_https_host_and_forbidden_headers(self):
+        for changes, code in [
+            ({"url": "http://rr1.googlevideo.com/file"}, "AUDIO_FORMAT_NOT_SUPPORTED"),
+            (
+                {"url": "https://youtube.com.evil.test/file"},
+                "AUDIO_FORMAT_NOT_SUPPORTED",
+            ),
+            (
+                {"http_headers": {"Cookie": "secret"}},
+                "AUDIO_HEADERS_FORBIDDEN",
+            ),
+        ]:
+            with self.subTest(code=code):
+                payload = self.audio_payload(**changes)
+                if code == "AUDIO_FORMAT_NOT_SUPPORTED":
+                    with self.assertRaisesRegex(ValueError, code):
+                        spike.build_audio_descriptor(payload, "140")
+                else:
+                    with self.assertRaisesRegex(ValueError, code):
+                        spike.build_audio_descriptor(payload, "140")
 
     def test_restricted_content_rejected(self):
         for extra, code in [

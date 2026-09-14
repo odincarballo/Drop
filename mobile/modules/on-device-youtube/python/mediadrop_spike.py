@@ -1,4 +1,4 @@
-"""Isolated on-device analysis only. Packaged code, no CLI or download jobs."""
+"""Isolated on-device YouTube engine. Packaged code, no CLI or subprocesses."""
 
 import functools
 import hashlib
@@ -7,6 +7,7 @@ import math
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -43,6 +44,17 @@ js_calls = 0
 native_js_calls = 0
 process_attempts = 0
 ejs_diagnostics = {}
+ANALYSIS_TTL_SECONDS = 10 * 60
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
+ALLOWED_AUDIO_HEADERS = {
+    "accept",
+    "accept-language",
+    "origin",
+    "referer",
+    "user-agent",
+}
+FORBIDDEN_AUDIO_HEADERS = {"authorization", "cookie", "proxy-authorization"}
+analysis_sessions = {}
 
 
 def prohibit_processes(event, args):
@@ -379,7 +391,161 @@ def number(value):
     )
 
 
-def normalize(payload):
+def positive_integer(value):
+    value = number(value)
+    return int(value) if value and int(value) == value else None
+
+
+def stream_url(value):
+    if not isinstance(value, str) or len(value) > 16384:
+        raise ValueError("AUDIO_URL_INVALID")
+    parsed = urlsplit(value)
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.port not in {None, 443}
+        or not (host == "googlevideo.com" or host.endswith(".googlevideo.com"))
+    ):
+        raise ValueError("AUDIO_URL_INVALID")
+    return value
+
+
+def is_direct_m4a_audio(item):
+    if not isinstance(item, dict):
+        return False
+    codec = str(item.get("acodec") or "").lower()
+    protocol = item.get("protocol")
+    if (
+        item.get("has_drm")
+        or item.get("ext") != "m4a"
+        or item.get("vcodec") not in {None, "none"}
+        or not (codec.startswith("mp4a.") or codec == "aac")
+        or (protocol is not None and str(protocol).lower() != "https")
+        or item.get("fragments")
+        or item.get("manifest_url")
+    ):
+        return False
+    try:
+        stream_url(item.get("url"))
+    except ValueError:
+        return False
+    return True
+
+
+def preferred_audio(formats):
+    candidates = [
+        item
+        for item in formats
+        if is_direct_m4a_audio(item)
+        and (
+            (positive_integer(item.get("filesize") or item.get("filesize_approx")))
+            or 0
+        )
+        <= MAX_AUDIO_BYTES
+    ]
+    if not candidates:
+        return None
+
+    def rank(item):
+        codec = str(item.get("acodec") or "").lower()
+        return (
+            int(codec.startswith("mp4a.40.2")),
+            number(item.get("abr")) or number(item.get("tbr")) or 0,
+            str(item.get("format_id") or ""),
+        )
+
+    return max(candidates, key=rank)
+
+
+def clean_sessions(now=None):
+    current = time.monotonic() if now is None else now
+    expired = [
+        key
+        for key, session in analysis_sessions.items()
+        if current - session["created"] >= ANALYSIS_TTL_SECONDS
+    ]
+    for key in expired:
+        analysis_sessions.pop(key, None)
+
+
+def create_session(url, payload):
+    clean_sessions()
+    compatible = {
+        str(item.get("format_id"))
+        for item in payload.get("formats", [])
+        if is_direct_m4a_audio(item)
+    }
+    analysis_id = uuid.uuid4().hex
+    analysis_sessions[analysis_id] = {
+        "created": time.monotonic(),
+        "url": url,
+        "title": str(payload.get("title") or "YouTube")[:240],
+        "audioFormatIds": compatible,
+    }
+    return analysis_id, preferred_audio(payload.get("formats", []))
+
+
+def safe_file_name(title):
+    stem = re.sub(r"[^\w .-]", "_", str(title), flags=re.UNICODE).strip(" .")
+    return f"{(stem[:100] or 'YouTube audio')}.m4a"
+
+
+def audio_headers(payload, item):
+    merged = {}
+    for source in (payload.get("http_headers"), item.get("http_headers")):
+        if isinstance(source, dict):
+            merged.update(source)
+    result = {}
+    for raw_name, raw_value in merged.items():
+        name = str(raw_name).strip().lower()
+        if name in FORBIDDEN_AUDIO_HEADERS and raw_value:
+            raise ValueError("AUDIO_HEADERS_FORBIDDEN")
+        if (
+            name in ALLOWED_AUDIO_HEADERS
+            and isinstance(raw_value, str)
+            and len(raw_value) <= 1024
+            and "\r" not in raw_value
+            and "\n" not in raw_value
+        ):
+            result["-".join(part.capitalize() for part in name.split("-"))] = raw_value
+    return result
+
+
+def build_audio_descriptor(payload, format_id):
+    item = next(
+        (
+            candidate
+            for candidate in payload.get("formats", [])
+            if str(candidate.get("format_id")) == format_id
+        ),
+        None,
+    )
+    if item is None:
+        raise ValueError("FORMAT_NOT_AVAILABLE")
+    if not is_direct_m4a_audio(item):
+        raise ValueError("AUDIO_FORMAT_NOT_SUPPORTED")
+    expected = positive_integer(item.get("filesize"))
+    estimated = positive_integer(item.get("filesize_approx"))
+    if (expected and expected > MAX_AUDIO_BYTES) or (
+        estimated and estimated > MAX_AUDIO_BYTES
+    ):
+        raise ValueError("AUDIO_FILE_TOO_LARGE")
+    return {
+        "url": stream_url(item.get("url")),
+        "headers": audio_headers(payload, item),
+        "fileName": safe_file_name(payload.get("title")),
+        "formatId": format_id,
+        "container": "m4a",
+        "codec": str(item.get("acodec") or "aac")[:100],
+        "bitrateKbps": number(item.get("abr") or item.get("tbr")),
+        "expectedBytes": expected,
+        "estimatedBytes": estimated,
+    }
+
+
+def normalize(payload, analysis_id=None, selected_audio=None):
     if payload.get("_type") in {"playlist", "multi_video"}:
         raise ValueError("PLAYLIST_NOT_SUPPORTED")
     if payload.get("is_live") or payload.get("live_status") in {
@@ -432,7 +598,7 @@ def normalize(payload):
             ".ytimg.com"
         ):
             thumbnail = None
-    return {
+    result = {
         "id": video_id,
         "title": str(payload.get("title") or "YouTube")[:240],
         "duration": number(payload.get("duration")),
@@ -441,6 +607,12 @@ def normalize(payload):
         "audioFormats": audio[:30],
         "resolutions": sorted({item["height"] for item in video if item["height"]}),
     }
+    if analysis_id is not None:
+        result["analysisId"] = analysis_id
+        result["preferredAudioFormatId"] = (
+            str(selected_audio.get("format_id")) if selected_audio else None
+        )
+    return result
 
 
 def classify(message):
@@ -472,7 +644,8 @@ def analyze(raw):
         with LocalYoutubeDL(local_options()) as downloader:
             payload = downloader.extract_info(url, download=False, process=False)
         check()
-        result["metadata"] = normalize(payload)
+        analysis_id, selected_audio = create_session(url, payload)
+        result["metadata"] = normalize(payload, analysis_id, selected_audio)
     except DownloadError as error:
         result["error"] = {"code": budget.error or classify(str(error))}
     except ValueError as error:
@@ -502,4 +675,56 @@ def analyze(raw):
             "requestHosts": sorted(budget.hosts),
         }
     )
+    return json.dumps(result, allow_nan=False)
+
+
+def prepare_audio_download(raw):
+    """Reextract and return a native-only direct M4A descriptor."""
+    budget = NetworkBudget()
+    OnDeviceRH.budget = budget
+    result = {}
+    try:
+        request = json.loads(raw)
+        if not isinstance(request, dict):
+            raise ValueError("AUDIO_REQUEST_INVALID")
+        analysis_id = request.get("analysisId")
+        format_id = request.get("formatId")
+        if not isinstance(analysis_id, str) or not re.fullmatch(
+            r"[a-f0-9]{32}", analysis_id
+        ):
+            raise ValueError("ANALYSIS_NOT_FOUND")
+        if not isinstance(format_id, str) or not format_id or len(format_id) > 80:
+            raise ValueError("FORMAT_NOT_AVAILABLE")
+        clean_sessions()
+        session = analysis_sessions.get(analysis_id)
+        if session is None:
+            raise ValueError("ANALYSIS_NOT_FOUND")
+        if format_id not in session["audioFormatIds"]:
+            raise ValueError("FORMAT_NOT_AVAILABLE")
+        check()
+        with LocalYoutubeDL(local_options()) as downloader:
+            payload = downloader.extract_info(
+                session["url"], download=False, process=False
+            )
+        check()
+        result["descriptor"] = build_audio_descriptor(payload, format_id)
+    except json.JSONDecodeError:
+        result["error"] = {"code": "AUDIO_REQUEST_INVALID"}
+    except DownloadError as error:
+        result["error"] = {"code": budget.error or classify(str(error))}
+    except ValueError as error:
+        code = str(error)
+        result["error"] = {
+            "code": code if re.fullmatch(r"[A-Z_]+", code) else "AUDIO_PREPARATION_FAILED"
+        }
+    except Exception as error:
+        result["error"] = {
+            "code": budget.error
+            or (
+                "LOCAL_CANCELLED"
+                if str(error) == "LOCAL_CANCELLED"
+                else "AUDIO_PREPARATION_FAILED"
+            )
+        }
+        result["exceptionType"] = type(error).__name__
     return json.dumps(result, allow_nan=False)
