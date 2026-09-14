@@ -1,26 +1,52 @@
 """Isolated on-device analysis only. Packaged code, no CLI or download jobs."""
 
 import functools
+import hashlib
 import json
 import math
 import re
 import sys
 import time
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from _mediadrop_native import check, run_js
+from _mediadrop_native import check, get_js_diagnostics, run_js
 from safe_network import NetworkBudget, OnDeviceRH
 from yt_dlp import YoutubeDL
 from yt_dlp.extractor.youtube.jsc._builtin.ejs import EJSBaseJCP, ScriptSource
-from yt_dlp.extractor.youtube.jsc.provider import register_preference, register_provider
+from yt_dlp.extractor.youtube.jsc.provider import (
+    JsChallengeRequest,
+    JsChallengeType,
+    NChallengeInput,
+    register_preference,
+    register_provider,
+)
 from yt_dlp.utils import DownloadError
 from yt_dlp.version import __version__
+from yt_dlp_ejs import version as ejs_version
 
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+EJS_FIXTURE_PLAYER_ID = "74edf1a3"
+EJS_FIXTURE_PLAYER_URL = (
+    "https://www.youtube.com/s/player/74edf1a3/"
+    "player_ias.vflset/en_US/base.js"
+)
+EJS_FIXTURE_PATH = (
+    Path(__file__).resolve().parent.parent / "md_fixtures/player-74edf1a3-main.js"
+)
+EJS_FIXTURE_SHA256 = (
+    "ed9a4ea0646332a6b6c973ebe5a915c62c43db89bb2bb1a31eba07d906ef8ff7"
+)
+EJS_FIXTURE_INPUT = "IlLiA21ny7gqA2m4p37"
+EJS_FIXTURE_EXPECTED = "9nRTxrbM1f0yHg"
 js_calls = 0
+native_js_calls = 0
+process_attempts = 0
+ejs_diagnostics = {}
 
 
 def prohibit_processes(event, args):
+    global process_attempts
     if event in {
         "subprocess.Popen",
         "os.system",
@@ -28,6 +54,7 @@ def prohibit_processes(event, args):
         "os.posix_spawn",
         "os.exec",
     }:
+        process_attempts += 1
         raise RuntimeError("LOCAL_PROCESS_FORBIDDEN")
 
 
@@ -47,10 +74,27 @@ class MediaDropEmbeddedJCP(EJSBaseJCP):
         yield ScriptSource.PYPACKAGE, self._pypackage_source
 
     def _run_js_runtime(self, script):
-        global js_calls
+        global ejs_diagnostics, js_calls
         check()
         js_calls += 1
-        return run_js(script)
+        ejs_diagnostics.update(
+            {
+                "providerInvoked": True,
+                "runJsInvoked": True,
+                "quickJsCompletedNormally": False,
+                "scriptLength": len(script.encode("utf-8")),
+            }
+        )
+        try:
+            response = execute_js(script)
+        except Exception as error:
+            ejs_diagnostics["native"] = native_js_diagnostics()
+            ejs_diagnostics["runtimeError"] = sanitize_runtime_error(error)
+            raise
+        ejs_diagnostics["native"] = native_js_diagnostics()
+        ejs_diagnostics.update(inspect_ejs_response(response))
+        ejs_diagnostics["quickJsCompletedNormally"] = True
+        return response
 
 
 @register_preference(MediaDropEmbeddedJCP)
@@ -76,6 +120,220 @@ class LocalYoutubeDL(YoutubeDL):
     @functools.cached_property
     def _request_director(self):
         return self.build_request_director([OnDeviceRH])
+
+
+def local_options():
+    return {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": SilentLogger(),
+        "ignoreconfig": True,
+        "cachedir": False,
+        "noplaylist": True,
+        "skip_download": True,
+        "allowed_extractors": ["youtube"],
+        "js_runtimes": {},
+        "remote_components": set(),
+        "proxy": "",
+        "cookiefile": None,
+        "cookiesfrombrowser": None,
+        "usenetrc": False,
+        "geo_bypass": False,
+        "socket_timeout": 10,
+        "retries": 0,
+        "extractor_retries": 0,
+        "fragment_retries": 0,
+    }
+
+
+def load_ejs_fixture():
+    content = EJS_FIXTURE_PATH.read_bytes()
+    if hashlib.sha256(content).hexdigest() != EJS_FIXTURE_SHA256:
+        raise ValueError("EJS_FIXTURE_INVALID")
+    return content.decode("utf-8")
+
+
+def execute_js(script):
+    global native_js_calls
+    native_js_calls += 1
+    return run_js(script)
+
+
+def native_js_diagnostics():
+    try:
+        value = json.loads(get_js_diagnostics())
+    except (TypeError, ValueError):
+        return {"diagnosticError": "NATIVE_DIAGNOSTICS_INVALID"}
+    if not isinstance(value, dict):
+        return {"diagnosticError": "NATIVE_DIAGNOSTICS_INVALID"}
+    allowed = {
+        "scriptBytes",
+        "memoryLimitBytes",
+        "stackLimitBytes",
+        "timeoutSeconds",
+        "outputLimitBytes",
+        "capturedBytes",
+        "consoleCalls",
+        "interrupted",
+        "timedOut",
+        "cancelled",
+        "completedNormally",
+        "quickJsMallocBytes",
+        "quickJsMemoryUsedBytes",
+        "captureError",
+        "exceptionName",
+        "exceptionMessage",
+        "exceptionStack",
+        "errorCode",
+        "elapsedSeconds",
+    }
+    return {key: value[key] for key in allowed if key in value}
+
+
+def sanitize_runtime_error(error):
+    message = str(error)
+    if re.fullmatch(r"LOCAL_[A-Z_]+", message):
+        return message
+    return type(error).__name__
+
+
+def inspect_ejs_response(response):
+    diagnostics = {
+        "responseType": type(response).__name__,
+        "responseLength": len(response.encode("utf-8"))
+        if isinstance(response, str)
+        else None,
+        "parserError": None,
+    }
+    if not isinstance(response, str):
+        diagnostics["responsePreview"] = f"<{type(response).__name__}>"
+        return diagnostics
+    try:
+        parsed = json.loads(response)
+    except json.JSONDecodeError as error:
+        diagnostics["parserError"] = (
+            f"JSONDecodeError line {error.lineno} column {error.colno}"
+        )
+        diagnostics["responsePreview"] = response[:240]
+        return diagnostics
+    if isinstance(parsed, dict):
+        preview = {
+            "type": parsed.get("type"),
+            "responses": parsed.get("responses"),
+            "preprocessedPlayerLength": len(parsed.get("preprocessed_player", ""))
+            if isinstance(parsed.get("preprocessed_player"), str)
+            else 0,
+        }
+        diagnostics["responsePayloadType"] = parsed.get("type")
+        diagnostics["responsePreview"] = json.dumps(preview, ensure_ascii=True)[:500]
+    else:
+        diagnostics["responsePreview"] = repr(parsed)[:240]
+    return diagnostics
+
+
+def verify_js_bridge_contract():
+    console_output = execute_js(
+        'console.log("alpha", 7); console.log(JSON.stringify({ok: true}));'
+    )
+    return_output = execute_js("21 * 2;")
+    exception_caught = False
+    try:
+        execute_js('throw new Error("fixture error");')
+    except RuntimeError as error:
+        exception_caught = sanitize_runtime_error(error) == "LOCAL_JS_EVAL_FAILED"
+    diagnostics = {
+        "consoleLogCaptured": console_output == 'alpha 7\n{"ok":true}\n',
+        "evaluationReturnIgnored": return_output == "",
+        "javascriptExceptionCaught": exception_caught,
+    }
+    if not all(diagnostics.values()):
+        raise ValueError("EJS_BRIDGE_CONTRACT_INVALID")
+    return diagnostics
+
+
+def run_ejs_fixture():
+    """Run an upstream n-challenge vector through yt-dlp's actual JSC director."""
+    global ejs_diagnostics, js_calls, native_js_calls
+    started = time.monotonic()
+    js_calls = 0
+    native_js_calls = 0
+    ejs_diagnostics = {
+        "providerInvoked": False,
+        "runJsInvoked": False,
+        "quickJsCompletedNormally": False,
+        "quickJsFilesystemAttempts": 0,
+        "quickJsNetworkAttempts": 0,
+    }
+    attempts_before = process_attempts
+    result = {}
+    try:
+        check()
+        ejs_diagnostics.update(verify_js_bridge_contract())
+        player = load_ejs_fixture()
+        with LocalYoutubeDL(local_options()) as downloader:
+            extractor = downloader.get_info_extractor("Youtube")
+            extractor.initialize()
+            director = extractor._jsc_director
+            provider_key = MediaDropEmbeddedJCP.PROVIDER_KEY
+            if provider_key not in director.providers:
+                raise ValueError("EJS_PROVIDER_NOT_REGISTERED")
+            provider = director.providers[provider_key]
+            if not provider.is_available():
+                raise ValueError("EJS_PROVIDER_UNAVAILABLE")
+
+            # Keep the fixture deterministic and offline on-device while still
+            # traversing director.bulk_solve -> provider.bulk_solve ->
+            # EJSBaseJCP._real_bulk_solve -> _construct_stdin -> run_js.
+            provider._get_player = lambda video_id, player_url: player
+            request = JsChallengeRequest(
+                type=JsChallengeType.N,
+                video_id="fixture-ejs",
+                input=NChallengeInput(
+                    player_url=EJS_FIXTURE_PLAYER_URL,
+                    challenges=[EJS_FIXTURE_INPUT],
+                ),
+            )
+            responses = director.bulk_solve([request])
+        check()
+        if len(responses) != 1:
+            raise ValueError("EJS_RESPONSE_MISSING")
+        actual = responses[0][1].output.results.get(EJS_FIXTURE_INPUT)
+        if actual != EJS_FIXTURE_EXPECTED or js_calls < 1:
+            raise ValueError("EJS_RESPONSE_INVALID")
+        result["fixture"] = {
+            "status": "passed",
+            "challengeType": "n",
+            "challengeInput": EJS_FIXTURE_INPUT,
+            "expected": EJS_FIXTURE_EXPECTED,
+            "actual": actual,
+            "playerId": EJS_FIXTURE_PLAYER_ID,
+            "playerSha256": EJS_FIXTURE_SHA256,
+            "provider": provider_key,
+            "providerRegistered": True,
+            "scriptSource": "yt-dlp-ejs bundled Python package",
+            "ejsVersion": ejs_version,
+        }
+    except ValueError as error:
+        code = str(error)
+        result["error"] = {
+            "code": code if re.fullmatch(r"[A-Z_]+", code) else "EJS_FIXTURE_FAILED"
+        }
+    except Exception as error:
+        result["error"] = {"code": "EJS_FIXTURE_FAILED"}
+        result["exceptionType"] = type(error).__name__
+    result.update(
+        {
+            "elapsedSeconds": round(time.monotonic() - started, 3),
+            "jsChallengeCalls": js_calls,
+            "nativeRunJsCalls": native_js_calls,
+            "processAttempts": process_attempts - attempts_before,
+            "subprocessUsed": False,
+            "quickJsFilesystem": False,
+            "quickJsNetwork": False,
+            "diagnostics": ejs_diagnostics,
+        }
+    )
+    return json.dumps(result, allow_nan=False)
 
 
 def canonical_url(raw):
@@ -209,29 +467,9 @@ def analyze(raw):
         url = canonical_url(raw)
         check()
         # Exercise the compiled JS engine even when a video needs no EJS challenge.
-        if run_js("console.log(JSON.stringify({ok: 6 * 7 === 42}));") != '{"ok":true}':
+        if execute_js("console.log(JSON.stringify({ok: 6 * 7 === 42}));").strip() != '{"ok":true}':
             raise ValueError("LOCAL_JS_FAILED")
-        options = {
-            "quiet": True,
-            "no_warnings": True,
-            "logger": SilentLogger(),
-            "ignoreconfig": True,
-            "cachedir": False,
-            "noplaylist": True,
-            "skip_download": True,
-            "allowed_extractors": ["youtube"],
-            "js_runtimes": {},
-            "remote_components": set(),
-            "proxy": "",
-            "cookiefile": None,
-            "cookiesfrombrowser": None,
-            "usenetrc": False,
-            "socket_timeout": 10,
-            "retries": 0,
-            "extractor_retries": 0,
-            "fragment_retries": 0,
-        }
-        with LocalYoutubeDL(options) as downloader:
+        with LocalYoutubeDL(local_options()) as downloader:
             payload = downloader.extract_info(url, download=False, process=False)
         check()
         result["metadata"] = normalize(payload)

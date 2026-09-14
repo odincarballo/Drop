@@ -7,10 +7,15 @@ import { localYoutubeResultSchema } from '@/models/onDeviceYoutube';
 import {
   analyzeYoutubeOnDevice,
   cancelLocalYoutube,
+  testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
 
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
-const native = { analyze: jest.fn(), cancel: jest.fn() };
+const native = {
+  analyze: jest.fn(),
+  testEjsFixture: jest.fn(),
+  cancel: jest.fn(),
+};
 const metadata = {
   id: 'AWGPaFraPN4',
   title: 'Video autorizado',
@@ -46,6 +51,70 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
   native.analyze.mockResolvedValue(JSON.stringify(result));
+  native.testEjsFixture.mockResolvedValue(
+    JSON.stringify({
+      fixture: {
+        status: 'passed',
+        challengeType: 'n',
+        challengeInput: 'IlLiA21ny7gqA2m4p37',
+        expected: '9nRTxrbM1f0yHg',
+        actual: '9nRTxrbM1f0yHg',
+        playerId: '74edf1a3',
+        playerSha256:
+          'ed9a4ea0646332a6b6c973ebe5a915c62c43db89bb2bb1a31eba07d906ef8ff7',
+        provider: 'MediaDropEmbedded',
+        providerRegistered: true,
+        scriptSource: 'yt-dlp-ejs bundled Python package',
+        ejsVersion: '0.8.0',
+      },
+      elapsedSeconds: 0.5,
+      jsChallengeCalls: 1,
+      nativeRunJsCalls: 4,
+      processAttempts: 0,
+      subprocessUsed: false,
+      quickJsFilesystem: false,
+      quickJsNetwork: false,
+      diagnostics: {
+        providerInvoked: true,
+        runJsInvoked: true,
+        quickJsCompletedNormally: true,
+        scriptLength: 6500000,
+        responseType: 'str',
+        responseLength: 3824404,
+        responsePayloadType: 'result',
+        responsePreview: '{"type":"result","responses":[{"type":"result"}]}',
+        parserError: null,
+        consoleLogCaptured: true,
+        evaluationReturnIgnored: true,
+        javascriptExceptionCaught: true,
+        quickJsFilesystemAttempts: 0,
+        quickJsNetworkAttempts: 0,
+        native: {
+          memoryLimitBytes: 201326592,
+          stackLimitBytes: 2097152,
+          timeoutSeconds: 25,
+          outputLimitBytes: 8388608,
+          capturedBytes: 3824404,
+          consoleCalls: 1,
+          interrupted: false,
+          completedNormally: true,
+          quickJsMallocBytes: 150000000,
+          quickJsMemoryUsedBytes: 140000000,
+        },
+      },
+      deviceRuntime: 'ios-device',
+    }),
+  );
+});
+
+test('EJS fixture uses the native engine without network fallback', async () => {
+  const fetchSpy = jest.spyOn(global, 'fetch');
+  const fixture = await testEjsOnDevice();
+  expect(fixture.fixture?.actual).toBe('9nRTxrbM1f0yHg');
+  expect(fixture.jsChallengeCalls).toBe(1);
+  expect(native.testEjsFixture).toHaveBeenCalledTimes(1);
+  expect(fetchSpy).not.toHaveBeenCalled();
+  fetchSpy.mockRestore();
 });
 
 test('metadata uses the native module without HTTP client, token or backend fallback', async () => {
@@ -116,6 +185,16 @@ test('local metadata card shows actual formats and has no download action', asyn
   expect(screen.getByText(/1080p · mp4 · avc1/)).toBeTruthy();
   expect(screen.getByText(/12:34/)).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Descargar' })).toBeNull();
+});
+
+test('physical EJS action displays the validated provider result', async () => {
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Probar EJS en este iPhone' }),
+  );
+  expect(screen.getByText('✓ EJS real pasó')).toBeTruthy();
+  expect(screen.getByText(/MediaDropEmbedded · EJS 0.8.0/)).toBeTruthy();
+  expect(screen.getByText(/Subprocess: no · intentos: 0/)).toBeTruthy();
 });
 
 test('local LOGIN_REQUIRED stays specific, with no login suggestion', async () => {

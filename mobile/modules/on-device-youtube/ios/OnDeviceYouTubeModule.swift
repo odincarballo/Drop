@@ -8,6 +8,10 @@ public class OnDeviceYouTubeModule: Module {
       MDPythonBridge.analyze(url) { result in promise.resolve(result) }
     }
 
+    AsyncFunction("testEjsFixture") { (promise: Promise) in
+      MDPythonBridge.testEJS { result in promise.resolve(result) }
+    }
+
     Function("cancel") { MDPythonBridge.cancel() }
     OnAppEntersBackground { MDPythonBridge.cancel() }
   }

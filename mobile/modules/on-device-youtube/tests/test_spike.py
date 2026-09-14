@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 native = types.ModuleType("_mediadrop_native")
 native.check = MagicMock()
 native.run_js = MagicMock(return_value='{"ok":true}')
+native.get_js_diagnostics = MagicMock(return_value="{}")
 sys.modules["_mediadrop_native"] = native
 
 import mediadrop_spike as spike  # noqa: E402
@@ -24,7 +25,32 @@ from yt_dlp.networking.exceptions import TransportError  # noqa: E402
 class SpikeTests(unittest.TestCase):
     def setUp(self):
         native.check.reset_mock(side_effect=True)
-        native.run_js.reset_mock()
+        native.run_js.reset_mock(side_effect=True)
+        native.get_js_diagnostics.reset_mock(side_effect=True)
+        native.get_js_diagnostics.return_value = json.dumps(
+            {
+                "memoryLimitBytes": 192 * 1024 * 1024,
+                "stackLimitBytes": 2 * 1024 * 1024,
+                "timeoutSeconds": 25,
+                "outputLimitBytes": 8 * 1024 * 1024,
+                "capturedBytes": 1024,
+                "consoleCalls": 1,
+                "completedNormally": True,
+            }
+        )
+
+    @staticmethod
+    def js_bridge(response):
+        def run(script):
+            if script == 'console.log("alpha", 7); console.log(JSON.stringify({ok: true}));':
+                return 'alpha 7\n{"ok":true}\n'
+            if script == "21 * 2;":
+                return ""
+            if script == 'throw new Error("fixture error");':
+                raise RuntimeError("LOCAL_JS_EVAL_FAILED")
+            return response
+
+        return run
 
     def test_single_urls(self):
         for url in [
@@ -118,6 +144,110 @@ class SpikeTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(RuntimeError, "LOCAL_PROCESS_FORBIDDEN"):
             spike.prohibit_processes("subprocess.Popen", ())
+
+    def test_fixture_traverses_yt_dlp_ejs_provider(self):
+        response = json.dumps(
+            {
+                "type": "result",
+                "responses": [
+                    {
+                        "type": "result",
+                        "data": {
+                            spike.EJS_FIXTURE_INPUT: spike.EJS_FIXTURE_EXPECTED
+                        },
+                    }
+                ],
+                "preprocessed_player": "fixture",
+            }
+        )
+        native.run_js.side_effect = self.js_bridge(response)
+        with patch.object(spike, "load_ejs_fixture", return_value="player-code"):
+            result = json.loads(spike.run_ejs_fixture())
+        self.assertEqual(result["fixture"]["status"], "passed")
+        self.assertEqual(result["fixture"]["provider"], "MediaDropEmbedded")
+        self.assertEqual(result["jsChallengeCalls"], 1)
+        self.assertEqual(result["nativeRunJsCalls"], 4)
+        self.assertEqual(result["processAttempts"], 0)
+        self.assertFalse(result["subprocessUsed"])
+        self.assertTrue(result["diagnostics"]["providerInvoked"])
+        self.assertTrue(result["diagnostics"]["runJsInvoked"])
+        self.assertTrue(result["diagnostics"]["quickJsCompletedNormally"])
+        self.assertTrue(result["diagnostics"]["consoleLogCaptured"])
+        self.assertTrue(result["diagnostics"]["evaluationReturnIgnored"])
+        self.assertTrue(result["diagnostics"]["javascriptExceptionCaught"])
+        self.assertIsNone(result["diagnostics"]["parserError"])
+        self.assertEqual(
+            result["diagnostics"]["native"]["memoryLimitBytes"],
+            192 * 1024 * 1024,
+        )
+        script = native.run_js.call_args.args[0]
+        self.assertIn("player-code", script)
+        self.assertIn(spike.EJS_FIXTURE_INPUT, script)
+
+    def test_fixture_rejects_an_invalid_solver_response(self):
+        response = json.dumps(
+            {
+                "type": "result",
+                "responses": [{"type": "result", "data": {}}],
+                "preprocessed_player": "fixture",
+            }
+        )
+        native.run_js.side_effect = self.js_bridge(response)
+        with patch.object(spike, "load_ejs_fixture", return_value="player-code"):
+            result = json.loads(spike.run_ejs_fixture())
+        self.assertEqual(result["error"]["code"], "EJS_RESPONSE_MISSING")
+        self.assertEqual(result["jsChallengeCalls"], 1)
+
+    def test_ejs_response_diagnostics_for_valid_json(self):
+        diagnostics = spike.inspect_ejs_response(
+            json.dumps(
+                {
+                    "type": "result",
+                    "responses": [{"type": "result", "data": {"n": "answer"}}],
+                    "preprocessed_player": "large-player",
+                }
+            )
+        )
+        self.assertEqual(diagnostics["responseType"], "str")
+        self.assertEqual(diagnostics["responsePayloadType"], "result")
+        self.assertEqual(diagnostics["parserError"], None)
+        self.assertIn('"preprocessedPlayerLength": 12', diagnostics["responsePreview"])
+        self.assertNotIn("large-player", diagnostics["responsePreview"])
+
+    def test_ejs_response_diagnostics_for_invalid_json(self):
+        diagnostics = spike.inspect_ejs_response("not-json")
+        self.assertEqual(
+            diagnostics["parserError"], "JSONDecodeError line 1 column 1"
+        )
+        self.assertEqual(diagnostics["responsePreview"], "not-json")
+
+    def test_js_bridge_contract_checks_console_return_and_exception(self):
+        native.run_js.side_effect = self.js_bridge("unused")
+        self.assertEqual(
+            spike.verify_js_bridge_contract(),
+            {
+                "consoleLogCaptured": True,
+                "evaluationReturnIgnored": True,
+                "javascriptExceptionCaught": True,
+            },
+        )
+
+    def test_js_bridge_contract_rejects_bad_console_capture(self):
+        native.run_js.side_effect = lambda script: "wrong"
+        with self.assertRaisesRegex(ValueError, "EJS_BRIDGE_CONTRACT_INVALID"):
+            spike.verify_js_bridge_contract()
+
+    def test_native_diagnostics_are_allowlisted(self):
+        native.get_js_diagnostics.return_value = json.dumps(
+            {
+                "errorCode": "LOCAL_JS_MEMORY_LIMIT",
+                "exceptionMessage": "null",
+                "secret": "must-not-cross-bridge",
+            }
+        )
+        diagnostics = spike.native_js_diagnostics()
+        self.assertEqual(diagnostics["errorCode"], "LOCAL_JS_MEMORY_LIMIT")
+        self.assertNotIn("secret", diagnostics)
 
 
 class NetworkTests(unittest.TestCase):

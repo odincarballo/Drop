@@ -10,6 +10,18 @@ static atomic_bool mdCancelled;
 static atomic_bool mdBusy;
 static double mdDeadline;
 static BOOL mdInitialized = NO;
+static const NSUInteger mdJSMemoryLimit = 192 * 1024 * 1024;
+static const NSUInteger mdJSStackLimit = 2 * 1024 * 1024;
+static const NSUInteger mdJSScriptLimit = 16 * 1024 * 1024;
+static const NSUInteger mdJSOutputLimit = 8 * 1024 * 1024;
+static const double mdJSTimeoutSeconds = 25;
+static NSString *mdLastJSDiagnostics = @"{}";
+
+typedef struct {
+  double deadline;
+  BOOL timedOut;
+  BOOL cancelled;
+} MDJSInterruptState;
 
 static double mdNow(void) {
   struct timespec value;
@@ -22,60 +34,190 @@ static int mdInterrupted(void) {
 }
 
 static int mdJSInterrupt(JSRuntime *runtime, void *opaque) {
-  return mdInterrupted() || mdNow() > *(double *)opaque;
+  MDJSInterruptState *state = opaque;
+  if (atomic_load(&mdCancelled)) {
+    state->cancelled = YES;
+    return 1;
+  }
+  if (mdNow() > state->deadline || mdNow() > mdDeadline) {
+    state->timedOut = YES;
+    return 1;
+  }
+  return 0;
 }
 
 static JSValue mdJSLog(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
-  NSMutableString *capture = (__bridge NSMutableString *)JS_GetContextOpaque(ctx);
+  NSMutableDictionary *state = (__bridge NSMutableDictionary *)JS_GetContextOpaque(ctx);
+  NSMutableString *capture = state[@"capture"];
+  state[@"consoleCalls"] = @([state[@"consoleCalls"] unsignedIntegerValue] + 1);
   for (int i = 0; i < argc; i++) {
     size_t length;
     const char *text = JS_ToCStringLen(ctx, &length, argv[i]);
-    if (!text) return JS_EXCEPTION;
-    if (length > 2 * 1024 * 1024 || capture.length + length > 2 * 1024 * 1024) {
+    if (!text) {
+      state[@"captureError"] = @"UTF8_CONVERSION_FAILED";
+      return JS_EXCEPTION;
+    }
+    NSUInteger separatorLength = i > 0 ? 1 : 0;
+    NSUInteger capturedBytes = [capture lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    if (length > mdJSOutputLimit || capturedBytes + separatorLength + length + 1 > mdJSOutputLimit) {
       JS_FreeCString(ctx, text);
+      state[@"captureError"] = @"OUTPUT_LIMIT";
       return JS_ThrowRangeError(ctx, "JS output limit exceeded");
     }
+    if (i > 0) [capture appendString:@" "];
     [capture appendString:[[NSString alloc] initWithBytes:text length:length encoding:NSUTF8StringEncoding] ?: @""];
     JS_FreeCString(ctx, text);
   }
+  [capture appendString:@"\n"];
   return JS_UNDEFINED;
+}
+
+static NSString *mdJSSafeString(JSContext *ctx, JSValueConst value, NSUInteger limit) {
+  const char *raw = JS_ToCString(ctx, value);
+  if (!raw) return nil;
+  NSString *text = [NSString stringWithUTF8String:raw] ?: @"";
+  JS_FreeCString(ctx, raw);
+  NSRegularExpression *urls = [NSRegularExpression regularExpressionWithPattern:@"https?://[^\\s\\\"']+" options:0 error:nil];
+  text = [urls stringByReplacingMatchesInString:text options:0 range:NSMakeRange(0, text.length) withTemplate:@"<url>"];
+  return text.length > limit ? [[text substringToIndex:limit] stringByAppendingString:@"…"] : text;
+}
+
+static void mdStoreJSDiagnostics(NSDictionary *diagnostics) {
+  NSData *data = [NSJSONSerialization dataWithJSONObject:diagnostics options:0 error:nil];
+  mdLastJSDiagnostics = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"{}";
 }
 
 static PyObject *mdRunJS(PyObject *self, PyObject *args) {
   const char *script;
   Py_ssize_t length;
   if (!PyArg_ParseTuple(args, "s#", &script, &length)) return NULL;
-  if (length > 16 * 1024 * 1024 || mdInterrupted()) {
-    PyErr_SetString(PyExc_RuntimeError, "LOCAL_RESOURCE_LIMIT");
+  double started = mdNow();
+  NSMutableDictionary *diagnostics = [@{
+    @"scriptBytes": @(length),
+    @"memoryLimitBytes": @(mdJSMemoryLimit),
+    @"stackLimitBytes": @(mdJSStackLimit),
+    @"timeoutSeconds": @(mdJSTimeoutSeconds),
+    @"outputLimitBytes": @(mdJSOutputLimit),
+    @"capturedBytes": @0,
+    @"consoleCalls": @0,
+    @"interrupted": @NO,
+    @"timedOut": @NO,
+    @"cancelled": @NO,
+    @"completedNormally": @NO,
+  } mutableCopy];
+  if (length > mdJSScriptLimit || mdInterrupted()) {
+    NSString *code = length > mdJSScriptLimit ? @"LOCAL_JS_SCRIPT_LIMIT" : @"LOCAL_CANCELLED";
+    diagnostics[@"errorCode"] = code;
+    diagnostics[@"elapsedSeconds"] = @(mdNow() - started);
+    mdStoreJSDiagnostics(diagnostics);
+    PyErr_SetString(PyExc_RuntimeError, code.UTF8String);
     return NULL;
   }
   JSRuntime *runtime = JS_NewRuntime();
-  if (!runtime) return PyErr_NoMemory();
-  JS_SetMemoryLimit(runtime, 96 * 1024 * 1024);
-  JS_SetMaxStackSize(runtime, 2 * 1024 * 1024);
-  double deadline = mdNow() + 25;
-  JS_SetInterruptHandler(runtime, mdJSInterrupt, &deadline);
+  if (!runtime) {
+    diagnostics[@"errorCode"] = @"LOCAL_JS_RUNTIME_ALLOCATION_FAILED";
+    diagnostics[@"elapsedSeconds"] = @(mdNow() - started);
+    mdStoreJSDiagnostics(diagnostics);
+    return PyErr_NoMemory();
+  }
+  JS_SetMemoryLimit(runtime, mdJSMemoryLimit);
+  JS_SetMaxStackSize(runtime, mdJSStackLimit);
+  MDJSInterruptState interrupt = {
+    .deadline = mdNow() + mdJSTimeoutSeconds,
+    .timedOut = NO,
+    .cancelled = NO,
+  };
+  JS_SetInterruptHandler(runtime, mdJSInterrupt, &interrupt);
   JSContext *ctx = JS_NewContext(runtime);
-  if (!ctx) { JS_FreeRuntime(runtime); return PyErr_NoMemory(); }
+  if (!ctx) {
+    diagnostics[@"errorCode"] = @"LOCAL_JS_CONTEXT_ALLOCATION_FAILED";
+    diagnostics[@"elapsedSeconds"] = @(mdNow() - started);
+    mdStoreJSDiagnostics(diagnostics);
+    JS_FreeRuntime(runtime);
+    return PyErr_NoMemory();
+  }
   NSMutableString *capture = [NSMutableString string];
-  JS_SetContextOpaque(ctx, (__bridge void *)capture);
+  NSMutableDictionary *captureState = [@{
+    @"capture": capture,
+    @"consoleCalls": @0,
+  } mutableCopy];
+  JS_SetContextOpaque(ctx, (__bridge void *)captureState);
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue console = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, console, "log", JS_NewCFunction(ctx, mdJSLog, "log", 1));
-  JS_SetPropertyStr(ctx, global, "console", console);
+  int logResult = JS_SetPropertyStr(ctx, console, "log", JS_NewCFunction(ctx, mdJSLog, "log", 1));
+  int consoleResult = JS_SetPropertyStr(ctx, global, "console", console);
   JS_FreeValue(ctx, global);
+  if (logResult < 0 || consoleResult < 0) {
+    diagnostics[@"errorCode"] = @"LOCAL_JS_CONSOLE_REGISTRATION_FAILED";
+    diagnostics[@"elapsedSeconds"] = @(mdNow() - started);
+    mdStoreJSDiagnostics(diagnostics);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(runtime);
+    PyErr_SetString(PyExc_RuntimeError, "LOCAL_JS_CONSOLE_REGISTRATION_FAILED");
+    return NULL;
+  }
   // No QuickJS libc, module loader, filesystem, network, process API or JIT.
   JSValue result = JS_Eval(ctx, script, length, "mediadrop-ejs.js", JS_EVAL_TYPE_GLOBAL);
   BOOL failed = JS_IsException(result);
-  if (failed) { JSValue error = JS_GetException(ctx); JS_FreeValue(ctx, error); }
+  NSString *failureCode = @"LOCAL_JS_EVAL_FAILED";
+  NSString *exceptionName = nil;
+  NSString *exceptionMessage = nil;
+  NSString *exceptionStack = nil;
+  if (failed) {
+    JSValue error = JS_GetException(ctx);
+    if (JS_IsObject(error)) {
+      JSValue nameValue = JS_GetPropertyStr(ctx, error, "name");
+      JSValue messageValue = JS_GetPropertyStr(ctx, error, "message");
+      JSValue stackValue = JS_GetPropertyStr(ctx, error, "stack");
+      exceptionName = mdJSSafeString(ctx, nameValue, 80);
+      exceptionMessage = mdJSSafeString(ctx, messageValue, 300);
+      exceptionStack = mdJSSafeString(ctx, stackValue, 1000);
+      JS_FreeValue(ctx, nameValue);
+      JS_FreeValue(ctx, messageValue);
+      JS_FreeValue(ctx, stackValue);
+    } else {
+      exceptionMessage = mdJSSafeString(ctx, error, 300);
+    }
+    NSString *lowerMessage = exceptionMessage.lowercaseString ?: @"";
+    if ([captureState[@"captureError"] isEqual:@"OUTPUT_LIMIT"] || [lowerMessage containsString:@"output limit exceeded"]) {
+      failureCode = @"LOCAL_JS_OUTPUT_LIMIT";
+    } else if ([lowerMessage containsString:@"out of memory"] || JS_IsNull(error) || JS_IsUndefined(error)) {
+      failureCode = @"LOCAL_JS_MEMORY_LIMIT";
+    } else if ([lowerMessage containsString:@"stack overflow"]) {
+      failureCode = @"LOCAL_JS_STACK_LIMIT";
+    }
+    JS_FreeValue(ctx, error);
+  }
+  JSMemoryUsage memoryUsage;
+  JS_ComputeMemoryUsage(runtime, &memoryUsage);
+  diagnostics[@"capturedBytes"] = @([capture lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+  diagnostics[@"consoleCalls"] = captureState[@"consoleCalls"];
+  diagnostics[@"quickJsMallocBytes"] = @(memoryUsage.malloc_size);
+  diagnostics[@"quickJsMemoryUsedBytes"] = @(memoryUsage.memory_used_size);
+  diagnostics[@"interrupted"] = @(interrupt.timedOut || interrupt.cancelled);
+  diagnostics[@"timedOut"] = @(interrupt.timedOut);
+  diagnostics[@"cancelled"] = @(interrupt.cancelled);
+  diagnostics[@"completedNormally"] = @(!failed && !interrupt.timedOut && !interrupt.cancelled);
+  diagnostics[@"elapsedSeconds"] = @(mdNow() - started);
+  if (captureState[@"captureError"]) diagnostics[@"captureError"] = captureState[@"captureError"];
+  if (exceptionName.length) diagnostics[@"exceptionName"] = exceptionName;
+  if (exceptionMessage.length) diagnostics[@"exceptionMessage"] = exceptionMessage;
+  if (exceptionStack.length) diagnostics[@"exceptionStack"] = exceptionStack;
+  if (failed || interrupt.timedOut || interrupt.cancelled) diagnostics[@"errorCode"] = failureCode;
+  mdStoreJSDiagnostics(diagnostics);
   JS_FreeValue(ctx, result);
   JS_FreeContext(ctx);
   JS_FreeRuntime(runtime);
-  if (failed || mdInterrupted()) {
-    PyErr_SetString(PyExc_RuntimeError, mdInterrupted() ? "LOCAL_CANCELLED" : "LOCAL_JS_FAILED");
+  if (failed || interrupt.timedOut || interrupt.cancelled) {
+    NSString *code = interrupt.cancelled ? @"LOCAL_CANCELLED" : (interrupt.timedOut ? @"LOCAL_JS_TIMEOUT" : failureCode);
+    PyErr_SetString(PyExc_RuntimeError, code.UTF8String);
     return NULL;
   }
   return PyUnicode_FromString(capture.UTF8String);
+}
+
+static PyObject *mdGetJSDiagnostics(PyObject *self, PyObject *args) {
+  return PyUnicode_FromString(mdLastJSDiagnostics.UTF8String);
 }
 
 static PyObject *mdCheck(PyObject *self, PyObject *args) {
@@ -85,6 +227,7 @@ static PyObject *mdCheck(PyObject *self, PyObject *args) {
 
 static PyMethodDef mdMethods[] = {
   {"run_js", mdRunJS, METH_VARARGS, NULL},
+  {"get_js_diagnostics", mdGetJSDiagnostics, METH_NOARGS, NULL},
   {"check", mdCheck, METH_NOARGS, NULL},
   {NULL, NULL, 0, NULL}
 };
@@ -127,7 +270,9 @@ static BOOL mdInitialize(void) {
 @implementation MDPythonBridge
 + (void)cancel { atomic_store(&mdCancelled, true); }
 
-+ (void)analyze:(NSString *)url completion:(void (^)(NSString *))completion {
++ (void)invokePythonMethod:(NSString *)method
+                  argument:(NSString * _Nullable)argument
+                completion:(void (^)(NSString *))completion {
   if (atomic_exchange(&mdBusy, true)) {
     completion(@"{\"error\":{\"code\":\"LOCAL_BUSY\"}}");
     return;
@@ -141,12 +286,18 @@ static BOOL mdInitialize(void) {
         PyGILState_STATE gil = PyGILState_Ensure();
         PyObject *module = PyImport_ImportModule("mediadrop_spike");
         if (module) {
-          PyObject *result = PyObject_CallMethod(module, "analyze", "s", url.UTF8String);
+          PyObject *callable = PyObject_GetAttrString(module, method.UTF8String);
+          PyObject *result = callable
+            ? (argument
+                ? PyObject_CallFunction(callable, "s", argument.UTF8String)
+                : PyObject_CallNoArgs(callable))
+            : NULL;
           if (result && PyUnicode_Check(result)) {
             const char *text = PyUnicode_AsUTF8(result);
             if (text) json = [NSString stringWithUTF8String:text];
           }
           Py_XDECREF(result);
+          Py_XDECREF(callable);
           Py_DECREF(module);
         }
         if (PyErr_Occurred()) {
@@ -174,8 +325,16 @@ static BOOL mdInitialize(void) {
       completion(json);
     }
   }];
-  thread.name = @"MediaDrop.YouTube.Metadata";
+  thread.name = [@"MediaDrop.YouTube." stringByAppendingString:method];
   thread.stackSize = 8 * 1024 * 1024;
   [thread start];
+}
+
++ (void)analyze:(NSString *)url completion:(void (^)(NSString *))completion {
+  [self invokePythonMethod:@"analyze" argument:url completion:completion];
+}
+
++ (void)testEJS:(void (^)(NSString *))completion {
+  [self invokePythonMethod:@"run_ejs_fixture" argument:nil completion:completion];
 }
 @end
