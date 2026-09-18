@@ -22,6 +22,7 @@ export const localYoutubeResultSchema = z
         id: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
         analysisId: z.string().regex(/^[a-f0-9]{32}$/),
         preferredAudioFormatId: z.string().max(80).nullable(),
+        preferredVideoFormatId: z.string().max(80).nullable(),
         title: z.string().max(240),
         duration: optionalNumber,
         thumbnail: z
@@ -82,6 +83,35 @@ export const localAudioDownloadEventSchema = z.object({
 
 export type LocalAudioDownloadEvent = z.infer<
   typeof localAudioDownloadEventSchema
+>;
+
+export const localVideoDownloadEventSchema = z.object({
+  jobId: z.string().uuid(),
+  status: z.enum([
+    'PREPARING',
+    'DOWNLOADING',
+    'COMPLETED',
+    'FAILED',
+    'CANCELLED',
+  ]),
+  formatId: z.string().max(80).optional(),
+  container: z.literal('mp4').optional(),
+  codec: z.string().max(100).optional(),
+  height: z.number().int().positive().optional(),
+  bytesDownloaded: z.number().int().nonnegative().optional(),
+  totalBytes: z.number().int().nonnegative().optional(),
+  progress: z.number().min(0).max(1).optional(),
+  fileName: z.string().max(120).optional(),
+  fileSize: z.number().int().nonnegative().optional(),
+  localUri: z.string().startsWith('file://').optional(),
+  errorCode: z
+    .string()
+    .regex(/^[A-Z_]+$/)
+    .optional(),
+});
+
+export type LocalVideoDownloadEvent = z.infer<
+  typeof localVideoDownloadEventSchema
 >;
 
 export const localEjsFixtureResultSchema = z

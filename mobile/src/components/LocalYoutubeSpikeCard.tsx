@@ -20,7 +20,11 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
   const selectedAudio = metadata?.audioFormats.find(
     (format) => format.id === metadata.preferredAudioFormatId,
   );
+  const selectedVideo = metadata?.videoFormats.find(
+    (format) => format.id === metadata.preferredVideoFormatId,
+  );
   const audio = spike.audioState;
+  const video = spike.videoState;
   const ejsResult =
     spike.ejsState.status === 'result' ? spike.ejsState.result : null;
   const nativeDiagnostics = ejsResult?.diagnostics.native;
@@ -38,8 +42,8 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
         YouTube · prueba local
       </Text>
       <Text style={{ color: colors.secondary }}>
-        Usa el enlace pegado arriba. El análisis y la prueba de audio ocurren en
-        este iPhone, sin Render. Mantén MediaDrop abierta.
+        Usa el enlace pegado arriba. El análisis y las descargas de prueba
+        ocurren en este iPhone, sin Render. Mantén MediaDrop abierta.
       </Text>
       <ActionButton
         label={
@@ -106,14 +110,16 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
         ))}
       <ActionButton
         label={
-          spike.isBusy ? 'Analizando en el iPhone…' : 'Analizar en este iPhone'
+          spike.state.status === 'loading'
+            ? 'Analizando en el iPhone…'
+            : 'Analizar en este iPhone'
         }
         onPress={onAnalyze}
         disabled={disabled}
-        loading={spike.isBusy}
+        loading={spike.state.status === 'loading'}
         secondary
       />
-      {spike.isBusy && (
+      {spike.state.status === 'loading' && (
         <ActionButton
           label="Cancelar análisis local"
           onPress={spike.cancel}
@@ -270,6 +276,118 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
             {audio.status === 'error' && (
               <Text accessibilityRole="alert" style={{ color: colors.error }}>
                 {`${audio.message}\nCódigo: ${audio.code}`}
+              </Text>
+            )}
+          </View>
+          <View style={[styles.audioSpike, { borderColor: colors.border }]}>
+            <Text style={[styles.title, { color: colors.text }]}>
+              Video directo
+            </Text>
+            {selectedVideo ? (
+              <Text style={{ color: colors.secondary }}>
+                {`Seleccionado: ${selectedVideo.resolution ?? 'Original'} · MP4 · ${selectedVideo.codec ?? 'Codec desconocido'} · ID ${selectedVideo.id}`}
+              </Text>
+            ) : (
+              <Text style={{ color: colors.secondary }}>
+                No hay un video-only MP4 directo compatible para esta prueba.
+              </Text>
+            )}
+            <Text style={{ color: colors.secondary }}>
+              Este archivo no contendrá audio.
+            </Text>
+            {video.status === 'idle' && (
+              <ActionButton
+                label="Descargar video sin audio en este iPhone"
+                onPress={spike.downloadVideo}
+                disabled={disabled || !selectedVideo}
+                secondary
+              />
+            )}
+            {video.status === 'preparing' && (
+              <>
+                <Text style={{ color: colors.text }}>
+                  Preparando enlace seguro…
+                </Text>
+                <ActionButton
+                  label="Cancelar descarga de video"
+                  onPress={spike.cancelVideo}
+                  secondary
+                />
+              </>
+            )}
+            {video.status === 'downloading' && (
+              <>
+                <Text style={{ color: colors.text }}>
+                  {video.progress === null
+                    ? 'Descargando video…'
+                    : `Descargando video… ${Math.round(video.progress * 100)} %`}
+                </Text>
+                <View
+                  accessibilityRole="progressbar"
+                  accessibilityValue={
+                    video.progress === null
+                      ? undefined
+                      : { min: 0, max: 100, now: video.progress * 100 }
+                  }
+                  style={[
+                    styles.progressTrack,
+                    { backgroundColor: colors.border },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        backgroundColor: colors.accent,
+                        width: `${Math.max(2, (video.progress ?? 0) * 100)}%`,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={{ color: colors.secondary }}>
+                  {`${formatSize(video.bytesDownloaded)}${video.totalBytes ? ` / ${formatSize(video.totalBytes)}` : ''}`}
+                </Text>
+                <ActionButton
+                  label="Cancelar descarga de video"
+                  onPress={spike.cancelVideo}
+                  secondary
+                />
+              </>
+            )}
+            {video.status === 'completed' && (
+              <>
+                <Text style={[styles.title, { color: colors.accent }]}>
+                  ✓ Descarga de video completada
+                </Text>
+                <Text style={{ color: colors.secondary }}>
+                  {`${video.fileName}\n${formatSize(video.fileSize)} · MP4${video.height ? ` · ${video.height}p` : ''}${video.codec ? ` · ${video.codec}` : ''}`}
+                </Text>
+                <ActionButton
+                  label="Compartir video"
+                  onPress={() => void spike.shareVideo()}
+                  secondary
+                />
+                {video.actionError && (
+                  <Text
+                    accessibilityRole="alert"
+                    style={{ color: colors.error }}
+                  >
+                    {video.actionError}
+                  </Text>
+                )}
+              </>
+            )}
+            {video.status === 'cancelled' && (
+              <Text
+                accessibilityRole="alert"
+                style={{ color: colors.secondary }}
+              >
+                Descarga de video cancelada.
+              </Text>
+            )}
+            {video.status === 'error' && (
+              <Text accessibilityRole="alert" style={{ color: colors.error }}>
+                {`${video.message}\nCódigo: ${video.code}`}
               </Text>
             )}
           </View>

@@ -2,12 +2,16 @@ import ExpoModulesCore
 
 public class OnDeviceYouTubeModule: Module {
   private lazy var audioDownload = MDAudioDownloadManager { [weak self] event in
-    self?.sendEvent("onAudioDownloadState", event)
+    let mediaType = event["mediaType"] as? String
+    self?.sendEvent(
+      mediaType == "video" ? "onVideoDownloadState" : "onAudioDownloadState",
+      event
+    )
   }
 
   public func definition() -> ModuleDefinition {
     Name("OnDeviceYouTube")
-    Events("onAudioDownloadState")
+    Events("onAudioDownloadState", "onVideoDownloadState")
 
     AsyncFunction("analyze") { (url: String, promise: Promise) in
       MDPythonBridge.analyze(url) { result in promise.resolve(result) }
@@ -22,6 +26,12 @@ public class OnDeviceYouTubeModule: Module {
     }
 
     Function("cancelAudioDownload") { audioDownload.cancel() }
+
+    Function("startVideoDownload") { (analysisId: String, formatId: String) -> String? in
+      audioDownload.startVideo(analysisID: analysisId, formatID: formatId)
+    }
+
+    Function("cancelVideoDownload") { audioDownload.cancel() }
 
     Function("cancel") { MDPythonBridge.cancel() }
     OnAppEntersBackground {

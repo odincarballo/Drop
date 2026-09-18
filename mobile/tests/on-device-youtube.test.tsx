@@ -20,14 +20,18 @@ import { shareLocalFile } from '@/services/jobs';
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/jobs', () => ({ shareLocalFile: jest.fn() }));
 let audioListener: ((event: unknown) => void) | null = null;
+let videoListener: ((event: unknown) => void) | null = null;
 const native = {
   analyze: jest.fn(),
   testEjsFixture: jest.fn(),
   startAudioDownload: jest.fn(),
   cancelAudioDownload: jest.fn(),
+  startVideoDownload: jest.fn(),
+  cancelVideoDownload: jest.fn(),
   cancel: jest.fn(),
-  addListener: jest.fn((_name: string, listener: (event: unknown) => void) => {
-    audioListener = listener;
+  addListener: jest.fn((name: string, listener: (event: unknown) => void) => {
+    if (name === 'onAudioDownloadState') audioListener = listener;
+    if (name === 'onVideoDownloadState') videoListener = listener;
     return { remove: jest.fn() };
   }),
 };
@@ -35,17 +39,18 @@ const metadata = {
   id: 'AWGPaFraPN4',
   analysisId: 'a'.repeat(32),
   preferredAudioFormatId: '140',
+  preferredVideoFormatId: '134',
   title: 'Video autorizado',
   duration: 754,
   thumbnail: null,
   videoFormats: [
     {
-      id: '137',
+      id: '134',
       container: 'mp4',
       codec: 'avc1',
-      resolution: '1080p',
-      height: 1080,
-      width: 1920,
+      resolution: '360p',
+      height: 360,
+      width: 640,
       fps: 30,
       hasAudio: false,
       bitrateKbps: null,
@@ -68,7 +73,7 @@ const metadata = {
       protocol: 'https',
     },
   ],
-  resolutions: [1080],
+  resolutions: [360],
 };
 const result = {
   metadata,
@@ -82,9 +87,13 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
   audioListener = null;
+  videoListener = null;
   native.analyze.mockResolvedValue(JSON.stringify(result));
   native.startAudioDownload.mockReturnValue(
     'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+  );
+  native.startVideoDownload.mockReturnValue(
+    'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
   );
   jest.mocked(shareLocalFile).mockResolvedValue();
   native.testEjsFixture.mockResolvedValue(
@@ -219,7 +228,7 @@ test('local metadata card selects direct M4A without exposing a stream URL', asy
   );
   await screen.findByText('Video autorizado');
   expect(screen.getByText('Video autorizado')).toBeTruthy();
-  expect(screen.getByText(/1080p · mp4 · avc1/)).toBeTruthy();
+  expect(screen.getByText(/360p · mp4 · avc1/)).toBeTruthy();
   expect(screen.getByText(/12:34/)).toBeTruthy();
   expect(screen.getByText(/Seleccionado: M4A · mp4a.40.2/)).toBeTruthy();
   await fireEvent.press(
@@ -231,6 +240,92 @@ test('local metadata card selects direct M4A without exposing a stream URL', asy
   expect(JSON.stringify(native.startAudioDownload.mock.calls)).not.toContain(
     'googlevideo',
   );
+});
+
+test('native video-only progress completes, shares, and never exposes its URL', async () => {
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  await screen.findByText('Video autorizado');
+  expect(
+    screen.getByText(/Seleccionado: 360p · MP4 · avc1 · ID 134/),
+  ).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Descargar video sin audio en este iPhone',
+    }),
+  );
+  expect(native.startVideoDownload).toHaveBeenCalledWith('a'.repeat(32), '134');
+  expect(JSON.stringify(native.startVideoDownload.mock.calls)).not.toContain(
+    'googlevideo',
+  );
+  await act(() => {
+    videoListener?.({
+      jobId: 'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
+      status: 'DOWNLOADING',
+      formatId: '134',
+      container: 'mp4',
+      codec: 'avc1',
+      height: 360,
+      bytesDownloaded: 2_500_000,
+      totalBytes: 5_000_000,
+      progress: 0.5,
+    });
+  });
+  expect(screen.getByText('Descargando video… 50 %')).toBeTruthy();
+  await act(() => {
+    videoListener?.({
+      jobId: 'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
+      status: 'COMPLETED',
+      formatId: '134',
+      container: 'mp4',
+      codec: 'avc1',
+      height: 360,
+      fileName: 'Own video.mp4',
+      fileSize: 5_000_000,
+      localUri: 'file:///cache/Own%20video.mp4',
+    });
+  });
+  expect(screen.getByText('✓ Descarga de video completada')).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Compartir video' }),
+  );
+  await waitFor(() =>
+    expect(shareLocalFile).toHaveBeenCalledWith(
+      'file:///cache/Own%20video.mp4',
+    ),
+  );
+});
+
+test('native video-only cancellation delegates to URLSession owner', async () => {
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  await screen.findByText('Video autorizado');
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Descargar video sin audio en este iPhone',
+    }),
+  );
+  await act(() => {
+    videoListener?.({
+      jobId: 'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
+      status: 'DOWNLOADING',
+      formatId: '134',
+      container: 'mp4',
+      codec: 'avc1',
+      height: 360,
+      bytesDownloaded: 100_000,
+      totalBytes: 5_000_000,
+      progress: 0.02,
+    });
+  });
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Cancelar descarga de video' }),
+  );
+  expect(native.cancelVideoDownload).toHaveBeenCalledTimes(1);
 });
 
 test('native audio progress completes, shares, and cancellation delegates', async () => {

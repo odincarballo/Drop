@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { requireOptionalNativeModule } from 'expo';
 import * as Clipboard from 'expo-clipboard';
 
 import HomeScreen from '@/app/index';
@@ -14,6 +15,7 @@ import {
 import { demoMedia, youtubeMedia } from './fixtures/media';
 
 jest.mock('@/services/media', () => ({ analyzeMedia: jest.fn() }));
+jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/jobs', () => ({
   createDownloadJob: jest.fn(),
   getDownloadJob: jest.fn(),
@@ -38,6 +40,7 @@ jest.mock(
 );
 
 beforeEach(() => {
+  jest.mocked(requireOptionalNativeModule).mockReset().mockReturnValue(null);
   jest.mocked(analyzeMedia).mockReset().mockResolvedValue(demoMedia);
   jest
     .mocked(Clipboard.getStringAsync)
@@ -56,6 +59,66 @@ beforeEach(() => {
   });
 });
 
+const localYoutubeMetadata = {
+  metadata: {
+    id: 'AWGPaFraPN4',
+    analysisId: 'a'.repeat(32),
+    preferredAudioFormatId: '140',
+    preferredVideoFormatId: '134',
+    title: 'YouTube local',
+    duration: 121,
+    thumbnail: null,
+    videoFormats: [
+      {
+        id: '134',
+        container: 'mp4',
+        codec: 'avc1.4d401e',
+        resolution: '360p',
+        height: 360,
+        width: 640,
+        fps: 30,
+        hasAudio: false,
+        bitrateKbps: null,
+        estimatedSize: 586796,
+        protocol: null,
+      },
+    ],
+    audioFormats: [
+      {
+        id: '140',
+        container: 'm4a',
+        codec: 'mp4a.40.2',
+        resolution: null,
+        height: null,
+        width: null,
+        fps: null,
+        hasAudio: true,
+        bitrateKbps: 129,
+        estimatedSize: 2_000_000,
+        protocol: null,
+      },
+    ],
+    resolutions: [360],
+  },
+  deviceRuntime: 'ios-device',
+  engine: 'CPython / QuickJS-NG',
+  jsChallengeCalls: 0,
+  networkRequests: 3,
+};
+
+function localYoutubeNativeEngine() {
+  return {
+    analyze: jest.fn().mockResolvedValue(JSON.stringify(localYoutubeMetadata)),
+    testEjsFixture: jest.fn(),
+    startAudioDownload: jest.fn(),
+    cancelAudioDownload: jest.fn(),
+    startVideoDownload: jest.fn(),
+    cancelVideoDownload: jest.fn(),
+    cancel: jest.fn(),
+    addListener: jest.fn(() => ({ remove: jest.fn() })),
+  };
+}
+
 async function analyzeExample() {
   await fireEvent.changeText(
     screen.getByLabelText('URL del recurso multimedia'),
@@ -63,6 +126,36 @@ async function analyzeExample() {
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
 }
+
+test('YouTube uses the on-device engine and never calls Render', async () => {
+  const native = localYoutubeNativeEngine();
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await fireEvent.changeText(
+    screen.getByLabelText('URL del recurso multimedia'),
+    'https://www.youtube.com/watch?v=AWGPaFraPN4',
+  );
+  await fireEvent.press(
+    screen.getAllByRole('button', { name: 'Analizar en este iPhone' })[0]!,
+  );
+  expect(await screen.findByText('YouTube local')).toBeTruthy();
+  expect(native.analyze).toHaveBeenCalledWith(
+    'https://www.youtube.com/watch?v=AWGPaFraPN4',
+  );
+  expect(analyzeMedia).not.toHaveBeenCalled();
+});
+
+test('a direct URL still uses the authenticated Render API', async () => {
+  const native = localYoutubeNativeEngine();
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeExample();
+  expect(analyzeMedia).toHaveBeenCalledWith(
+    'https://example.com/video.mp4',
+    expect.any(AbortSignal),
+  );
+  expect(native.analyze).not.toHaveBeenCalled();
+});
 
 test('paste → analyze → resource → qualities → mock remains non-downloadable', async () => {
   await render(<HomeScreen />);

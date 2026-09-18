@@ -348,4 +348,15 @@ static BOOL mdInitialize(void) {
     : @"{}";
   [self invokePythonMethod:@"prepare_audio_download" argument:argument completion:completion];
 }
+
++ (void)prepareVideoDownload:(NSString *)analysisId
+                    formatId:(NSString *)formatId
+                  completion:(void (^)(NSString *))completion {
+  NSDictionary *request = @{ @"analysisId": analysisId, @"formatId": formatId };
+  NSData *data = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
+  NSString *argument = data
+    ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+    : @"{}";
+  [self invokePythonMethod:@"prepare_video_download" argument:argument completion:completion];
+}
 @end

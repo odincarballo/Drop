@@ -7,6 +7,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)prepareAudioDownload:(NSString *)analysisId
                     formatId:(NSString *)formatId
                   completion:(void (^)(NSString *))completion;
++ (void)prepareVideoDownload:(NSString *)analysisId
+                    formatId:(NSString *)formatId
+                  completion:(void (^)(NSString *))completion;
 + (void)cancel;
 @end
 NS_ASSUME_NONNULL_END

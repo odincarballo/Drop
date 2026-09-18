@@ -36,6 +36,12 @@ export function useMediaAnalysis() {
     setState({ status: 'idle' });
   }
 
+  function resetAnalysis() {
+    request.current?.abort();
+    request.current = null;
+    setState({ status: 'idle' });
+  }
+
   async function pasteUrl() {
     if (pasteInProgress.current || request.current) return;
     pasteInProgress.current = true;
@@ -127,6 +133,7 @@ export function useMediaAnalysis() {
     updateUrl,
     pasteUrl,
     analyze,
+    resetAnalysis,
     select,
   };
 }

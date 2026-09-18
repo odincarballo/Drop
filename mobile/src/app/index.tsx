@@ -18,7 +18,10 @@ import { config } from '@/config';
 import { useMediaAnalysis } from '@/hooks/useMediaAnalysis';
 import { useMediaDownload } from '@/hooks/useMediaDownload';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
-import { hasLocalYoutubeEngine } from '@/services/onDeviceYoutube';
+import {
+  hasLocalYoutubeEngine,
+  isYoutubeUrl,
+} from '@/services/onDeviceYoutube';
 import { useTheme } from '@/theme';
 
 export default function HomeScreen() {
@@ -31,10 +34,12 @@ export default function HomeScreen() {
     updateUrl,
     pasteUrl,
     analyze,
+    resetAnalysis,
     select,
   } = useMediaAnalysis();
   const download = useMediaDownload();
   const spike = useLocalYoutubeSpike();
+  const localYoutube = hasLocalYoutubeEngine() && isYoutubeUrl(url);
   const isBusy = isAnalyzing || download.isActive || spike.isBusy;
 
   function changeUrl(value: string) {
@@ -45,7 +50,12 @@ export default function HomeScreen() {
   async function runAnalysis() {
     if (download.isActive || spike.isBusy) return;
     download.reset();
-    await analyze();
+    if (localYoutube) {
+      resetAnalysis();
+      await spike.analyze(url);
+    } else {
+      await analyze();
+    }
   }
 
   return (
@@ -126,7 +136,13 @@ export default function HomeScreen() {
               </View>
             )}
             <ActionButton
-              label={state.status === 'loading' ? 'Analizando…' : 'Analizar'}
+              label={
+                state.status === 'loading' || spike.state.status === 'loading'
+                  ? 'Analizando…'
+                  : localYoutube
+                    ? 'Analizar en este iPhone'
+                    : 'Analizar'
+              }
               disabled={isBusy}
               loading={state.status === 'loading'}
               onPress={() => void runAnalysis()}

@@ -37,6 +37,13 @@ enum AudioDownloadPolicyTests {
         try MDAudioDownloadPolicy.validateURL(URL(string: invalid)!, resolveDNS: false)
       }
     }
+    try expectFailure("VIDEO_URL_INVALID") {
+      try MDAudioDownloadPolicy.validateURL(
+        URL(string: "https://youtube.com.evil.test/file")!,
+        kind: .video,
+        resolveDNS: false
+      )
+    }
     _ = try MDAudioDownloadPolicy.validateHeaders([
       "User-Agent": "MediaDrop", "Accept-Language": "es",
     ])
@@ -46,10 +53,75 @@ enum AudioDownloadPolicyTests {
     try expectFailure("AUDIO_HEADERS_INVALID") {
       _ = try MDAudioDownloadPolicy.validateHeaders(["X-Unknown": "value"])
     }
+    try expectFailure("VIDEO_HEADERS_FORBIDDEN") {
+      _ = try MDAudioDownloadPolicy.validateHeaders(
+        ["Authorization": "secret"],
+        kind: .video
+      )
+    }
     try expectFailure("AUDIO_FILE_TOO_LARGE") {
       try MDAudioDownloadPolicy.validateExpectedLength(
         MDAudioDownloadPolicy.maximumBytes + 1
       )
+    }
+    try expectFailure("VIDEO_FILE_TOO_LARGE") {
+      try MDAudioDownloadPolicy.validateExpectedLength(
+        MDAudioDownloadPolicy.maximumVideoBytes + 1,
+        maximumBytes: MDAudioDownloadPolicy.maximumVideoBytes
+      )
+    }
+    let videoResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 200,
+      httpVersion: "HTTP/1.1",
+      headerFields: ["Content-Type": "video/mp4", "Content-Length": "5000000"]
+    )!
+    try MDAudioDownloadPolicy.validateResponse(videoResponse, kind: .video)
+    guard
+      MDAudioDownloadPolicy.parseVideoContentRange("bytes 0-262143/586796")
+        == MDVideoContentRange(start: 0, end: 262143, total: 586796),
+      MDAudioDownloadPolicy.parseVideoContentRange("bytes */586796") == nil,
+      MDAudioDownloadPolicy.parseVideoContentRange("bytes 2-1/586796") == nil
+    else {
+      throw TestFailure.failed("Video Content-Range parsing failed")
+    }
+    let rangedVideoResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 206,
+      httpVersion: "HTTP/1.1",
+      headerFields: [
+        "Content-Type": "video/mp4",
+        "Content-Length": "262144",
+        "Content-Range": "bytes 0-262143/586796",
+      ]
+    )!
+    let range = try MDAudioDownloadPolicy.validateVideoRangeResponse(
+      rangedVideoResponse,
+      requestedStart: 0,
+      requestedEnd: 262143
+    )
+    guard range.total == 586796 else {
+      throw TestFailure.failed("Video total length was not recovered")
+    }
+    try expectFailure("VIDEO_RANGE_NOT_SUPPORTED") {
+      _ = try MDAudioDownloadPolicy.validateVideoRangeResponse(
+        videoResponse,
+        requestedStart: 0,
+        requestedEnd: 262143
+      )
+    }
+    try expectFailure("VIDEO_RANGE_INVALID") {
+      _ = try MDAudioDownloadPolicy.validateVideoRangeResponse(
+        rangedVideoResponse,
+        requestedStart: 262144,
+        requestedEnd: 524287
+      )
+    }
+    guard
+      MDAudioDownloadPolicy.safeFileName("../Own: video.mp4", extension: "mp4")
+        == "_Own_ video.mp4"
+    else {
+      throw TestFailure.failed("Video filename sanitization failed")
     }
     try expectFailure("AUDIO_FILE_TOO_LARGE") {
       try MDAudioDownloadPolicy.validateTransferredBytes(

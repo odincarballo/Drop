@@ -11,8 +11,25 @@ enum MDAudioDownloadFailure: Error {
   }
 }
 
+enum MDLocalDownloadKind: String {
+  case audio
+  case video
+
+  var container: String { self == .audio ? "m4a" : "mp4" }
+  var maximumBytes: Int64 {
+    self == .audio ? 25 * 1024 * 1024 : 50 * 1024 * 1024
+  }
+}
+
+struct MDVideoContentRange: Equatable {
+  let start: Int64
+  let end: Int64
+  let total: Int64
+}
+
 enum MDAudioDownloadPolicy {
   static let maximumBytes: Int64 = 25 * 1024 * 1024
+  static let maximumVideoBytes: Int64 = 50 * 1024 * 1024
   static let maximumRedirects = 3
   // URLSession applies this as an inactivity timeout, not only to connection setup.
   static let requestTimeoutSeconds: TimeInterval = 60
@@ -23,11 +40,18 @@ enum MDAudioDownloadPolicy {
   static let forbiddenHeaders = Set([
     "authorization", "cookie", "proxy-authorization",
   ])
-  static let allowedMIMETypes = Set([
+  static let allowedAudioMIMETypes = Set([
     "application/mp4", "application/octet-stream", "audio/mp4", "audio/x-m4a",
   ])
+  static let allowedVideoMIMETypes = Set([
+    "application/mp4", "application/octet-stream", "video/mp4",
+  ])
 
-  static func validateURL(_ url: URL, resolveDNS: Bool = true) throws {
+  static func validateURL(
+    _ url: URL,
+    kind: MDLocalDownloadKind = .audio,
+    resolveDNS: Bool = true
+  ) throws {
     guard
       url.scheme?.lowercased() == "https",
       url.user == nil,
@@ -36,19 +60,28 @@ enum MDAudioDownloadPolicy {
       let host = url.host?.lowercased(),
       host == "googlevideo.com" || host.hasSuffix(".googlevideo.com")
     else {
-      throw MDAudioDownloadFailure.code("AUDIO_URL_INVALID")
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_URL_INVALID" : "VIDEO_URL_INVALID"
+      )
     }
     if resolveDNS, !hostResolvesOnlyToPublicAddresses(host) {
-      throw MDAudioDownloadFailure.code("AUDIO_DNS_INVALID")
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_DNS_INVALID" : "VIDEO_DNS_INVALID"
+      )
     }
   }
 
-  static func validateHeaders(_ headers: [String: String]) throws -> [String: String] {
+  static func validateHeaders(
+    _ headers: [String: String],
+    kind: MDLocalDownloadKind = .audio
+  ) throws -> [String: String] {
     var validated: [String: String] = [:]
     for (rawName, value) in headers {
       let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
       if forbiddenHeaders.contains(name) {
-        throw MDAudioDownloadFailure.code("AUDIO_HEADERS_FORBIDDEN")
+        throw MDAudioDownloadFailure.code(
+          kind == .audio ? "AUDIO_HEADERS_FORBIDDEN" : "VIDEO_HEADERS_FORBIDDEN"
+        )
       }
       guard
         allowedHeaders.contains(name),
@@ -56,50 +89,117 @@ enum MDAudioDownloadPolicy {
         !value.contains("\r"),
         !value.contains("\n")
       else {
-        throw MDAudioDownloadFailure.code("AUDIO_HEADERS_INVALID")
+        throw MDAudioDownloadFailure.code(
+          kind == .audio ? "AUDIO_HEADERS_INVALID" : "VIDEO_HEADERS_INVALID"
+        )
       }
       validated[rawName] = value
     }
     return validated
   }
 
-  static func validateResponse(_ response: HTTPURLResponse) throws {
+  static func validateResponse(
+    _ response: HTTPURLResponse,
+    kind: MDLocalDownloadKind = .audio
+  ) throws {
     guard response.statusCode == 200 || response.statusCode == 206 else {
       throw MDAudioDownloadFailure.code(
-        response.statusCode == 404 || response.statusCode == 410
-          ? "AUDIO_URL_EXPIRED"
-          : "AUDIO_HTTP_ERROR"
+        kind == .audio
+          ? (response.statusCode == 404 || response.statusCode == 410
+            ? "AUDIO_URL_EXPIRED" : "AUDIO_HTTP_ERROR")
+          : (response.statusCode == 404 || response.statusCode == 410
+            ? "VIDEO_URL_EXPIRED" : "VIDEO_HTTP_ERROR")
       )
     }
+    let allowedMIMETypes =
+      kind == .audio ? allowedAudioMIMETypes : allowedVideoMIMETypes
     if let mime = response.mimeType?.lowercased(), !allowedMIMETypes.contains(mime) {
-      throw MDAudioDownloadFailure.code("AUDIO_MIME_NOT_ALLOWED")
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_MIME_NOT_ALLOWED" : "VIDEO_MIME_NOT_ALLOWED"
+      )
     }
-    try validateExpectedLength(response.expectedContentLength)
+    try validateExpectedLength(response.expectedContentLength, maximumBytes: kind.maximumBytes)
   }
 
-  static func validateExpectedLength(_ length: Int64) throws {
+  static func validateVideoRangeResponse(
+    _ response: HTTPURLResponse,
+    requestedStart: Int64,
+    requestedEnd: Int64
+  ) throws -> MDVideoContentRange {
+    guard response.statusCode == 206 else {
+      throw MDAudioDownloadFailure.code(
+        response.statusCode == 404 || response.statusCode == 410
+          ? "VIDEO_URL_EXPIRED" : "VIDEO_RANGE_NOT_SUPPORTED"
+      )
+    }
+    if let mime = response.mimeType?.lowercased(), !allowedVideoMIMETypes.contains(mime) {
+      throw MDAudioDownloadFailure.code("VIDEO_MIME_NOT_ALLOWED")
+    }
+    guard
+      let raw = response.value(forHTTPHeaderField: "Content-Range"),
+      let range = parseVideoContentRange(raw),
+      range.start == requestedStart,
+      range.end <= requestedEnd,
+      range.end >= range.start
+    else {
+      throw MDAudioDownloadFailure.code("VIDEO_RANGE_INVALID")
+    }
+    try validateExpectedLength(range.total, maximumBytes: maximumVideoBytes)
+    return range
+  }
+
+  static func parseVideoContentRange(_ raw: String) -> MDVideoContentRange? {
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard value.lowercased().hasPrefix("bytes ") else { return nil }
+    let pieces = value.dropFirst(6).split(separator: "/", omittingEmptySubsequences: false)
+    guard pieces.count == 2, let total = Int64(pieces[1]), total > 0 else { return nil }
+    let bounds = pieces[0].split(separator: "-", omittingEmptySubsequences: false)
+    guard
+      bounds.count == 2,
+      let start = Int64(bounds[0]),
+      let end = Int64(bounds[1]),
+      start >= 0,
+      end >= start,
+      end < total
+    else { return nil }
+    return MDVideoContentRange(start: start, end: end, total: total)
+  }
+
+  static func validateExpectedLength(
+    _ length: Int64,
+    maximumBytes: Int64 = maximumBytes
+  ) throws {
     if length > maximumBytes {
-      throw MDAudioDownloadFailure.code("AUDIO_FILE_TOO_LARGE")
+      throw MDAudioDownloadFailure.code(
+        maximumBytes == maximumVideoBytes ? "VIDEO_FILE_TOO_LARGE" : "AUDIO_FILE_TOO_LARGE"
+      )
     }
   }
 
-  static func validateTransferredBytes(_ bytes: Int64) throws {
+  static func validateTransferredBytes(
+    _ bytes: Int64,
+    maximumBytes: Int64 = maximumBytes
+  ) throws {
     if bytes > maximumBytes {
-      throw MDAudioDownloadFailure.code("AUDIO_FILE_TOO_LARGE")
+      throw MDAudioDownloadFailure.code(
+        maximumBytes == maximumVideoBytes ? "VIDEO_FILE_TOO_LARGE" : "AUDIO_FILE_TOO_LARGE"
+      )
     }
   }
 
-  static func safeFileName(_ candidate: String) -> String {
+  static func safeFileName(_ candidate: String, extension fileExtension: String = "m4a") -> String {
     let invalid = CharacterSet(charactersIn: "/\\:*?\"<>|%\u{0000}")
       .union(.newlines)
       .union(.controlCharacters)
     let pieces = candidate.components(separatedBy: invalid)
     var value = pieces.joined(separator: "_").trimmingCharacters(in: CharacterSet(charactersIn: " ."))
-    if value.lowercased().hasSuffix(".m4a") {
-      value.removeLast(4)
+    let suffix = ".\(fileExtension.lowercased())"
+    if value.lowercased().hasSuffix(suffix) {
+      value.removeLast(suffix.count)
     }
     let stem = String(value.prefix(100)).trimmingCharacters(in: CharacterSet(charactersIn: " ."))
-    return "\(stem.isEmpty ? "YouTube audio" : stem).m4a"
+    let fallback = fileExtension == "m4a" ? "YouTube audio" : "YouTube video"
+    return "\(stem.isEmpty ? fallback : stem).\(fileExtension)"
   }
 
   static func workspace(for jobID: String, fileManager: FileManager = .default) throws -> URL {

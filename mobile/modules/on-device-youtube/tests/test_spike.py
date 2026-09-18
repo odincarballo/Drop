@@ -61,6 +61,26 @@ class SpikeTests(unittest.TestCase):
         }
 
     @staticmethod
+    def video_payload(**format_overrides):
+        video = {
+            "format_id": "134",
+            "ext": "mp4",
+            "vcodec": "avc1.4d401e",
+            "acodec": "none",
+            "protocol": None,
+            "height": 360,
+            "filesize": 5_000_000,
+            "url": "https://rr1.googlevideo.com/videoplayback?signature=secret",
+            "http_headers": {"User-Agent": "MediaDrop test", "Accept": "*/*"},
+        }
+        video.update(format_overrides)
+        return {
+            "id": "AWGPaFraPN4",
+            "title": "Own / video",
+            "formats": [video],
+        }
+
+    @staticmethod
     def js_bridge(response):
         def run(script):
             if script == 'console.log("alpha", 7); console.log(JSON.stringify({ok: true}));':
@@ -151,6 +171,33 @@ class SpikeTests(unittest.TestCase):
                     )
                 )
 
+    def test_video_selection_prefers_direct_360p_avc_mp4(self):
+        payload = self.video_payload()
+        payload["formats"].extend(
+            [
+                self.video_payload(format_id="136", height=720)["formats"][0],
+                self.video_payload(format_id="137", height=1080)["formats"][0],
+            ]
+        )
+
+        self.assertEqual(spike.preferred_video(payload["formats"])["format_id"], "134")
+
+    def test_video_selection_rejects_non_direct_or_muxed_formats(self):
+        for changes in [
+            {"ext": "webm"},
+            {"vcodec": "vp09.00.21.08"},
+            {"acodec": "mp4a.40.2"},
+            {"protocol": "m3u8_native"},
+            {"manifest_url": "https://manifest.googlevideo.com/example"},
+            {"url": "https://www.youtube.com/watch?v=AWGPaFraPN4"},
+        ]:
+            with self.subTest(changes=changes):
+                self.assertFalse(
+                    spike.is_direct_mp4_video(
+                        self.video_payload(**changes)["formats"][0]
+                    )
+                )
+
     def test_oversize_audio_is_not_preselected_and_is_rejected_for_download(self):
         payload = self.audio_payload(filesize=spike.MAX_AUDIO_BYTES + 1)
         self.assertIsNone(spike.preferred_audio(payload["formats"]))
@@ -159,7 +206,7 @@ class SpikeTests(unittest.TestCase):
 
     def test_prepare_reextracts_exact_format_and_keeps_descriptor_native(self):
         payload = self.audio_payload()
-        analysis_id, _ = spike.create_session(
+        analysis_id, _, _ = spike.create_session(
             "https://www.youtube.com/watch?v=AWGPaFraPN4", payload
         )
         with patch.object(
@@ -185,7 +232,7 @@ class SpikeTests(unittest.TestCase):
             )
         )
         self.assertEqual(invalid["error"]["code"], "ANALYSIS_NOT_FOUND")
-        analysis_id, _ = spike.create_session(
+        analysis_id, _, _ = spike.create_session(
             "https://www.youtube.com/watch?v=AWGPaFraPN4", self.audio_payload()
         )
         missing = json.loads(
@@ -196,7 +243,7 @@ class SpikeTests(unittest.TestCase):
         self.assertEqual(missing["error"]["code"], "FORMAT_NOT_AVAILABLE")
 
     def test_prepare_rejects_expired_analysis(self):
-        analysis_id, _ = spike.create_session(
+        analysis_id, _, _ = spike.create_session(
             "https://www.youtube.com/watch?v=AWGPaFraPN4", self.audio_payload()
         )
         spike.analysis_sessions[analysis_id]["created"] -= spike.ANALYSIS_TTL_SECONDS
@@ -206,6 +253,35 @@ class SpikeTests(unittest.TestCase):
             )
         )
         self.assertEqual(prepared["error"]["code"], "ANALYSIS_NOT_FOUND")
+
+    def test_prepare_video_reextracts_exact_format(self):
+        payload = self.video_payload()
+        analysis_id, _, selected_video = spike.create_session(
+            "https://www.youtube.com/watch?v=AWGPaFraPN4", payload
+        )
+        self.assertEqual(selected_video["format_id"], "134")
+        with patch.object(spike.LocalYoutubeDL, "extract_info", return_value=payload):
+            prepared = json.loads(
+                spike.prepare_video_download(
+                    json.dumps({"analysisId": analysis_id, "formatId": "134"})
+                )
+            )
+        descriptor = prepared["descriptor"]
+        self.assertEqual(descriptor["formatId"], "134")
+        self.assertEqual(descriptor["container"], "mp4")
+        self.assertEqual(descriptor["height"], 360)
+        self.assertNotIn(descriptor["url"], json.dumps(spike.normalize(payload)))
+
+    def test_oversize_video_is_not_preselected_and_is_rejected(self):
+        payload = self.video_payload(filesize=spike.MAX_VIDEO_BYTES + 1)
+        self.assertIsNone(spike.preferred_video(payload["formats"]))
+        with self.assertRaisesRegex(ValueError, "VIDEO_FILE_TOO_LARGE"):
+            spike.build_video_descriptor(payload, "134")
+
+    def test_video_descriptor_rejects_forbidden_headers(self):
+        payload = self.video_payload(http_headers={"Cookie": "secret"})
+        with self.assertRaisesRegex(ValueError, "VIDEO_HEADERS_FORBIDDEN"):
+            spike.build_video_descriptor(payload, "134")
 
     def test_descriptor_rejects_non_https_host_and_forbidden_headers(self):
         for changes, code in [
