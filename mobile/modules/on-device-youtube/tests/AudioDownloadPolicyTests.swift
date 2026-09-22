@@ -117,6 +117,33 @@ enum AudioDownloadPolicyTests {
         requestedEnd: 524287
       )
     }
+    let rangedAudioResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 206,
+      httpVersion: "HTTP/1.1",
+      headerFields: [
+        "Content-Type": "audio/mp4",
+        "Content-Length": "262144",
+        "Content-Range": "bytes 0-262143/2073130",
+      ]
+    )!
+    let audioRange = try MDAudioDownloadPolicy.validateRangeResponse(
+      rangedAudioResponse,
+      requestedStart: 0,
+      requestedEnd: 262143,
+      kind: .audio
+    )
+    guard audioRange.total == 2073130 else {
+      throw TestFailure.failed("Audio total length was not recovered")
+    }
+    try expectFailure("AUDIO_RANGE_NOT_SUPPORTED") {
+      _ = try MDAudioDownloadPolicy.validateRangeResponse(
+        videoResponse,
+        requestedStart: 0,
+        requestedEnd: 262143,
+        kind: .audio
+      )
+    }
     guard
       MDAudioDownloadPolicy.safeFileName("../Own: video.mp4", extension: "mp4")
         == "_Own_ video.mp4"

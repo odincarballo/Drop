@@ -37,6 +37,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   private var responseValidated = false
   private var forcedFailureCode: String?
   private let videoChunkSize: Int64 = 256 * 1024
+  private var usesRangeTransfer = false
   private var videoBytesPersisted: Int64 = 0
   private var videoRangeStart: Int64?
   private var videoRangeEnd: Int64?
@@ -49,18 +50,29 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     self.emitEvent = emitEvent
   }
 
+  var isActive: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return activeJobID != nil
+  }
+
   func start(analysisID: String, formatID: String) -> String? {
-    start(kind: .audio, analysisID: analysisID, formatID: formatID)
+    start(kind: .audio, analysisID: analysisID, formatID: formatID, useRanges: false)
+  }
+
+  func startRangedAudio(analysisID: String, formatID: String) -> String? {
+    start(kind: .audio, analysisID: analysisID, formatID: formatID, useRanges: true)
   }
 
   func startVideo(analysisID: String, formatID: String) -> String? {
-    start(kind: .video, analysisID: analysisID, formatID: formatID)
+    start(kind: .video, analysisID: analysisID, formatID: formatID, useRanges: true)
   }
 
   private func start(
     kind: MDLocalDownloadKind,
     analysisID: String,
-    formatID: String
+    formatID: String,
+    useRanges: Bool
   ) -> String? {
     lock.lock()
     guard activeJobID == nil else {
@@ -70,6 +82,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     let jobID = UUID().uuidString
     activeJobID = jobID
     activeKind = kind
+    usesRangeTransfer = useRanges
     lock.unlock()
     emit(jobID: jobID, kind: kind, status: "PREPARING", formatID: formatID)
     let completion: (String) -> Void = { [weak self] raw in
@@ -167,18 +180,18 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       configuration.urlCache = nil
       configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
       configuration.httpMaximumConnectionsPerHost = 1
-      if kind == .video {
+      if usesRangeTransfer {
         configuration.httpAdditionalHeaders = ["Accept-Encoding": "identity"]
       }
       let queue = OperationQueue()
       queue.name = "MediaDrop.\(kind.rawValue.capitalized)Download"
       queue.maxConcurrentOperationCount = 1
       let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
-      if kind == .video {
+      if usesRangeTransfer {
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("bytes=0-\(videoChunkSize - 1)", forHTTPHeaderField: "Range")
       }
-      let task: URLSessionTask = kind == .video
+      let task: URLSessionTask = usesRangeTransfer
         ? session.dataTask(with: request)
         : session.downloadTask(with: request)
       lock.lock()
@@ -192,8 +205,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       self.descriptor = descriptor
       self.session = session
       self.task = task
-      if kind == .video {
-        let partialURL = directory.appendingPathComponent("video.part", isDirectory: false)
+      if usesRangeTransfer {
+        let partialURL = directory.appendingPathComponent(
+          kind == .video ? "video.part" : "audio.part",
+          isDirectory: false
+        )
         FileManager.default.createFile(atPath: partialURL.path, contents: nil)
         videoPartialURL = partialURL
         videoBytesPersisted = 0
@@ -260,7 +276,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
         externalHeaders,
         kind: kind
       )
-      if kind == .video, let start = videoRangeStart, let end = videoRangeEnd {
+      if usesRangeTransfer, let start = videoRangeStart, let end = videoRangeEnd {
         sanitized.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         sanitized.setValue("bytes=\(start)-\(end)", forHTTPHeaderField: "Range")
       }
@@ -280,7 +296,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
   ) {
     guard
-      currentKind(for: dataTask) == .video,
+      usesRangeTransfer,
+      let kind = currentKind(for: dataTask),
       let response = response as? HTTPURLResponse,
       let start = videoRangeStart,
       let end = videoRangeEnd
@@ -290,10 +307,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       return
     }
     do {
-      let range = try MDAudioDownloadPolicy.validateVideoRangeResponse(
+      let range = try MDAudioDownloadPolicy.validateRangeResponse(
         response,
         requestedStart: start,
-        requestedEnd: end
+        requestedEnd: end,
+        kind: kind
       )
       lock.lock()
       videoTotalBytes = range.total
@@ -305,7 +323,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       setForcedFailure(failure.code)
       completionHandler(.cancel)
     } catch {
-      setForcedFailure("VIDEO_RANGE_INVALID")
+      setForcedFailure(kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID")
       completionHandler(.cancel)
     }
   }
@@ -317,7 +335,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   ) {
     guard
       let jobID = currentJobID(for: dataTask),
-      currentKind(for: dataTask) == .video,
+      usesRangeTransfer,
+      let kind = currentKind(for: dataTask),
       let partialURL = videoPartialURL
     else { return }
     do {
@@ -329,7 +348,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       let cumulative = persisted + chunkReceived + Int64(data.count)
       try MDAudioDownloadPolicy.validateTransferredBytes(
         cumulative,
-        maximumBytes: MDLocalDownloadKind.video.maximumBytes
+        maximumBytes: kind.maximumBytes
       )
       let writer = try FileHandle(forWritingTo: partialURL)
       defer { try? writer.close() }
@@ -341,7 +360,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       lock.unlock()
       emit(
         jobID: jobID,
-        kind: .video,
+        kind: kind,
         status: "DOWNLOADING",
         formatID: descriptor?.formatId,
         container: descriptor?.container,
@@ -355,7 +374,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       setForcedFailure(failure.code)
       dataTask.cancel()
     } catch {
-      setForcedFailure("VIDEO_STORAGE_UNAVAILABLE")
+      setForcedFailure(kind == .audio ? "AUDIO_STORAGE_UNAVAILABLE" : "VIDEO_STORAGE_UNAVAILABLE")
       dataTask.cancel()
     }
   }
@@ -489,13 +508,16 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     let completed = error == nil && activeJobID == nil
     lock.unlock()
     if completed { return }
-    if kind == .video, error == nil, code == nil {
+    if usesRangeTransfer, error == nil, code == nil {
       do {
-        try finishVideoDataTask(jobID: jobID)
+        try finishRangeDataTask(jobID: jobID, kind: kind)
       } catch let failure as MDAudioDownloadFailure {
         fail(jobID: jobID, code: failure.code)
       } catch {
-        fail(jobID: jobID, code: "VIDEO_STORAGE_UNAVAILABLE")
+        fail(
+          jobID: jobID,
+          code: kind == .audio ? "AUDIO_STORAGE_UNAVAILABLE" : "VIDEO_STORAGE_UNAVAILABLE"
+        )
       }
       return
     }
@@ -508,7 +530,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     )
   }
 
-  private func finishVideoDataTask(jobID: String) throws {
+  private func finishRangeDataTask(jobID: String, kind: MDLocalDownloadKind) throws {
     guard
       responseValidated,
       let contentRange = videoContentRange,
@@ -516,15 +538,19 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       let workspaceURL,
       let partialURL = videoPartialURL
     else {
-      throw MDAudioDownloadFailure.code("VIDEO_RANGE_INVALID")
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+      )
     }
     guard videoChunkBytesReceived == contentRange.end - contentRange.start + 1 else {
-      throw MDAudioDownloadFailure.code("VIDEO_RANGE_INVALID")
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+      )
     }
     let persisted = videoBytesPersisted + videoChunkBytesReceived
     try MDAudioDownloadPolicy.validateTransferredBytes(
       persisted,
-      maximumBytes: MDLocalDownloadKind.video.maximumBytes
+      maximumBytes: kind.maximumBytes
     )
     lock.lock()
     videoBytesPersisted = persisted
@@ -533,7 +559,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     if persisted == contentRange.total {
       let fileName = MDAudioDownloadPolicy.safeFileName(
         descriptor.fileName,
-        extension: MDLocalDownloadKind.video.container
+        extension: kind.container
       )
       let finalURL = workspaceURL.appendingPathComponent(fileName, isDirectory: false)
       if FileManager.default.fileExists(atPath: finalURL.path) {
@@ -542,7 +568,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       try FileManager.default.moveItem(at: partialURL, to: finalURL)
       complete(
         jobID: jobID,
-        kind: .video,
+        kind: kind,
         fileURL: finalURL,
         size: persisted,
         descriptor: descriptor
@@ -550,24 +576,30 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       return
     }
     guard persisted < contentRange.total else {
-      throw MDAudioDownloadFailure.code("VIDEO_RANGE_INVALID")
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+      )
     }
-    try startNextVideoChunk(
+    try startNextRangeChunk(
       jobID: jobID,
       start: persisted,
       total: contentRange.total,
-      descriptor: descriptor
+      descriptor: descriptor,
+      kind: kind
     )
   }
 
-  private func startNextVideoChunk(
+  private func startNextRangeChunk(
     jobID: String,
     start: Int64,
     total: Int64,
-    descriptor: MDAudioDescriptor
+    descriptor: MDAudioDescriptor,
+    kind: MDLocalDownloadKind
   ) throws {
     guard let session, let url = URL(string: descriptor.url) else {
-      throw MDAudioDownloadFailure.code("VIDEO_URL_INVALID")
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_URL_INVALID" : "VIDEO_URL_INVALID"
+      )
     }
     let end = min(total - 1, start + videoChunkSize - 1)
     var request = URLRequest(url: url)
@@ -576,7 +608,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
     for (name, value) in try MDAudioDownloadPolicy.validateHeaders(
       descriptor.headers,
-      kind: .video
+      kind: kind
     ) {
       request.setValue(value, forHTTPHeaderField: name)
     }
@@ -678,6 +710,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     forcedFailureCode = nil
     workspaceURL = nil
     activeKind = nil
+    usesRangeTransfer = false
     videoBytesPersisted = 0
     videoRangeStart = nil
     videoRangeEnd = nil

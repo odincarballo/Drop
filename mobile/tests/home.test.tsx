@@ -114,6 +114,8 @@ function localYoutubeNativeEngine() {
     cancelAudioDownload: jest.fn(),
     startVideoDownload: jest.fn(),
     cancelVideoDownload: jest.fn(),
+    startCombinedDownload: jest.fn(),
+    cancelCombinedDownload: jest.fn(),
     cancel: jest.fn(),
     addListener: jest.fn(() => ({ remove: jest.fn() })),
   };

@@ -114,6 +114,39 @@ export type LocalVideoDownloadEvent = z.infer<
   typeof localVideoDownloadEventSchema
 >;
 
+export const localCombinedDownloadEventSchema = z.object({
+  jobId: z.string().uuid(),
+  status: z.enum([
+    'PREPARING',
+    'DOWNLOADING_VIDEO',
+    'DOWNLOADING_AUDIO',
+    'MUXING',
+    'COMPLETED',
+    'FAILED',
+    'CANCELLED',
+  ]),
+  videoFormatId: z.string().max(80).optional(),
+  audioFormatId: z.string().max(80).optional(),
+  bytesDownloaded: z.number().int().nonnegative().optional(),
+  totalBytes: z.number().int().nonnegative().optional(),
+  progress: z.number().min(0).max(1).optional(),
+  fileName: z.string().max(120).optional(),
+  fileSize: z.number().int().nonnegative().optional(),
+  localUri: z.string().startsWith('file://').optional(),
+  durationSeconds: z.number().finite().positive().optional(),
+  height: z.number().int().positive().optional(),
+  videoCodec: z.string().max(100).optional(),
+  audioCodec: z.string().max(100).optional(),
+  errorCode: z
+    .string()
+    .regex(/^[A-Z_]+$/)
+    .optional(),
+});
+
+export type LocalCombinedDownloadEvent = z.infer<
+  typeof localCombinedDownloadEventSchema
+>;
+
 export const localEjsFixtureResultSchema = z
   .object({
     fixture: z

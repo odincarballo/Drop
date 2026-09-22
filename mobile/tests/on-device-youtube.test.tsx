@@ -21,6 +21,7 @@ jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/jobs', () => ({ shareLocalFile: jest.fn() }));
 let audioListener: ((event: unknown) => void) | null = null;
 let videoListener: ((event: unknown) => void) | null = null;
+let combinedListener: ((event: unknown) => void) | null = null;
 const native = {
   analyze: jest.fn(),
   testEjsFixture: jest.fn(),
@@ -28,10 +29,13 @@ const native = {
   cancelAudioDownload: jest.fn(),
   startVideoDownload: jest.fn(),
   cancelVideoDownload: jest.fn(),
+  startCombinedDownload: jest.fn(),
+  cancelCombinedDownload: jest.fn(),
   cancel: jest.fn(),
   addListener: jest.fn((name: string, listener: (event: unknown) => void) => {
     if (name === 'onAudioDownloadState') audioListener = listener;
     if (name === 'onVideoDownloadState') videoListener = listener;
+    if (name === 'onCombinedDownloadState') combinedListener = listener;
     return { remove: jest.fn() };
   }),
 };
@@ -88,12 +92,16 @@ beforeEach(() => {
   jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
   audioListener = null;
   videoListener = null;
+  combinedListener = null;
   native.analyze.mockResolvedValue(JSON.stringify(result));
   native.startAudioDownload.mockReturnValue(
     'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
   );
   native.startVideoDownload.mockReturnValue(
     'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
+  );
+  native.startCombinedDownload.mockReturnValue(
+    '7D628D93-DC67-4729-83AD-B8EF70877A87',
   );
   jest.mocked(shareLocalFile).mockResolvedValue();
   native.testEjsFixture.mockResolvedValue(
@@ -327,6 +335,141 @@ test('native video-only cancellation delegates to URLSession owner', async () =>
   );
   expect(native.cancelVideoDownload).toHaveBeenCalledTimes(1);
 });
+
+test('combined download reports both transfers, muxes, completes, and shares', async () => {
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  await screen.findByText('Video autorizado');
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Descargar video con audio en este iPhone',
+    }),
+  );
+  expect(native.startCombinedDownload).toHaveBeenCalledWith(
+    'a'.repeat(32),
+    '134',
+    '140',
+    754,
+  );
+  expect(JSON.stringify(native.startCombinedDownload.mock.calls)).not.toContain(
+    'googlevideo',
+  );
+  await act(() => {
+    combinedListener?.({
+      jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+      status: 'DOWNLOADING_VIDEO',
+      bytesDownloaded: 293_398,
+      totalBytes: 586_796,
+      progress: 0.5,
+    });
+  });
+  expect(screen.getByText(/Descargando video… 50 %/)).toBeTruthy();
+  await act(() => {
+    combinedListener?.({
+      jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+      status: 'DOWNLOADING_AUDIO',
+      bytesDownloaded: 1_000_000,
+      totalBytes: 2_000_000,
+      progress: 0.5,
+    });
+  });
+  expect(screen.getByText(/Descargando audio… 50 %/)).toBeTruthy();
+  await act(() => {
+    combinedListener?.({
+      jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+      status: 'MUXING',
+      progress: 0.75,
+    });
+  });
+  expect(screen.getByText('Combinando video y audio… 75 %')).toBeTruthy();
+  await act(() => {
+    combinedListener?.({
+      jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+      status: 'COMPLETED',
+      fileName: 'Own video.mp4',
+      fileSize: 2_500_000,
+      localUri: 'file:///cache/Own%20video.mp4',
+      durationSeconds: 754,
+      height: 360,
+      videoCodec: 'avc1',
+      audioCodec: 'mp4a.40.2',
+    });
+  });
+  expect(screen.getByText('✓ Video con audio completado')).toBeTruthy();
+  await fireEvent.press(
+    screen.getAllByRole('button', { name: 'Compartir video' })[0]!,
+  );
+  await waitFor(() =>
+    expect(shareLocalFile).toHaveBeenCalledWith(
+      'file:///cache/Own%20video.mp4',
+    ),
+  );
+});
+
+test.each([
+  ['DOWNLOADING_VIDEO', 'VIDEO_HTTP_ERROR'],
+  ['DOWNLOADING_AUDIO', 'AUDIO_HTTP_ERROR'],
+] as const)('combined %s failure remains specific', async (phase, code) => {
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  await screen.findByText('Video autorizado');
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Descargar video con audio en este iPhone',
+    }),
+  );
+  await act(() => {
+    combinedListener?.({
+      jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+      status: phase,
+      bytesDownloaded: 1,
+      totalBytes: 2,
+      progress: 0.5,
+    });
+    combinedListener?.({
+      jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+      status: 'FAILED',
+      errorCode: code,
+    });
+  });
+  expect(screen.getByText(new RegExp(`Código: ${code}`))).toBeTruthy();
+});
+
+test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
+  'combined cancellation works during %s',
+  async (phase) => {
+    await render(<TestCard />);
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+    );
+    await screen.findByText('Video autorizado');
+    await fireEvent.press(
+      screen.getByRole('button', {
+        name: 'Descargar video con audio en este iPhone',
+      }),
+    );
+    await act(() => {
+      combinedListener?.({
+        jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+        status: phase,
+        progress: 0.25,
+      });
+    });
+    await fireEvent.press(
+      screen.getByRole('button', {
+        name:
+          phase === 'MUXING'
+            ? 'Cancelar combinación'
+            : 'Cancelar video con audio',
+      }),
+    );
+    expect(native.cancelCombinedDownload).toHaveBeenCalledTimes(1);
+  },
+);
 
 test('native audio progress completes, shares, and cancellation delegates', async () => {
   await render(<TestCard />);

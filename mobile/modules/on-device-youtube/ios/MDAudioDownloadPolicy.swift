@@ -121,19 +121,25 @@ enum MDAudioDownloadPolicy {
     try validateExpectedLength(response.expectedContentLength, maximumBytes: kind.maximumBytes)
   }
 
-  static func validateVideoRangeResponse(
+  static func validateRangeResponse(
     _ response: HTTPURLResponse,
     requestedStart: Int64,
-    requestedEnd: Int64
+    requestedEnd: Int64,
+    kind: MDLocalDownloadKind
   ) throws -> MDVideoContentRange {
     guard response.statusCode == 206 else {
       throw MDAudioDownloadFailure.code(
         response.statusCode == 404 || response.statusCode == 410
-          ? "VIDEO_URL_EXPIRED" : "VIDEO_RANGE_NOT_SUPPORTED"
+          ? (kind == .audio ? "AUDIO_URL_EXPIRED" : "VIDEO_URL_EXPIRED")
+          : (kind == .audio ? "AUDIO_RANGE_NOT_SUPPORTED" : "VIDEO_RANGE_NOT_SUPPORTED")
       )
     }
-    if let mime = response.mimeType?.lowercased(), !allowedVideoMIMETypes.contains(mime) {
-      throw MDAudioDownloadFailure.code("VIDEO_MIME_NOT_ALLOWED")
+    let allowedMIMETypes =
+      kind == .audio ? allowedAudioMIMETypes : allowedVideoMIMETypes
+    if let mime = response.mimeType?.lowercased(), !allowedMIMETypes.contains(mime) {
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_MIME_NOT_ALLOWED" : "VIDEO_MIME_NOT_ALLOWED"
+      )
     }
     guard
       let raw = response.value(forHTTPHeaderField: "Content-Range"),
@@ -142,10 +148,25 @@ enum MDAudioDownloadPolicy {
       range.end <= requestedEnd,
       range.end >= range.start
     else {
-      throw MDAudioDownloadFailure.code("VIDEO_RANGE_INVALID")
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+      )
     }
-    try validateExpectedLength(range.total, maximumBytes: maximumVideoBytes)
+    try validateExpectedLength(range.total, maximumBytes: kind.maximumBytes)
     return range
+  }
+
+  static func validateVideoRangeResponse(
+    _ response: HTTPURLResponse,
+    requestedStart: Int64,
+    requestedEnd: Int64
+  ) throws -> MDVideoContentRange {
+    try validateRangeResponse(
+      response,
+      requestedStart: requestedStart,
+      requestedEnd: requestedEnd,
+      kind: .video
+    )
   }
 
   static func parseVideoContentRange(_ raw: String) -> MDVideoContentRange? {

@@ -8,10 +8,13 @@ public class OnDeviceYouTubeModule: Module {
       event
     )
   }
+  private lazy var combinedDownload = MDCombinedDownloadManager { [weak self] event in
+    self?.sendEvent("onCombinedDownloadState", event)
+  }
 
   public func definition() -> ModuleDefinition {
     Name("OnDeviceYouTube")
-    Events("onAudioDownloadState", "onVideoDownloadState")
+    Events("onAudioDownloadState", "onVideoDownloadState", "onCombinedDownloadState")
 
     AsyncFunction("analyze") { (url: String, promise: Promise) in
       MDPythonBridge.analyze(url) { result in promise.resolve(result) }
@@ -22,21 +25,42 @@ public class OnDeviceYouTubeModule: Module {
     }
 
     Function("startAudioDownload") { (analysisId: String, formatId: String) -> String? in
-      audioDownload.start(analysisID: analysisId, formatID: formatId)
+      guard !combinedDownload.isActive else { return nil }
+      return audioDownload.start(analysisID: analysisId, formatID: formatId)
     }
 
     Function("cancelAudioDownload") { audioDownload.cancel() }
 
     Function("startVideoDownload") { (analysisId: String, formatId: String) -> String? in
-      audioDownload.startVideo(analysisID: analysisId, formatID: formatId)
+      guard !combinedDownload.isActive else { return nil }
+      return audioDownload.startVideo(analysisID: analysisId, formatID: formatId)
     }
 
     Function("cancelVideoDownload") { audioDownload.cancel() }
+
+    Function("startCombinedDownload") {
+      (
+        analysisId: String,
+        videoFormatId: String,
+        audioFormatId: String,
+        durationSeconds: Double
+      ) -> String? in
+      guard !audioDownload.isActive else { return nil }
+      return combinedDownload.start(
+        analysisID: analysisId,
+        videoFormatID: videoFormatId,
+        audioFormatID: audioFormatId,
+        expectedDurationSeconds: durationSeconds
+      )
+    }
+
+    Function("cancelCombinedDownload") { combinedDownload.cancel() }
 
     Function("cancel") { MDPythonBridge.cancel() }
     OnAppEntersBackground {
       MDPythonBridge.cancel()
       audioDownload.cancel()
+      combinedDownload.cancel()
     }
   }
 }

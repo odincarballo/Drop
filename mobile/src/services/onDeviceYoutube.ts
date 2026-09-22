@@ -1,11 +1,13 @@
 import { requireOptionalNativeModule } from 'expo';
 
 import {
+  localCombinedDownloadEventSchema,
   localEjsFixtureResultSchema,
   localAudioDownloadEventSchema,
   localVideoDownloadEventSchema,
   localYoutubeResultSchema,
   type LocalAudioDownloadEvent,
+  type LocalCombinedDownloadEvent,
   type LocalVideoDownloadEvent,
 } from '@/models/onDeviceYoutube';
 import { serverError } from '@/services/errors';
@@ -17,9 +19,19 @@ type LocalEngine = {
   cancelAudioDownload: () => void;
   startVideoDownload: (analysisId: string, formatId: string) => string | null;
   cancelVideoDownload: () => void;
+  startCombinedDownload: (
+    analysisId: string,
+    videoFormatId: string,
+    audioFormatId: string,
+    durationSeconds: number,
+  ) => string | null;
+  cancelCombinedDownload: () => void;
   cancel: () => void;
   addListener: (
-    eventName: 'onAudioDownloadState' | 'onVideoDownloadState',
+    eventName:
+      | 'onAudioDownloadState'
+      | 'onVideoDownloadState'
+      | 'onCombinedDownloadState',
     listener: (event: unknown) => void,
   ) => { remove: () => void };
 };
@@ -115,6 +127,10 @@ export function localAudioError(code: string): string {
       'Este formato no es un audio M4A directo compatible.',
     AUDIO_FILE_TOO_LARGE: 'El audio supera el límite de 25 MB de esta prueba.',
     AUDIO_URL_EXPIRED: 'El enlace de descarga caducó. Analiza nuevamente.',
+    AUDIO_RANGE_NOT_SUPPORTED:
+      'YouTube no permitió descargar el audio por fragmentos.',
+    AUDIO_RANGE_INVALID:
+      'YouTube devolvió un fragmento de audio incompleto o inesperado.',
     AUDIO_TIMEOUT: 'La descarga tardó demasiado tiempo.',
     AUDIO_STORAGE_UNAVAILABLE:
       'No se pudo guardar el audio. Comprueba el espacio disponible.',
@@ -181,6 +197,71 @@ export function localVideoError(code: string): string {
     LOCAL_CANCELLED: 'Descarga cancelada.',
   };
   return messages[code] ?? 'No se pudo completar la descarga local de video.';
+}
+
+export function startLocalCombinedDownload(
+  analysisId: string,
+  videoFormatId: string,
+  audioFormatId: string,
+  durationSeconds: number,
+): string {
+  const native = engine();
+  if (!native)
+    throw new Error('Esta build no incluye el motor local experimental.');
+  const jobId = native.startCombinedDownload(
+    analysisId,
+    videoFormatId,
+    audioFormatId,
+    durationSeconds,
+  );
+  if (!jobId) throw new Error('Ya hay una descarga local activa.');
+  return jobId;
+}
+
+export function cancelLocalCombinedDownload(): void {
+  engine()?.cancelCombinedDownload();
+}
+
+export function observeLocalCombinedDownload(
+  listener: (event: LocalCombinedDownloadEvent) => void,
+): { remove: () => void } {
+  const native = engine();
+  if (!native) return { remove: () => undefined };
+  return native.addListener('onCombinedDownloadState', (value: unknown) => {
+    const parsed = localCombinedDownloadEventSchema.safeParse(value);
+    if (parsed.success) listener(parsed.data);
+  });
+}
+
+export function localCombinedError(code: string): string {
+  const messages: Record<string, string> = {
+    ANALYSIS_NOT_FOUND:
+      'El análisis local caducó. Analiza nuevamente el video.',
+    FORMAT_NOT_AVAILABLE: 'Uno de los formatos ya no está disponible.',
+    VIDEO_FORMAT_NOT_SUPPORTED: 'El video seleccionado dejó de ser compatible.',
+    AUDIO_FORMAT_NOT_SUPPORTED: 'El audio seleccionado dejó de ser compatible.',
+    VIDEO_FILE_TOO_LARGE: 'El video supera el límite de esta prueba.',
+    AUDIO_FILE_TOO_LARGE: 'El audio supera el límite de esta prueba.',
+    MUX_VIDEO_TRACK_MISSING: 'El archivo descargado no contiene video.',
+    MUX_AUDIO_TRACK_MISSING: 'El archivo descargado no contiene audio.',
+    MUX_VIDEO_CODEC_UNSUPPORTED: 'La pista de video no es H.264 compatible.',
+    MUX_AUDIO_CODEC_UNSUPPORTED: 'La pista de audio no es AAC compatible.',
+    MUX_VIDEO_DURATION_INVALID: 'La duración del video no es coherente.',
+    MUX_AUDIO_DURATION_INVALID: 'La duración del audio no es coherente.',
+    MUX_OUTPUT_DURATION_INVALID:
+      'La duración del archivo combinado no es válida.',
+    MUX_PASSTHROUGH_UNAVAILABLE:
+      'AVFoundation no puede combinar estas pistas sin recodificarlas.',
+    MUX_EXPORT_FAILED: 'AVFoundation no pudo combinar el video y el audio.',
+    MUX_OUTPUT_INVALID: 'El archivo combinado no superó la validación final.',
+    COMBINED_STORAGE_UNAVAILABLE:
+      'No se pudieron guardar los archivos temporales en el iPhone.',
+    LOCAL_CANCELLED: 'Descarga cancelada.',
+  };
+  if (messages[code]) return messages[code];
+  if (code.startsWith('VIDEO_')) return localVideoError(code);
+  if (code.startsWith('AUDIO_')) return localAudioError(code);
+  return 'No se pudo completar el video con audio.';
 }
 
 export function localYoutubeError(code: string) {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
   LocalAudioDownloadEvent,
+  LocalCombinedDownloadEvent,
   LocalEjsFixtureResult,
   LocalVideoDownloadEvent,
   LocalYoutubeResult,
@@ -10,13 +11,17 @@ import { shareLocalFile } from '@/services/jobs';
 import {
   analyzeYoutubeOnDevice,
   cancelLocalAudioDownload,
+  cancelLocalCombinedDownload,
   cancelLocalVideoDownload,
   cancelLocalYoutube,
   localAudioError,
+  localCombinedError,
   localVideoError,
   observeLocalAudioDownload,
+  observeLocalCombinedDownload,
   observeLocalVideoDownload,
   startLocalAudioDownload,
+  startLocalCombinedDownload,
   startLocalVideoDownload,
   testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
@@ -89,6 +94,32 @@ export type LocalVideoState =
   | { status: 'cancelled' }
   | { status: 'error'; message: string; code: string };
 
+export type LocalCombinedState =
+  | { status: 'idle' }
+  | { status: 'preparing'; jobId: string }
+  | {
+      status: 'downloading-video' | 'downloading-audio';
+      jobId: string;
+      bytesDownloaded: number;
+      totalBytes: number | null;
+      progress: number | null;
+    }
+  | { status: 'muxing'; jobId: string; progress: number | null }
+  | {
+      status: 'completed';
+      jobId: string;
+      fileName: string;
+      fileSize: number;
+      localUri: string;
+      durationSeconds: number;
+      height: number | null;
+      videoCodec: string | null;
+      audioCodec: string | null;
+      actionError: string | null;
+    }
+  | { status: 'cancelled' }
+  | { status: 'error'; message: string; code: string };
+
 export function useLocalYoutubeSpike() {
   const [state, setState] = useState<State>({ status: 'idle' });
   const [ejsState, setEjsState] = useState<EjsState>({ status: 'idle' });
@@ -98,9 +129,13 @@ export function useLocalYoutubeSpike() {
   const [videoState, setVideoState] = useState<LocalVideoState>({
     status: 'idle',
   });
+  const [combinedState, setCombinedState] = useState<LocalCombinedState>({
+    status: 'idle',
+  });
   const busy = useRef(false);
   const audioJobId = useRef<string | null>(null);
   const videoJobId = useRef<string | null>(null);
+  const combinedJobId = useRef<string | null>(null);
   const mounted = useRef(true);
 
   const handleAudioEvent = useCallback((event: LocalAudioDownloadEvent) => {
@@ -203,24 +238,93 @@ export function useLocalYoutubeSpike() {
     }
   }, []);
 
+  const handleCombinedEvent = useCallback(
+    (event: LocalCombinedDownloadEvent) => {
+      if (!mounted.current) return;
+      if (combinedJobId.current && combinedJobId.current !== event.jobId)
+        return;
+      combinedJobId.current = event.jobId;
+      if (event.status === 'PREPARING') {
+        setCombinedState({ status: 'preparing', jobId: event.jobId });
+      } else if (
+        event.status === 'DOWNLOADING_VIDEO' ||
+        event.status === 'DOWNLOADING_AUDIO'
+      ) {
+        setCombinedState({
+          status:
+            event.status === 'DOWNLOADING_VIDEO'
+              ? 'downloading-video'
+              : 'downloading-audio',
+          jobId: event.jobId,
+          bytesDownloaded: event.bytesDownloaded ?? 0,
+          totalBytes: event.totalBytes ?? null,
+          progress: event.progress ?? null,
+        });
+      } else if (event.status === 'MUXING') {
+        setCombinedState({
+          status: 'muxing',
+          jobId: event.jobId,
+          progress: event.progress ?? null,
+        });
+      } else if (
+        event.status === 'COMPLETED' &&
+        event.fileName &&
+        event.fileSize !== undefined &&
+        event.localUri &&
+        event.durationSeconds !== undefined
+      ) {
+        combinedJobId.current = null;
+        setCombinedState({
+          status: 'completed',
+          jobId: event.jobId,
+          fileName: event.fileName,
+          fileSize: event.fileSize,
+          localUri: event.localUri,
+          durationSeconds: event.durationSeconds,
+          height: event.height ?? null,
+          videoCodec: event.videoCodec ?? null,
+          audioCodec: event.audioCodec ?? null,
+          actionError: null,
+        });
+      } else if (event.status === 'CANCELLED') {
+        combinedJobId.current = null;
+        setCombinedState({ status: 'cancelled' });
+      } else if (event.status === 'FAILED') {
+        combinedJobId.current = null;
+        const code = event.errorCode ?? 'COMBINED_DOWNLOAD_FAILED';
+        setCombinedState({
+          status: 'error',
+          code,
+          message: localCombinedError(code),
+        });
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     mounted.current = true;
     const subscription = observeLocalAudioDownload(handleAudioEvent);
     const videoSubscription = observeLocalVideoDownload(handleVideoEvent);
+    const combinedSubscription =
+      observeLocalCombinedDownload(handleCombinedEvent);
     return () => {
       mounted.current = false;
       if (busy.current) cancelLocalYoutube();
       if (audioJobId.current) cancelLocalAudioDownload();
       if (videoJobId.current) cancelLocalVideoDownload();
+      if (combinedJobId.current) cancelLocalCombinedDownload();
       subscription.remove();
       videoSubscription.remove();
+      combinedSubscription.remove();
     };
-  }, [handleAudioEvent, handleVideoEvent]);
+  }, [handleAudioEvent, handleCombinedEvent, handleVideoEvent]);
   async function analyze(url: string) {
     if (busy.current) return;
     busy.current = true;
     setAudioState({ status: 'idle' });
     setVideoState({ status: 'idle' });
+    setCombinedState({ status: 'idle' });
     setState({ status: 'loading' });
     try {
       const result = await analyzeYoutubeOnDevice(url);
@@ -255,7 +359,13 @@ export function useLocalYoutubeSpike() {
   }
 
   function downloadAudio() {
-    if (busy.current || audioJobId.current || state.status !== 'result') return;
+    if (
+      busy.current ||
+      audioJobId.current ||
+      combinedJobId.current ||
+      state.status !== 'result'
+    )
+      return;
     const metadata = state.result.metadata;
     if (!metadata?.preferredAudioFormatId) {
       setAudioState({
@@ -312,6 +422,7 @@ export function useLocalYoutubeSpike() {
       busy.current ||
       audioJobId.current ||
       videoJobId.current ||
+      combinedJobId.current ||
       state.status !== 'result'
     )
       return;
@@ -366,11 +477,74 @@ export function useLocalYoutubeSpike() {
     }
   }
 
+  function downloadCombined() {
+    if (
+      busy.current ||
+      audioJobId.current ||
+      videoJobId.current ||
+      combinedJobId.current ||
+      state.status !== 'result'
+    )
+      return;
+    const metadata = state.result.metadata;
+    if (
+      !metadata?.preferredVideoFormatId ||
+      !metadata.preferredAudioFormatId ||
+      !metadata.duration
+    ) {
+      setCombinedState({
+        status: 'error',
+        code: 'COMBINED_FORMAT_NOT_SUPPORTED',
+        message: localCombinedError('COMBINED_FORMAT_NOT_SUPPORTED'),
+      });
+      return;
+    }
+    try {
+      const jobId = startLocalCombinedDownload(
+        metadata.analysisId,
+        metadata.preferredVideoFormatId,
+        metadata.preferredAudioFormatId,
+        metadata.duration,
+      );
+      combinedJobId.current = jobId;
+      setCombinedState({ status: 'preparing', jobId });
+    } catch (error) {
+      setCombinedState({
+        status: 'error',
+        code: 'COMBINED_DOWNLOAD_FAILED',
+        message:
+          error instanceof Error
+            ? error.message
+            : localCombinedError('COMBINED_DOWNLOAD_FAILED'),
+      });
+    }
+  }
+
+  function cancelCombined() {
+    if (!combinedJobId.current) return;
+    cancelLocalCombinedDownload();
+  }
+
+  async function shareCombined() {
+    if (combinedState.status !== 'completed') return;
+    try {
+      await shareLocalFile(combinedState.localUri);
+    } catch {
+      if (mounted.current && combinedState.status === 'completed') {
+        setCombinedState({
+          ...combinedState,
+          actionError: 'No se pudo abrir la hoja de compartir.',
+        });
+      }
+    }
+  }
+
   return {
     state,
     ejsState,
     audioState,
     videoState,
+    combinedState,
     analyze,
     testEjs,
     downloadAudio,
@@ -379,6 +553,9 @@ export function useLocalYoutubeSpike() {
     downloadVideo,
     cancelVideo,
     shareVideo,
+    downloadCombined,
+    cancelCombined,
+    shareCombined,
     cancel: cancelLocalYoutube,
     isBusy:
       state.status === 'loading' ||
@@ -386,6 +563,10 @@ export function useLocalYoutubeSpike() {
       audioState.status === 'preparing' ||
       audioState.status === 'downloading' ||
       videoState.status === 'preparing' ||
-      videoState.status === 'downloading',
+      videoState.status === 'downloading' ||
+      combinedState.status === 'preparing' ||
+      combinedState.status === 'downloading-video' ||
+      combinedState.status === 'downloading-audio' ||
+      combinedState.status === 'muxing',
   };
 }

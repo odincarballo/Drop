@@ -25,6 +25,7 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
   );
   const audio = spike.audioState;
   const video = spike.videoState;
+  const combined = spike.combinedState;
   const ejsResult =
     spike.ejsState.status === 'result' ? spike.ejsState.result : null;
   const nativeDiagnostics = ejsResult?.diagnostics.native;
@@ -170,6 +171,137 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
               style={{ color: colors.secondary }}
             >{`${format.container} · ${format.codec ?? 'Codec desconocido'}${format.bitrateKbps ? ` · ${Math.round(format.bitrateKbps)} kbps` : ''} · ID ${format.id}`}</Text>
           ))}
+          <View style={[styles.audioSpike, { borderColor: colors.border }]}>
+            <Text style={[styles.title, { color: colors.text }]}>
+              Video + audio
+            </Text>
+            <Text style={{ color: colors.secondary }}>
+              {selectedVideo
+                ? `Video: ${selectedVideo.resolution ?? 'Original'} · MP4 · ${selectedVideo.codec ?? 'AVC'}`
+                : 'Video: no disponible'}
+            </Text>
+            <Text style={{ color: colors.secondary }}>
+              {selectedAudio
+                ? `Audio: M4A · ${selectedAudio.codec ?? 'AAC'}`
+                : 'Audio: no disponible'}
+            </Text>
+            {combined.status === 'idle' && (
+              <ActionButton
+                label="Descargar video con audio en este iPhone"
+                onPress={spike.downloadCombined}
+                disabled={
+                  disabled ||
+                  !selectedVideo ||
+                  !selectedAudio ||
+                  !metadata.duration
+                }
+                secondary
+              />
+            )}
+            {combined.status === 'preparing' && (
+              <>
+                <Text style={{ color: colors.text }}>Preparando pistas…</Text>
+                <ActionButton
+                  label="Cancelar video con audio"
+                  onPress={spike.cancelCombined}
+                  secondary
+                />
+              </>
+            )}
+            {(combined.status === 'downloading-video' ||
+              combined.status === 'downloading-audio') && (
+              <>
+                <Text style={{ color: colors.text }}>
+                  {combined.status === 'downloading-video'
+                    ? 'Descargando video…'
+                    : 'Descargando audio…'}{' '}
+                  {combined.progress === null
+                    ? ''
+                    : `${Math.round(combined.progress * 100)} %`}
+                </Text>
+                <View
+                  accessibilityRole="progressbar"
+                  accessibilityValue={
+                    combined.progress === null
+                      ? undefined
+                      : { min: 0, max: 100, now: combined.progress * 100 }
+                  }
+                  style={[
+                    styles.progressTrack,
+                    { backgroundColor: colors.border },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        backgroundColor: colors.accent,
+                        width: `${Math.max(2, (combined.progress ?? 0) * 100)}%`,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={{ color: colors.secondary }}>
+                  {`${formatSize(combined.bytesDownloaded)}${combined.totalBytes ? ` / ${formatSize(combined.totalBytes)}` : ''}`}
+                </Text>
+                <ActionButton
+                  label="Cancelar video con audio"
+                  onPress={spike.cancelCombined}
+                  secondary
+                />
+              </>
+            )}
+            {combined.status === 'muxing' && (
+              <>
+                <Text style={{ color: colors.text }}>
+                  {combined.progress === null
+                    ? 'Combinando video y audio…'
+                    : `Combinando video y audio… ${Math.round(combined.progress * 100)} %`}
+                </Text>
+                <ActionButton
+                  label="Cancelar combinación"
+                  onPress={spike.cancelCombined}
+                  secondary
+                />
+              </>
+            )}
+            {combined.status === 'completed' && (
+              <>
+                <Text style={[styles.title, { color: colors.accent }]}>
+                  ✓ Video con audio completado
+                </Text>
+                <Text style={{ color: colors.secondary }}>
+                  {`${combined.fileName}\n${formatSize(combined.fileSize)} · MP4${combined.height ? ` · ${combined.height}p` : ''}\n${formatDuration(combined.durationSeconds)} · ${combined.videoCodec ?? 'H.264'} + ${combined.audioCodec ?? 'AAC'}`}
+                </Text>
+                <ActionButton
+                  label="Compartir video"
+                  onPress={() => void spike.shareCombined()}
+                  secondary
+                />
+                {combined.actionError && (
+                  <Text
+                    accessibilityRole="alert"
+                    style={{ color: colors.error }}
+                  >
+                    {combined.actionError}
+                  </Text>
+                )}
+              </>
+            )}
+            {combined.status === 'cancelled' && (
+              <Text
+                accessibilityRole="alert"
+                style={{ color: colors.secondary }}
+              >
+                Video con audio cancelado.
+              </Text>
+            )}
+            {combined.status === 'error' && (
+              <Text accessibilityRole="alert" style={{ color: colors.error }}>
+                {`${combined.message}\nCódigo: ${combined.code}`}
+              </Text>
+            )}
+          </View>
           <View style={[styles.audioSpike, { borderColor: colors.border }]}>
             <Text style={[styles.title, { color: colors.text }]}>
               Audio directo
