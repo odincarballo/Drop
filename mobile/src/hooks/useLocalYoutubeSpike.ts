@@ -25,6 +25,7 @@ import {
   startLocalVideoDownload,
   testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
+import { selectLocalVideoOptions } from '@/utils/onDeviceYoutubeFormats';
 
 type State =
   | { status: 'idle' }
@@ -132,6 +133,9 @@ export function useLocalYoutubeSpike() {
   const [combinedState, setCombinedState] = useState<LocalCombinedState>({
     status: 'idle',
   });
+  const [selectedVideoFormatId, setSelectedVideoFormatId] = useState<
+    string | null
+  >(null);
   const busy = useRef(false);
   const audioJobId = useRef<string | null>(null);
   const videoJobId = useRef<string | null>(null);
@@ -325,10 +329,20 @@ export function useLocalYoutubeSpike() {
     setAudioState({ status: 'idle' });
     setVideoState({ status: 'idle' });
     setCombinedState({ status: 'idle' });
+    setSelectedVideoFormatId(null);
     setState({ status: 'loading' });
     try {
       const result = await analyzeYoutubeOnDevice(url);
-      if (mounted.current) setState({ status: 'result', result });
+      if (mounted.current) {
+        setState({ status: 'result', result });
+        const options = result.metadata
+          ? selectLocalVideoOptions(result.metadata.videoFormats)
+          : [];
+        const preferred = options.find(
+          (format) => format.id === result.metadata?.preferredVideoFormatId,
+        );
+        setSelectedVideoFormatId(preferred?.id ?? options[0]?.id ?? null);
+      }
     } catch {
       if (mounted.current)
         setState({
@@ -339,6 +353,25 @@ export function useLocalYoutubeSpike() {
     } finally {
       busy.current = false;
     }
+  }
+
+  const videoOptions =
+    state.status === 'result' && state.result.metadata
+      ? selectLocalVideoOptions(state.result.metadata.videoFormats)
+      : [];
+
+  function selectVideoFormat(formatId: string) {
+    if (
+      busy.current ||
+      audioJobId.current ||
+      videoJobId.current ||
+      combinedJobId.current ||
+      !videoOptions.some((format) => format.id === formatId)
+    )
+      return;
+    setSelectedVideoFormatId(formatId);
+    setVideoState({ status: 'idle' });
+    setCombinedState({ status: 'idle' });
   }
   async function testEjs() {
     if (busy.current) return;
@@ -427,7 +460,7 @@ export function useLocalYoutubeSpike() {
     )
       return;
     const metadata = state.result.metadata;
-    if (!metadata?.preferredVideoFormatId) {
+    if (!metadata || !selectedVideoFormatId) {
       setVideoState({
         status: 'error',
         code: 'VIDEO_FORMAT_NOT_SUPPORTED',
@@ -438,13 +471,13 @@ export function useLocalYoutubeSpike() {
     try {
       const jobId = startLocalVideoDownload(
         metadata.analysisId,
-        metadata.preferredVideoFormatId,
+        selectedVideoFormatId,
       );
       videoJobId.current = jobId;
       setVideoState({
         status: 'preparing',
         jobId,
-        formatId: metadata.preferredVideoFormatId,
+        formatId: selectedVideoFormatId,
       });
     } catch (error) {
       setVideoState({
@@ -488,7 +521,8 @@ export function useLocalYoutubeSpike() {
       return;
     const metadata = state.result.metadata;
     if (
-      !metadata?.preferredVideoFormatId ||
+      !metadata ||
+      !selectedVideoFormatId ||
       !metadata.preferredAudioFormatId ||
       !metadata.duration
     ) {
@@ -502,7 +536,7 @@ export function useLocalYoutubeSpike() {
     try {
       const jobId = startLocalCombinedDownload(
         metadata.analysisId,
-        metadata.preferredVideoFormatId,
+        selectedVideoFormatId,
         metadata.preferredAudioFormatId,
         metadata.duration,
       );
@@ -545,6 +579,9 @@ export function useLocalYoutubeSpike() {
     audioState,
     videoState,
     combinedState,
+    selectedVideoFormatId,
+    videoOptions,
+    selectVideoFormat,
     analyze,
     testEjs,
     downloadAudio,

@@ -56,6 +56,9 @@ export const localYoutubeResultSchema = z
   .refine((value) => Boolean(value.metadata) !== Boolean(value.error));
 
 export type LocalYoutubeResult = z.infer<typeof localYoutubeResultSchema>;
+export type LocalYoutubeMetadata = NonNullable<LocalYoutubeResult['metadata']>;
+export type LocalYoutubeVideoFormat =
+  LocalYoutubeMetadata['videoFormats'][number];
 
 export const localAudioDownloadEventSchema = z.object({
   jobId: z.string().uuid(),

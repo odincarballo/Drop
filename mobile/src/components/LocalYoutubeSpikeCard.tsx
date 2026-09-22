@@ -21,7 +21,7 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
     (format) => format.id === metadata.preferredAudioFormatId,
   );
   const selectedVideo = metadata?.videoFormats.find(
-    (format) => format.id === metadata.preferredVideoFormatId,
+    (format) => format.id === spike.selectedVideoFormatId,
   );
   const audio = spike.audioState;
   const video = spike.videoState;
@@ -175,6 +175,26 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
             <Text style={[styles.title, { color: colors.text }]}>
               Video + audio
             </Text>
+            <Text style={{ color: colors.text }}>Resolución de prueba</Text>
+            {spike.videoOptions.map((format) => {
+              const selected = format.id === spike.selectedVideoFormatId;
+              return (
+                <ActionButton
+                  key={format.id}
+                  label={`${format.resolution ?? `${format.height}p`} · MP4 · AVC${selected ? ' · seleccionada' : ''}`}
+                  onPress={() => spike.selectVideoFormat(format.id)}
+                  disabled={disabled || selected}
+                  secondary
+                />
+              );
+            })}
+            {!spike.videoOptions.some(
+              (format) => Math.abs((format.height ?? 0) - 720) <= 16,
+            ) && (
+              <Text style={{ color: colors.secondary }}>
+                720p no está disponible o supera el límite actual de 50 MiB.
+              </Text>
+            )}
             <Text style={{ color: colors.secondary }}>
               {selectedVideo
                 ? `Video: ${selectedVideo.resolution ?? 'Original'} · MP4 · ${selectedVideo.codec ?? 'AVC'}`

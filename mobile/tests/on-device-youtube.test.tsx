@@ -61,6 +61,32 @@ const metadata = {
       estimatedSize: null,
       protocol: 'https',
     },
+    {
+      id: '232',
+      container: 'mp4',
+      codec: 'avc1.64001f',
+      resolution: '720p',
+      height: 720,
+      width: 1280,
+      fps: 30,
+      hasAudio: false,
+      bitrateKbps: 900,
+      estimatedSize: 12_000_000,
+      protocol: null,
+    },
+    {
+      id: '247',
+      container: 'webm',
+      codec: 'vp9',
+      resolution: '720p',
+      height: 720,
+      width: 1280,
+      fps: 30,
+      hasAudio: false,
+      bitrateKbps: 700,
+      estimatedSize: 10_000_000,
+      protocol: 'https',
+    },
   ],
   audioFormats: [
     {
@@ -77,7 +103,7 @@ const metadata = {
       protocol: 'https',
     },
   ],
-  resolutions: [360],
+  resolutions: [360, 720],
 };
 const result = {
   metadata,
@@ -405,6 +431,47 @@ test('combined download reports both transfers, muxes, completes, and shares', a
     expect(shareLocalFile).toHaveBeenCalledWith(
       'file:///cache/Own%20video.mp4',
     ),
+  );
+});
+
+test('720p selection is dynamic and remains opaque to React Native', async () => {
+  await render(<TestCard />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
+  );
+  await screen.findByText('Video autorizado');
+  expect(
+    screen.getByRole('button', {
+      name: '360p · MP4 · AVC · seleccionada',
+    }),
+  ).toBeDisabled();
+  expect(
+    screen.queryByRole('button', { name: /720p · WebM · VP9/ }),
+  ).toBeNull();
+
+  await fireEvent.press(
+    screen.getByRole('button', { name: '720p · MP4 · AVC' }),
+  );
+  expect(
+    screen.getByRole('button', {
+      name: '720p · MP4 · AVC · seleccionada',
+    }),
+  ).toBeDisabled();
+  expect(screen.getByText(/Video: 720p · MP4 · avc1\.64001f/)).toBeTruthy();
+
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Descargar video con audio en este iPhone',
+    }),
+  );
+  expect(native.startCombinedDownload).toHaveBeenCalledWith(
+    'a'.repeat(32),
+    '232',
+    '140',
+    754,
+  );
+  expect(JSON.stringify(native.startCombinedDownload.mock.calls)).not.toContain(
+    'googlevideo',
   );
 });
 
