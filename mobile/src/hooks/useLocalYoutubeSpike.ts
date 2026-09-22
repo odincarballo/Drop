@@ -4,6 +4,7 @@ import type {
   LocalAudioDownloadEvent,
   LocalCombinedDownloadEvent,
   LocalEjsFixtureResult,
+  LocalHttpTransferDiagnostics,
   LocalVideoDownloadEvent,
   LocalYoutubeResult,
 } from '@/models/onDeviceYoutube';
@@ -91,9 +92,15 @@ export type LocalVideoState =
       fileSize: number;
       localUri: string;
       actionError: string | null;
+      httpDiagnostics: LocalHttpTransferDiagnostics | null;
     }
   | { status: 'cancelled' }
-  | { status: 'error'; message: string; code: string };
+  | {
+      status: 'error';
+      message: string;
+      code: string;
+      httpDiagnostics: LocalHttpTransferDiagnostics | null;
+    };
 
 export type LocalCombinedState =
   | { status: 'idle' }
@@ -117,9 +124,15 @@ export type LocalCombinedState =
       videoCodec: string | null;
       audioCodec: string | null;
       actionError: string | null;
+      videoHttpDiagnostics: LocalHttpTransferDiagnostics | null;
     }
   | { status: 'cancelled' }
-  | { status: 'error'; message: string; code: string };
+  | {
+      status: 'error';
+      message: string;
+      code: string;
+      videoHttpDiagnostics: LocalHttpTransferDiagnostics | null;
+    };
 
 export function useLocalYoutubeSpike() {
   const [state, setState] = useState<State>({ status: 'idle' });
@@ -231,6 +244,7 @@ export function useLocalYoutubeSpike() {
         fileSize: event.fileSize,
         localUri: event.localUri,
         actionError: null,
+        httpDiagnostics: event.httpDiagnostics ?? null,
       });
     } else if (event.status === 'CANCELLED') {
       videoJobId.current = null;
@@ -238,7 +252,12 @@ export function useLocalYoutubeSpike() {
     } else if (event.status === 'FAILED') {
       videoJobId.current = null;
       const code = event.errorCode ?? 'VIDEO_DOWNLOAD_FAILED';
-      setVideoState({ status: 'error', code, message: localVideoError(code) });
+      setVideoState({
+        status: 'error',
+        code,
+        message: localVideoError(code),
+        httpDiagnostics: event.httpDiagnostics ?? null,
+      });
     }
   }, []);
 
@@ -289,6 +308,7 @@ export function useLocalYoutubeSpike() {
           videoCodec: event.videoCodec ?? null,
           audioCodec: event.audioCodec ?? null,
           actionError: null,
+          videoHttpDiagnostics: event.videoHttpDiagnostics ?? null,
         });
       } else if (event.status === 'CANCELLED') {
         combinedJobId.current = null;
@@ -300,6 +320,7 @@ export function useLocalYoutubeSpike() {
           status: 'error',
           code,
           message: localCombinedError(code),
+          videoHttpDiagnostics: event.videoHttpDiagnostics ?? null,
         });
       }
     },
@@ -465,6 +486,7 @@ export function useLocalYoutubeSpike() {
         status: 'error',
         code: 'VIDEO_FORMAT_NOT_SUPPORTED',
         message: localVideoError('VIDEO_FORMAT_NOT_SUPPORTED'),
+        httpDiagnostics: null,
       });
       return;
     }
@@ -487,6 +509,7 @@ export function useLocalYoutubeSpike() {
           error instanceof Error
             ? error.message
             : localVideoError('VIDEO_DOWNLOAD_FAILED'),
+        httpDiagnostics: null,
       });
     }
   }
@@ -530,6 +553,7 @@ export function useLocalYoutubeSpike() {
         status: 'error',
         code: 'COMBINED_FORMAT_NOT_SUPPORTED',
         message: localCombinedError('COMBINED_FORMAT_NOT_SUPPORTED'),
+        videoHttpDiagnostics: null,
       });
       return;
     }
@@ -550,6 +574,7 @@ export function useLocalYoutubeSpike() {
           error instanceof Error
             ? error.message
             : localCombinedError('COMBINED_DOWNLOAD_FAILED'),
+        videoHttpDiagnostics: null,
       });
     }
   }

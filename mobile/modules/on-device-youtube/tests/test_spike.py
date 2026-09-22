@@ -198,6 +198,25 @@ class SpikeTests(unittest.TestCase):
                     )
                 )
 
+    def test_metadata_marks_manifest_video_as_not_direct(self):
+        direct = self.video_payload(format_id="136", height=720)["formats"][0]
+        manifest = self.video_payload(
+            format_id="232",
+            height=720,
+            protocol="m3u8_native",
+            url="https://manifest.googlevideo.com/api/manifest/hls_playlist",
+        )["formats"][0]
+        payload = {
+            "id": "AWGPaFraPN4",
+            "title": "Authorized video",
+            "formats": [direct, manifest],
+        }
+        normalized = spike.normalize(payload)
+        self.assertEqual(
+            [(item["id"], item["directDownload"]) for item in normalized["videoFormats"]],
+            [("136", True), ("232", False)],
+        )
+
     def test_oversize_audio_is_not_preselected_and_is_rejected_for_download(self):
         payload = self.audio_payload(filesize=spike.MAX_AUDIO_BYTES + 1)
         self.assertIsNone(spike.preferred_audio(payload["formats"]))

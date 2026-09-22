@@ -27,6 +27,7 @@ final class MDCombinedDownloadManager {
   private var videoHeight: Int?
   private var videoCodec: String?
   private var audioCodec: String?
+  private var videoHTTPDiagnostics: [String: Any]?
   private var muxer: MDAVMuxer?
 
   init(emitEvent: @escaping EventSink) {
@@ -103,6 +104,11 @@ final class MDCombinedDownloadManager {
     }
     lock.unlock()
     guard let status = event["status"] as? String else { return }
+    if phase == .video, let diagnostics = event["httpDiagnostics"] as? [String: Any] {
+      lock.lock()
+      videoHTTPDiagnostics = diagnostics
+      lock.unlock()
+    }
     if status == "PREPARING" {
       emit(jobID: jobID, status: "PREPARING")
       return
@@ -118,7 +124,11 @@ final class MDCombinedDownloadManager {
       return
     }
     if status == "FAILED" {
-      fail(jobID: jobID, code: event["errorCode"] as? String ?? "COMBINED_DOWNLOAD_FAILED")
+      fail(
+        jobID: jobID,
+        code: event["errorCode"] as? String ?? "COMBINED_DOWNLOAD_FAILED",
+        diagnostics: event["httpDiagnostics"] as? [String: Any]
+      )
       return
     }
     if status == "CANCELLED" {
@@ -224,6 +234,7 @@ final class MDCombinedDownloadManager {
     let height = videoHeight
     let codec = videoCodec
     let finalAudioCodec = audioCodec
+    let diagnostics = videoHTTPDiagnostics
     resetLocked()
     lock.unlock()
     if let inputVideo { try? FileManager.default.removeItem(at: inputVideo) }
@@ -238,11 +249,16 @@ final class MDCombinedDownloadManager {
       durationSeconds: result.durationSeconds,
       height: height,
       videoCodec: codec,
-      audioCodec: finalAudioCodec
+      audioCodec: finalAudioCodec,
+      videoHTTPDiagnostics: diagnostics
     )
   }
 
-  private func fail(jobID: String, code: String) {
+  private func fail(
+    jobID: String,
+    code: String,
+    diagnostics: [String: Any]? = nil
+  ) {
     lock.lock()
     guard activeJobID == jobID else {
       lock.unlock()
@@ -250,12 +266,18 @@ final class MDCombinedDownloadManager {
     }
     let workspace = workspaceURL
     let activeMuxer = muxer
+    let finalDiagnostics = diagnostics ?? videoHTTPDiagnostics
     resetLocked()
     lock.unlock()
     transfer.cancel()
     activeMuxer?.cancel()
     MDAudioDownloadPolicy.removeWorkspace(workspace)
-    emit(jobID: jobID, status: "FAILED", errorCode: code)
+    emit(
+      jobID: jobID,
+      status: "FAILED",
+      errorCode: code,
+      videoHTTPDiagnostics: finalDiagnostics
+    )
   }
 
   private func resetLocked() {
@@ -272,6 +294,7 @@ final class MDCombinedDownloadManager {
     videoHeight = nil
     videoCodec = nil
     audioCodec = nil
+    videoHTTPDiagnostics = nil
     muxer = nil
   }
 
@@ -288,7 +311,8 @@ final class MDCombinedDownloadManager {
     height: Int? = nil,
     videoCodec: String? = nil,
     audioCodec: String? = nil,
-    errorCode: String? = nil
+    errorCode: String? = nil,
+    videoHTTPDiagnostics: [String: Any]? = nil
   ) {
     var event: [String: Any?] = ["jobId": jobID, "status": status]
     event["videoFormatId"] = videoFormatID
@@ -304,6 +328,7 @@ final class MDCombinedDownloadManager {
     event["videoCodec"] = videoCodec
     event["audioCodec"] = audioCodec
     event["errorCode"] = errorCode
+    event["videoHttpDiagnostics"] = videoHTTPDiagnostics
     DispatchQueue.main.async { [emitEvent] in emitEvent(event) }
   }
 }

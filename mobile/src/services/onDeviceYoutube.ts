@@ -129,6 +129,10 @@ export function localAudioError(code: string): string {
     AUDIO_URL_EXPIRED: 'El enlace de descarga caducó. Analiza nuevamente.',
     AUDIO_RANGE_NOT_SUPPORTED:
       'YouTube no permitió descargar el audio por fragmentos.',
+    AUDIO_HTTP_FORBIDDEN: 'YouTube rechazó la descarga de audio (HTTP 403).',
+    AUDIO_RANGE_REJECTED:
+      'YouTube rechazó el rango solicitado para el audio (HTTP 416).',
+    AUDIO_RATE_LIMITED: 'YouTube limitó temporalmente la descarga de audio.',
     AUDIO_RANGE_INVALID:
       'YouTube devolvió un fragmento de audio incompleto o inesperado.',
     AUDIO_TIMEOUT: 'La descarga tardó demasiado tiempo.',
@@ -184,6 +188,10 @@ export function localVideoError(code: string): string {
     VIDEO_HTTP_ERROR: 'YouTube rechazó la transferencia del video.',
     VIDEO_RANGE_NOT_SUPPORTED:
       'YouTube no permitió descargar este video por fragmentos.',
+    VIDEO_HTTP_FORBIDDEN: 'YouTube rechazó la descarga de video (HTTP 403).',
+    VIDEO_RANGE_REJECTED:
+      'YouTube rechazó el rango solicitado para el video (HTTP 416).',
+    VIDEO_RATE_LIMITED: 'YouTube limitó temporalmente la descarga de video.',
     VIDEO_RANGE_INVALID:
       'YouTube devolvió un fragmento de video incompleto o inesperado.',
     VIDEO_TIMEOUT: 'La descarga tardó demasiado tiempo.',

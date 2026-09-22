@@ -683,6 +683,11 @@ def normalize(payload, analysis_id=None, selected_audio=None, selected_video=Non
                 item.get("filesize") or item.get("filesize_approx")
             ),
             "protocol": item.get("protocol"),
+            "directDownload": (
+                is_direct_mp4_video(item)
+                if has_video
+                else is_direct_m4a_audio(item)
+            ),
         }
         (video if has_video else audio).append(record)
     if not video and not audio:

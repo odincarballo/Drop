@@ -13,6 +13,7 @@ const formatSchema = z.object({
   bitrateKbps: optionalNumber,
   estimatedSize: optionalNumber,
   protocol: z.string().max(80).nullable(),
+  directDownload: z.boolean(),
 });
 
 export const localYoutubeResultSchema = z
@@ -60,6 +61,29 @@ export type LocalYoutubeMetadata = NonNullable<LocalYoutubeResult['metadata']>;
 export type LocalYoutubeVideoFormat =
   LocalYoutubeMetadata['videoFormats'][number];
 
+export const localHttpTransferDiagnosticsSchema = z.object({
+  requestedRange: z.string().max(80).optional(),
+  effectiveRange: z.string().max(80).optional(),
+  statusCode: z.number().int().min(100).max(599).optional(),
+  contentRange: z.string().max(160).optional(),
+  contentLength: z.string().max(40).optional(),
+  acceptRanges: z.string().max(80).optional(),
+  contentType: z.string().max(160).optional(),
+  redirectCount: z.number().int().nonnegative().max(3),
+  redirectHosts: z.array(z.string().max(600)).max(3),
+  finalHost: z.string().max(253).optional(),
+  acceptEncoding: z.string().max(80).optional(),
+  userAgent: z.string().max(300).optional(),
+  accept: z.string().max(300).optional(),
+  refererOrigin: z.string().max(300).optional(),
+  origin: z.string().max(300).optional(),
+  transferMode: z.enum(['range', 'full-stream-fallback']).optional(),
+});
+
+export type LocalHttpTransferDiagnostics = z.infer<
+  typeof localHttpTransferDiagnosticsSchema
+>;
+
 export const localAudioDownloadEventSchema = z.object({
   jobId: z.string().uuid(),
   status: z.enum([
@@ -82,6 +106,7 @@ export const localAudioDownloadEventSchema = z.object({
     .string()
     .regex(/^[A-Z_]+$/)
     .optional(),
+  httpDiagnostics: localHttpTransferDiagnosticsSchema.optional(),
 });
 
 export type LocalAudioDownloadEvent = z.infer<
@@ -111,6 +136,7 @@ export const localVideoDownloadEventSchema = z.object({
     .string()
     .regex(/^[A-Z_]+$/)
     .optional(),
+  httpDiagnostics: localHttpTransferDiagnosticsSchema.optional(),
 });
 
 export type LocalVideoDownloadEvent = z.infer<
@@ -144,6 +170,7 @@ export const localCombinedDownloadEventSchema = z.object({
     .string()
     .regex(/^[A-Z_]+$/)
     .optional(),
+  videoHttpDiagnostics: localHttpTransferDiagnosticsSchema.optional(),
 });
 
 export type LocalCombinedDownloadEvent = z.infer<

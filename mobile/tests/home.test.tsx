@@ -81,6 +81,7 @@ const localYoutubeMetadata = {
         bitrateKbps: null,
         estimatedSize: 586796,
         protocol: null,
+        directDownload: true,
       },
     ],
     audioFormats: [
@@ -96,6 +97,7 @@ const localYoutubeMetadata = {
         bitrateKbps: 129,
         estimatedSize: 2_000_000,
         protocol: null,
+        directDownload: true,
       },
     ],
     resolutions: [360],

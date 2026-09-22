@@ -110,6 +110,82 @@ enum AudioDownloadPolicyTests {
         requestedEnd: 262143
       )
     }
+    let fullBodyVideoResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 200,
+      httpVersion: "HTTP/1.1",
+      headerFields: [
+        "Content-Type": "video/mp4",
+        "Content-Length": "586796",
+      ]
+    )!
+    guard
+      try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
+        fullBodyVideoResponse,
+        requestedStart: 0,
+        bytesAlreadyPersisted: 0,
+        kind: .video
+      ) == 586796
+    else {
+      throw TestFailure.failed("Full-body video fallback length was not recovered")
+    }
+    let oversizedFullBodyResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 200,
+      httpVersion: "HTTP/1.1",
+      headerFields: [
+        "Content-Type": "video/mp4",
+        "Content-Length": "\(MDAudioDownloadPolicy.maximumVideoBytes + 1)",
+      ]
+    )!
+    try expectFailure("VIDEO_FILE_TOO_LARGE") {
+      _ = try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
+        oversizedFullBodyResponse,
+        requestedStart: 0,
+        bytesAlreadyPersisted: 0,
+        kind: .video
+      )
+    }
+    try expectFailure("VIDEO_RANGE_NOT_SUPPORTED") {
+      _ = try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
+        fullBodyVideoResponse,
+        requestedStart: 262144,
+        bytesAlreadyPersisted: 262144,
+        kind: .video
+      )
+    }
+    let forbiddenRangeResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 403,
+      httpVersion: "HTTP/1.1",
+      headerFields: ["Content-Type": "video/mp4"]
+    )!
+    try expectFailure("VIDEO_HTTP_FORBIDDEN") {
+      _ = try MDAudioDownloadPolicy.validateVideoRangeResponse(
+        forbiddenRangeResponse,
+        requestedStart: 0,
+        requestedEnd: 262143
+      )
+    }
+    let rejectedRangeResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 416,
+      httpVersion: "HTTP/1.1",
+      headerFields: ["Content-Type": "video/mp4"]
+    )!
+    try expectFailure("VIDEO_RANGE_REJECTED") {
+      _ = try MDAudioDownloadPolicy.validateVideoRangeResponse(
+        rejectedRangeResponse,
+        requestedStart: 0,
+        requestedEnd: 262143
+      )
+    }
+    guard
+      MDAudioDownloadPolicy.rangeFailureCode(429, kind: .video) == "VIDEO_RATE_LIMITED",
+      MDAudioDownloadPolicy.rangeFailureCode(503, kind: .video) == "VIDEO_HTTP_ERROR"
+    else {
+      throw TestFailure.failed("Non-200 HTTP statuses must not enter the fallback")
+    }
     try expectFailure("VIDEO_RANGE_INVALID") {
       _ = try MDAudioDownloadPolicy.validateVideoRangeResponse(
         rangedVideoResponse,

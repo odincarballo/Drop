@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { ActionButton } from '@/components/ActionButton';
 import { Thumbnail } from '@/components/Thumbnail';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
+import type { LocalHttpTransferDiagnostics } from '@/models/onDeviceYoutube';
 import { localYoutubeError } from '@/services/onDeviceYoutube';
 import { useTheme } from '@/theme';
 import { formatDuration, formatSize } from '@/utils/format';
@@ -12,6 +13,34 @@ type Props = {
   onAnalyze: () => void;
   disabled: boolean;
 };
+
+function HttpDiagnostics({
+  value,
+  color,
+}: {
+  value: LocalHttpTransferDiagnostics | null;
+  color: string;
+}) {
+  if (!value) return null;
+  return (
+    <Text selectable style={[styles.diagnostics, { color }]}>
+      {[
+        `Primer Range solicitado: ${value.requestedRange ?? 'no disponible'}`,
+        `Primer Range efectivo: ${value.effectiveRange ?? 'ausente'}`,
+        `Primer response: HTTP ${value.statusCode ?? 'desconocido'} · modo ${value.transferMode ?? 'sin determinar'}`,
+        `Primer Content-Range: ${value.contentRange ?? 'ausente'}`,
+        `Primer Content-Length: ${value.contentLength ?? 'ausente'} · Accept-Ranges: ${value.acceptRanges ?? 'ausente'}`,
+        `Primer Content-Type: ${value.contentType ?? 'ausente'}`,
+        `Redirects del primer request: ${value.redirectCount}${value.redirectHosts.length ? ` · ${value.redirectHosts.join(' · ')}` : ''}`,
+        `Host final del primer request: ${value.finalHost ?? 'no disponible'}`,
+        `Request: Accept-Encoding=${value.acceptEncoding ?? 'ausente'}`,
+        `User-Agent=${value.userAgent ?? 'ausente'}`,
+        `Accept=${value.accept ?? 'ausente'}`,
+        `Referer=${value.refererOrigin ?? 'ausente'} · Origin=${value.origin ?? 'ausente'}`,
+      ].join('\n')}
+    </Text>
+  );
+}
 
 export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
   const { colors } = useTheme();
@@ -197,12 +226,12 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
             )}
             <Text style={{ color: colors.secondary }}>
               {selectedVideo
-                ? `Video: ${selectedVideo.resolution ?? 'Original'} · MP4 · ${selectedVideo.codec ?? 'AVC'}`
+                ? `Video: ${selectedVideo.resolution ?? 'Original'} · MP4 · ${selectedVideo.codec ?? 'AVC'} · ID ${selectedVideo.id} · protocolo ${selectedVideo.protocol ?? 'no informado'}`
                 : 'Video: no disponible'}
             </Text>
             <Text style={{ color: colors.secondary }}>
               {selectedAudio
-                ? `Audio: M4A · ${selectedAudio.codec ?? 'AAC'}`
+                ? `Audio: M4A · ${selectedAudio.codec ?? 'AAC'} · ID ${selectedAudio.id}`
                 : 'Audio: no disponible'}
             </Text>
             {combined.status === 'idle' && (
@@ -298,6 +327,10 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
                   onPress={() => void spike.shareCombined()}
                   secondary
                 />
+                <HttpDiagnostics
+                  value={combined.videoHttpDiagnostics}
+                  color={colors.secondary}
+                />
                 {combined.actionError && (
                   <Text
                     accessibilityRole="alert"
@@ -317,9 +350,15 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
               </Text>
             )}
             {combined.status === 'error' && (
-              <Text accessibilityRole="alert" style={{ color: colors.error }}>
-                {`${combined.message}\nCódigo: ${combined.code}`}
-              </Text>
+              <>
+                <Text accessibilityRole="alert" style={{ color: colors.error }}>
+                  {`${combined.message}\nCódigo: ${combined.code}`}
+                </Text>
+                <HttpDiagnostics
+                  value={combined.videoHttpDiagnostics}
+                  color={colors.secondary}
+                />
+              </>
             )}
           </View>
           <View style={[styles.audioSpike, { borderColor: colors.border }]}>
@@ -519,6 +558,10 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
                   onPress={() => void spike.shareVideo()}
                   secondary
                 />
+                <HttpDiagnostics
+                  value={video.httpDiagnostics}
+                  color={colors.secondary}
+                />
                 {video.actionError && (
                   <Text
                     accessibilityRole="alert"
@@ -538,9 +581,15 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
               </Text>
             )}
             {video.status === 'error' && (
-              <Text accessibilityRole="alert" style={{ color: colors.error }}>
-                {`${video.message}\nCódigo: ${video.code}`}
-              </Text>
+              <>
+                <Text accessibilityRole="alert" style={{ color: colors.error }}>
+                  {`${video.message}\nCódigo: ${video.code}`}
+                </Text>
+                <HttpDiagnostics
+                  value={video.httpDiagnostics}
+                  color={colors.secondary}
+                />
+              </>
             )}
           </View>
         </>

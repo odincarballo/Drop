@@ -60,9 +60,10 @@ const metadata = {
       bitrateKbps: null,
       estimatedSize: null,
       protocol: 'https',
+      directDownload: true,
     },
     {
-      id: '232',
+      id: '136',
       container: 'mp4',
       codec: 'avc1.64001f',
       resolution: '720p',
@@ -72,7 +73,22 @@ const metadata = {
       hasAudio: false,
       bitrateKbps: 900,
       estimatedSize: 12_000_000,
-      protocol: null,
+      protocol: 'https',
+      directDownload: true,
+    },
+    {
+      id: '232',
+      container: 'mp4',
+      codec: 'avc1.4d401f',
+      resolution: '720p',
+      height: 720,
+      width: 1280,
+      fps: 30,
+      hasAudio: false,
+      bitrateKbps: null,
+      estimatedSize: null,
+      protocol: 'm3u8_native',
+      directDownload: false,
     },
     {
       id: '247',
@@ -86,6 +102,7 @@ const metadata = {
       bitrateKbps: 700,
       estimatedSize: 10_000_000,
       protocol: 'https',
+      directDownload: false,
     },
   ],
   audioFormats: [
@@ -101,6 +118,7 @@ const metadata = {
       bitrateKbps: 129,
       estimatedSize: 2_000_000,
       protocol: 'https',
+      directDownload: true,
     },
   ],
   resolutions: [360, 720],
@@ -421,9 +439,40 @@ test('combined download reports both transfers, muxes, completes, and shares', a
       height: 360,
       videoCodec: 'avc1',
       audioCodec: 'mp4a.40.2',
+      videoHttpDiagnostics: {
+        requestedRange: 'bytes=0-262143',
+        effectiveRange: 'bytes=0-262143',
+        statusCode: 206,
+        contentRange: 'bytes 0-262143/586796',
+        contentLength: '262144',
+        acceptRanges: 'bytes',
+        contentType: 'video/mp4',
+        redirectCount: 0,
+        redirectHosts: [],
+        finalHost: 'rr1.googlevideo.com',
+        acceptEncoding: 'identity',
+        userAgent: 'MediaDrop test',
+        accept: '*/*',
+        transferMode: 'range',
+      },
     });
   });
   expect(screen.getByText('✓ Video con audio completado')).toBeTruthy();
+  expect(
+    screen.getByText(/Primer Range solicitado: bytes=0-262143/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/Primer Range efectivo: bytes=0-262143/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/Primer response: HTTP 206 · modo range/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/Primer Content-Range: bytes 0-262143\/586796/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/Host final del primer request: rr1\.googlevideo\.com/),
+  ).toBeTruthy();
   await fireEvent.press(
     screen.getAllByRole('button', { name: 'Compartir video' })[0]!,
   );
@@ -448,6 +497,7 @@ test('720p selection is dynamic and remains opaque to React Native', async () =>
   expect(
     screen.queryByRole('button', { name: /720p · WebM · VP9/ }),
   ).toBeNull();
+  expect(screen.queryByText(/seleccionada.*ID 232/)).toBeNull();
 
   await fireEvent.press(
     screen.getByRole('button', { name: '720p · MP4 · AVC' }),
@@ -458,6 +508,7 @@ test('720p selection is dynamic and remains opaque to React Native', async () =>
     }),
   ).toBeDisabled();
   expect(screen.getByText(/Video: 720p · MP4 · avc1\.64001f/)).toBeTruthy();
+  expect(screen.getByText(/ID 136 · protocolo https/)).toBeTruthy();
 
   await fireEvent.press(
     screen.getByRole('button', {
@@ -466,7 +517,7 @@ test('720p selection is dynamic and remains opaque to React Native', async () =>
   );
   expect(native.startCombinedDownload).toHaveBeenCalledWith(
     'a'.repeat(32),
-    '232',
+    '136',
     '140',
     754,
   );

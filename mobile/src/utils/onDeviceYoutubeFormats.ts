@@ -8,9 +8,11 @@ const HEIGHT_TOLERANCE = 16;
 function isCompatible(format: LocalYoutubeVideoFormat) {
   return (
     format.container.toLowerCase() === 'mp4' &&
+    format.directDownload &&
     !format.hasAudio &&
     format.height !== null &&
     /^(avc1|h264)/i.test(format.codec ?? '') &&
+    (format.protocol === null || format.protocol.toLowerCase() === 'https') &&
     (format.estimatedSize === null ||
       format.estimatedSize <= LOCAL_VIDEO_MAX_BYTES)
   );

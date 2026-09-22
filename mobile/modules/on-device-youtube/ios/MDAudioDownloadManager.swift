@@ -22,6 +22,100 @@ private struct MDAudioPreparationEnvelope: Decodable {
   let error: MDAudioPreparationError?
 }
 
+private struct MDHTTPTransferDiagnostics {
+  var requestedRange: String?
+  var effectiveRange: String?
+  var statusCode: Int?
+  var contentRange: String?
+  var contentLength: String?
+  var acceptRanges: String?
+  var contentType: String?
+  var redirectCount = 0
+  var redirectHosts: [String] = []
+  var finalHost: String?
+  var acceptEncoding: String?
+  var userAgent: String?
+  var accept: String?
+  var refererOrigin: String?
+  var origin: String?
+  var transferMode: String?
+
+  mutating func captureRequest(_ request: URLRequest) {
+    requestedRange = limited(request.value(forHTTPHeaderField: "Range"), maximum: 80)
+    captureEffectiveRequest(request)
+  }
+
+  mutating func captureEffectiveRequest(_ request: URLRequest) {
+    guard statusCode == nil else { return }
+    effectiveRange = limited(request.value(forHTTPHeaderField: "Range"), maximum: 80)
+    acceptEncoding = limited(
+      request.value(forHTTPHeaderField: "Accept-Encoding"), maximum: 80)
+    userAgent = limited(request.value(forHTTPHeaderField: "User-Agent"), maximum: 300)
+    accept = limited(request.value(forHTTPHeaderField: "Accept"), maximum: 300)
+    refererOrigin = sanitizedOrigin(request.value(forHTTPHeaderField: "Referer"))
+    origin = sanitizedOrigin(request.value(forHTTPHeaderField: "Origin"))
+  }
+
+  mutating func captureResponse(_ response: HTTPURLResponse) {
+    guard statusCode == nil else { return }
+    statusCode = response.statusCode
+    contentRange = limited(response.value(forHTTPHeaderField: "Content-Range"), maximum: 160)
+    contentLength = limited(response.value(forHTTPHeaderField: "Content-Length"), maximum: 40)
+    acceptRanges = limited(response.value(forHTTPHeaderField: "Accept-Ranges"), maximum: 80)
+    contentType = limited(response.value(forHTTPHeaderField: "Content-Type"), maximum: 160)
+    finalHost = limited(response.url?.host?.lowercased(), maximum: 253)
+  }
+
+  mutating func captureRedirect(_ response: HTTPURLResponse, destination: URL?) {
+    guard statusCode == nil else { return }
+    redirectCount += 1
+    let source = response.url?.host?.lowercased() ?? "unknown"
+    let target = destination?.host?.lowercased() ?? "unknown"
+    redirectHosts.append("\(response.statusCode):\(source)->\(target)")
+    if redirectHosts.count > MDAudioDownloadPolicy.maximumRedirects {
+      redirectHosts.removeFirst(redirectHosts.count - MDAudioDownloadPolicy.maximumRedirects)
+    }
+  }
+
+  func eventValue() -> [String: Any] {
+    var value: [String: Any] = [
+      "redirectCount": redirectCount,
+      "redirectHosts": redirectHosts,
+    ]
+    value["requestedRange"] = requestedRange
+    value["effectiveRange"] = effectiveRange
+    value["statusCode"] = statusCode
+    value["contentRange"] = contentRange
+    value["contentLength"] = contentLength
+    value["acceptRanges"] = acceptRanges
+    value["contentType"] = contentType
+    value["finalHost"] = finalHost
+    value["acceptEncoding"] = acceptEncoding
+    value["userAgent"] = userAgent
+    value["accept"] = accept
+    value["refererOrigin"] = refererOrigin
+    value["origin"] = origin
+    value["transferMode"] = transferMode
+    return value
+  }
+
+  private func limited(_ value: String?, maximum: Int) -> String? {
+    guard let value, !value.isEmpty else { return nil }
+    return String(value.prefix(maximum))
+  }
+
+  private func sanitizedOrigin(_ value: String?) -> String? {
+    guard
+      let value,
+      let components = URLComponents(string: value),
+      let scheme = components.scheme?.lowercased(),
+      let host = components.host?.lowercased()
+    else { return nil }
+    let port = components.port.map { ":\($0)" } ?? ""
+    return "\(scheme)://\(host)\(port)"
+  }
+}
+
 final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSessionDataDelegate {
   typealias EventSink = ([String: Any?]) -> Void
 
@@ -45,6 +139,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   private var videoPartialURL: URL?
   private var videoChunkBytesReceived: Int64 = 0
   private var videoContentRange: MDVideoContentRange?
+  private var fullBodyFallback = false
+  private var httpDiagnostics = MDHTTPTransferDiagnostics()
 
   init(emitEvent: @escaping EventSink) {
     self.emitEvent = emitEvent
@@ -218,6 +314,9 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
         videoTotalBytes = nil
         videoChunkBytesReceived = 0
         videoContentRange = nil
+        fullBodyFallback = false
+        httpDiagnostics = MDHTTPTransferDiagnostics()
+        httpDiagnostics.captureRequest(request)
       }
       redirectCount = 0
       responseValidated = false
@@ -252,6 +351,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     redirectCount += 1
     let count = redirectCount
     let kind = activeKind
+    httpDiagnostics.captureRedirect(response, destination: request.url)
     lock.unlock()
     guard
       let kind,
@@ -307,17 +407,44 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       return
     }
     do {
-      let range = try MDAudioDownloadPolicy.validateRangeResponse(
-        response,
-        requestedStart: start,
-        requestedEnd: end,
-        kind: kind
-      )
       lock.lock()
-      videoTotalBytes = range.total
-      videoContentRange = range
-      responseValidated = true
+      if let effectiveRequest = dataTask.currentRequest ?? dataTask.originalRequest {
+        httpDiagnostics.captureEffectiveRequest(effectiveRequest)
+      }
+      httpDiagnostics.captureResponse(response)
       lock.unlock()
+      if response.statusCode == 200 {
+        lock.lock()
+        let persisted = videoBytesPersisted
+        lock.unlock()
+        let expectedLength = try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
+          response,
+          requestedStart: start,
+          bytesAlreadyPersisted: persisted,
+          kind: kind
+        )
+        lock.lock()
+        videoTotalBytes = expectedLength
+        videoContentRange = nil
+        fullBodyFallback = true
+        httpDiagnostics.transferMode = "full-stream-fallback"
+        responseValidated = true
+        lock.unlock()
+      } else {
+        let range = try MDAudioDownloadPolicy.validateRangeResponse(
+          response,
+          requestedStart: start,
+          requestedEnd: end,
+          kind: kind
+        )
+        lock.lock()
+        videoTotalBytes = range.total
+        videoContentRange = range
+        fullBodyFallback = false
+        httpDiagnostics.transferMode = "range"
+        responseValidated = true
+        lock.unlock()
+      }
       completionHandler(.allow)
     } catch let failure as MDAudioDownloadFailure {
       setForcedFailure(failure.code)
@@ -510,7 +637,14 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     if completed { return }
     if usesRangeTransfer, error == nil, code == nil {
       do {
-        try finishRangeDataTask(jobID: jobID, kind: kind)
+        lock.lock()
+        let usedFullBodyFallback = fullBodyFallback
+        lock.unlock()
+        if usedFullBodyFallback {
+          try finishFullBodyDataTask(jobID: jobID, kind: kind)
+        } else {
+          try finishRangeDataTask(jobID: jobID, kind: kind)
+        }
       } catch let failure as MDAudioDownloadFailure {
         fail(jobID: jobID, code: failure.code)
       } catch {
@@ -527,6 +661,45 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
         ?? ((error as? URLError)?.code == .timedOut
           ? failureCode(kind, "AUDIO_TIMEOUT", "VIDEO_TIMEOUT")
           : failureCode(kind, "AUDIO_DOWNLOAD_FAILED", "VIDEO_DOWNLOAD_FAILED"))
+    )
+  }
+
+  private func finishFullBodyDataTask(jobID: String, kind: MDLocalDownloadKind) throws {
+    guard
+      responseValidated,
+      let descriptor,
+      let workspaceURL,
+      let partialURL = videoPartialURL
+    else {
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+      )
+    }
+    let received = videoBytesPersisted + videoChunkBytesReceived
+    try MDAudioDownloadPolicy.validateTransferredBytes(
+      received,
+      maximumBytes: kind.maximumBytes
+    )
+    if let expected = videoTotalBytes, received != expected {
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+      )
+    }
+    let fileName = MDAudioDownloadPolicy.safeFileName(
+      descriptor.fileName,
+      extension: kind.container
+    )
+    let finalURL = workspaceURL.appendingPathComponent(fileName, isDirectory: false)
+    if FileManager.default.fileExists(atPath: finalURL.path) {
+      try FileManager.default.removeItem(at: finalURL)
+    }
+    try FileManager.default.moveItem(at: partialURL, to: finalURL)
+    complete(
+      jobID: jobID,
+      kind: kind,
+      fileURL: finalURL,
+      size: received,
+      descriptor: descriptor
     )
   }
 
@@ -663,6 +836,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     }
     activeJobID = nil
     let activeSession = session
+    let diagnostics = httpDiagnostics.eventValue()
     resetLocked()
     lock.unlock()
     activeSession?.finishTasksAndInvalidate()
@@ -679,7 +853,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       progress: 1,
       fileName: fileURL.lastPathComponent,
       fileSize: size,
-      localUri: fileURL.absoluteString
+      localUri: fileURL.absoluteString,
+      httpDiagnostics: diagnostics
     )
   }
 
@@ -693,12 +868,19 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     let activeTask = task
     let activeSession = session
     let directory = workspaceURL
+    let diagnostics = httpDiagnostics.eventValue()
     resetLocked()
     lock.unlock()
     activeTask?.cancel()
     activeSession?.invalidateAndCancel()
     MDAudioDownloadPolicy.removeWorkspace(directory)
-    emit(jobID: jobID, kind: kind, status: "FAILED", errorCode: code)
+    emit(
+      jobID: jobID,
+      kind: kind,
+      status: "FAILED",
+      errorCode: code,
+      httpDiagnostics: diagnostics
+    )
   }
 
   private func resetLocked() {
@@ -718,6 +900,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     videoPartialURL = nil
     videoChunkBytesReceived = 0
     videoContentRange = nil
+    fullBodyFallback = false
+    httpDiagnostics = MDHTTPTransferDiagnostics()
   }
 
   private func failureCode(
@@ -742,7 +926,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     fileName: String? = nil,
     fileSize: Int64? = nil,
     localUri: String? = nil,
-    errorCode: String? = nil
+    errorCode: String? = nil,
+    httpDiagnostics: [String: Any]? = nil
   ) {
     var event: [String: Any?] = [
       "jobId": jobID,
@@ -760,6 +945,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     event["fileSize"] = fileSize
     event["localUri"] = localUri
     event["errorCode"] = errorCode
+    event["httpDiagnostics"] = httpDiagnostics
     DispatchQueue.main.async { [emitEvent] in emitEvent(event) }
   }
 }

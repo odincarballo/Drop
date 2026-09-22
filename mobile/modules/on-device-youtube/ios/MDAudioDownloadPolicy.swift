@@ -128,11 +128,7 @@ enum MDAudioDownloadPolicy {
     kind: MDLocalDownloadKind
   ) throws -> MDVideoContentRange {
     guard response.statusCode == 206 else {
-      throw MDAudioDownloadFailure.code(
-        response.statusCode == 404 || response.statusCode == 410
-          ? (kind == .audio ? "AUDIO_URL_EXPIRED" : "VIDEO_URL_EXPIRED")
-          : (kind == .audio ? "AUDIO_RANGE_NOT_SUPPORTED" : "VIDEO_RANGE_NOT_SUPPORTED")
-      )
+      throw MDAudioDownloadFailure.code(rangeFailureCode(response.statusCode, kind: kind))
     }
     let allowedMIMETypes =
       kind == .audio ? allowedAudioMIMETypes : allowedVideoMIMETypes
@@ -154,6 +150,41 @@ enum MDAudioDownloadPolicy {
     }
     try validateExpectedLength(range.total, maximumBytes: kind.maximumBytes)
     return range
+  }
+
+  static func validateFullBodyFallbackResponse(
+    _ response: HTTPURLResponse,
+    requestedStart: Int64,
+    bytesAlreadyPersisted: Int64,
+    kind: MDLocalDownloadKind
+  ) throws -> Int64? {
+    guard response.statusCode == 200, requestedStart == 0, bytesAlreadyPersisted == 0 else {
+      throw MDAudioDownloadFailure.code(rangeFailureCode(response.statusCode, kind: kind))
+    }
+    try validateResponse(response, kind: kind)
+    return response.expectedContentLength > 0 ? response.expectedContentLength : nil
+  }
+
+  static func rangeFailureCode(
+    _ statusCode: Int,
+    kind: MDLocalDownloadKind
+  ) -> String {
+    if statusCode == 404 || statusCode == 410 {
+      return kind == .audio ? "AUDIO_URL_EXPIRED" : "VIDEO_URL_EXPIRED"
+    }
+    if statusCode == 403 {
+      return kind == .audio ? "AUDIO_HTTP_FORBIDDEN" : "VIDEO_HTTP_FORBIDDEN"
+    }
+    if statusCode == 416 {
+      return kind == .audio ? "AUDIO_RANGE_REJECTED" : "VIDEO_RANGE_REJECTED"
+    }
+    if statusCode == 429 {
+      return kind == .audio ? "AUDIO_RATE_LIMITED" : "VIDEO_RATE_LIMITED"
+    }
+    if statusCode == 200 {
+      return kind == .audio ? "AUDIO_RANGE_NOT_SUPPORTED" : "VIDEO_RANGE_NOT_SUPPORTED"
+    }
+    return kind == .audio ? "AUDIO_HTTP_ERROR" : "VIDEO_HTTP_ERROR"
   }
 
   static func validateVideoRangeResponse(
