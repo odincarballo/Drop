@@ -72,7 +72,7 @@ export function LocalYoutubeSpikeCard({ spike, disabled }: Props) {
       </Text>
       <Text style={{ color: colors.secondary }}>
         Usa el enlace pegado arriba. El análisis y las descargas de prueba
-        ocurren en este iPhone, sin Render. Mantén MediaDrop abierta.
+        ocurren en este iPhone, sin Render. Mantén Drop abierta.
       </Text>
       <ActionButton
         label={

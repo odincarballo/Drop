@@ -165,7 +165,7 @@ test('YouTube never falls back to Render when the native engine is absent', asyn
   await render(<HomeScreen />);
   await analyzeYoutube();
   expect(
-    await screen.findByText(/Actualiza MediaDrop para analizar este enlace/),
+    await screen.findByText(/Actualiza Drop para analizar este enlace/),
   ).toBeTruthy();
   expect(analyzeMedia).not.toHaveBeenCalled();
   expect(createDownloadJob).not.toHaveBeenCalled();

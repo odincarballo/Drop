@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "MediaDrop",
+    "name": "Drop",
     "slug": "mediadrop",
     "version": "0.6.0",
     "scheme": "mediadrop",
@@ -12,7 +12,7 @@
       "bundleIdentifier": "com.odincarballo.mediadrop",
       "supportsTablet": false,
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "MediaDrop se conecta al backend de desarrollo en tu red local."
+        "NSLocalNetworkUsageDescription": "Drop se conecta al backend de desarrollo en tu red local."
       }
     },
     "plugins": [

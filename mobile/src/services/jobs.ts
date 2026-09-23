@@ -62,7 +62,7 @@ export async function downloadJobFile(
   if (!token) {
     throw new ApiError(
       'AUTH_REQUIRED',
-      'Configura el token de acceso de MediaDrop.',
+      'Configura el token de acceso de Drop.',
     );
   }
   const task = File.createDownloadTask(apiUrl(job.downloadUrl), destination, {
@@ -100,7 +100,7 @@ export async function shareLocalFile(uri: string): Promise<void> {
     );
   }
   await Sharing.shareAsync(uri, {
-    dialogTitle: 'Compartir archivo de MediaDrop',
+    dialogTitle: 'Compartir archivo de Drop',
   });
 }
 

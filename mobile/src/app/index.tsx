@@ -80,7 +80,7 @@ export default function HomeScreen() {
               accessibilityRole="header"
               style={[styles.title, { color: colors.text }]}
             >
-              MediaDrop
+              Drop
             </Text>
             <Text style={[styles.subtitle, { color: colors.secondary }]}>
               Descarga tus archivos multimedia

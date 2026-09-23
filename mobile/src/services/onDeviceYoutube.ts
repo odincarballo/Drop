@@ -63,7 +63,7 @@ export async function analyzeYoutubeOnDevice(url: string) {
   const native = engine();
   if (!native)
     throw new Error(
-      'Esta versión no incluye el motor de YouTube en el iPhone. Actualiza MediaDrop para analizar este enlace.',
+      'Esta versión no incluye el motor de YouTube en el iPhone. Actualiza Drop para analizar este enlace.',
     );
   const raw = await native.analyze(url.trim());
   if (raw.length > 512 * 1024)

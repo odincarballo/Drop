@@ -11,12 +11,12 @@ export class ApiError extends Error {
 }
 
 const messages = {
-  AUTH_REQUIRED: 'Configura el token de acceso de MediaDrop.',
+  AUTH_REQUIRED: 'Configura el token de acceso de Drop.',
   AUTH_INVALID: 'El token de acceso no es válido. Revisa la configuración.',
   RATE_LIMITED: 'Se hicieron demasiadas solicitudes. Espera un momento.',
   SERVER_BUSY: 'El servidor está ocupado. Inténtalo de nuevo más tarde.',
   PROCESSING_BUSY:
-    'MediaDrop está procesando otra descarga. Inténtalo nuevamente en unos momentos.',
+    'Drop está procesando otra descarga. Inténtalo nuevamente en unos momentos.',
   INVALID_REQUEST:
     'El enlace no es válido. Revisa la URL e inténtalo de nuevo.',
   UNSAFE_URL:
