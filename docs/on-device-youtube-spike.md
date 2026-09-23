@@ -90,35 +90,13 @@ No se incluye ahora ningún framework FFmpeg ni una dependencia FFmpegKit abando
   contienen versión, host sin query, conteos, tiempo y RAM residente al terminar;
   nunca tokens, cookies ni tracebacks.
 
-## Compilación reproducible del experimento
+## Compilación desde checkout limpio
 
-Requiere el proyecto nativo existente y su Personal Team configurado. `ios/` ya
-estaba excluido de Git: el cambio nativo específico es reproducible con el script
-Ruby siguiente, que añade una sola fase y no cambia firma ni bundle identifier.
-
-Desde `mobile/`:
-
-```bash
-node scripts/prepare_on_device_youtube.mjs
-ruby scripts/configure_on_device_youtube.rb
-env RUBYOPT="-r$PWD/scripts/cocoapods_compat.rb" \
-  EXPO_USE_PRECOMPILED_MODULES=0 \
-  PATH="/Users/odincarballo/.gem/ruby/2.6.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-  pod install --project-directory=ios
-EXPO_USE_PRECOMPILED_MODULES=0 EXPO_PUBLIC_APP_ENV=production NODE_ENV=production \
-  xcodebuild -workspace ios/MediaDrop.xcworkspace -scheme MediaDrop \
-  -configuration Release -destination 'generic/platform=iOS' \
-  -derivedDataPath ios/build/on-device-spike build
-```
-
-`.env.production` debe seguir indicando `https://mediadrop-api.onrender.com`.
-No debe contener el token. No usar `prebuild --clean`.
-Los binarios, wheels, dependencias descargadas y builds están ignorados por Git.
-El directorio DerivedData del experimento es distinto del de la Release 0.6.
-Como `ios/` ya estaba ignorado en el repositorio, antes de volver a `main` se debe
-ejecutar `ruby scripts/remove_on_device_youtube.rb`; después se cambia de rama y
-se ejecuta el `pod install` normal. Esto elimina la fase nativa y restaura el modo
-de Pods anterior. Al regresar a la rama experimental se repite la preparación.
+El procedimiento de Release actual se documenta en
+[`reproducible-ios-release.md`](reproducible-ios-release.md). No requiere un
+`mobile/ios/` histórico: Expo genera el proyecto, el script versionado localiza
+el target por el bundle ID de `app.json`, y Bundler fija CocoaPods y `xcodeproj`.
+Las dependencias descargadas, Pods y builds permanecen ignorados por Git.
 
 ## Verificación
 

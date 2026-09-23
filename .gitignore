@@ -24,6 +24,8 @@ htmlcov/
 backend/.tmp/
 mobile/ios/
 mobile/android/
+mobile/.bundle/
+mobile/vendor/bundle/
 
 # Secrets, signing identities, and provisioning material
 *.pem
