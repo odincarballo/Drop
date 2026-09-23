@@ -18,6 +18,9 @@ si falta, e instala las gemas de `Gemfile.lock` bajo `mobile/vendor/bundle`.
 Después genera `ios/` con Expo, configura el target de aplicación que corresponda
 al bundle ID versionado, instala Pods con `bundle exec` y compila Release ARM64
 con un DerivedData nuevo en `ios/build/clean-release`.
+La instalación de Pods usa su propio `mobile/.cocoapods` y desactiva la caché
+compartida de frameworks de React Native; no se apoya en descargas previas de
+la Mac.
 
 Los valores públicos de producción se leen de `.env.production.example`:
 `EXPO_PUBLIC_APP_ENV=production`, la URL HTTPS del backend para recursos directos,

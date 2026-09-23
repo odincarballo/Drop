@@ -34,6 +34,7 @@ EXPO_USE_PRECOMPILED_MODULES=0 npx expo prebuild --platform ios --no-install
 bundle _2.4.22_ exec ruby scripts/configure_on_device_youtube.rb
 
 RUBYOPT="-rbundler/setup -r$PWD/scripts/cocoapods_compat.rb" \
+  CP_HOME_DIR="$PWD/.cocoapods" RCT_SKIP_CACHES=1 \
   EXPO_USE_PRECOMPILED_MODULES=0 \
   bundle _2.4.22_ exec pod install --project-directory=ios
 
