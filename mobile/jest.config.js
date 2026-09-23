@@ -4,4 +4,5 @@ module.exports = {
   moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
   clearMocks: true,
   restoreMocks: true,
+  setupFiles: ['<rootDir>/tests/jest-setup.ts'],
 };

@@ -23,8 +23,6 @@ test('lets the user save the private token once without displaying it later', as
     token,
     expect.any(Object),
   );
-  expect(
-    await screen.findByText('Token guardado de forma segura'),
-  ).toBeTruthy();
+  expect(await screen.findByText('Configurado ✓')).toBeTruthy();
   expect(screen.queryByDisplayValue(token)).toBeNull();
 });

@@ -1,20 +1,22 @@
 import { useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { useRouter, type Href } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionButton } from '@/components/ActionButton';
-import { BackendAccessCard } from '@/components/BackendAccessCard';
 import { DownloadOptions } from '@/components/DownloadOptions';
 import { DownloadStatusCard } from '@/components/DownloadStatusCard';
 import { MetadataCard } from '@/components/MetadataCard';
-import { LocalYoutubeSpikeCard } from '@/components/LocalYoutubeSpikeCard';
+import { LocalYoutubeDiagnosticsCard } from '@/components/LocalYoutubeDiagnosticsCard';
 import { LocalYoutubeMainCard } from '@/components/LocalYoutubeMainCard';
 import { config } from '@/config';
 import { useMediaAnalysis } from '@/hooks/useMediaAnalysis';
@@ -27,6 +29,7 @@ import {
 import { useTheme } from '@/theme';
 
 export default function HomeScreen() {
+  const router = useRouter();
   const { colors } = useTheme();
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const spike = useLocalYoutubeSpike();
@@ -53,6 +56,11 @@ export default function HomeScreen() {
     updateUrl(value);
   }
 
+  function newDownload() {
+    changeUrl('');
+    setShowTechnicalDetails(false);
+  }
+
   async function runAnalysis() {
     if (download.isActive || spike.isBusy) return;
     download.reset();
@@ -76,21 +84,33 @@ export default function HomeScreen() {
           automaticallyAdjustKeyboardInsets={false}
         >
           <View style={styles.header}>
-            <Text
-              accessibilityRole="header"
-              style={[styles.title, { color: colors.text }]}
-            >
-              Drop
-            </Text>
+            <View style={styles.headerRow}>
+              <Text
+                accessibilityRole="header"
+                style={[styles.title, { color: colors.text }]}
+              >
+                Drop
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Ajustes"
+                onPress={() => router.push('/settings' as Href)}
+                style={styles.settingsButton}
+              >
+                <SymbolView
+                  name="gearshape"
+                  type="monochrome"
+                  size={24}
+                  tintColor={colors.text}
+                />
+              </Pressable>
+            </View>
             <Text style={[styles.subtitle, { color: colors.secondary }]}>
-              Descarga tus archivos multimedia
+              Descarga archivos multimedia
             </Text>
           </View>
-          <BackendAccessCard />
           <View style={styles.composer}>
-            <Text style={[styles.label, { color: colors.text }]}>
-              Enlace del recurso
-            </Text>
+            <Text style={[styles.label, { color: colors.text }]}>Enlace</Text>
             <View style={styles.inputRow}>
               <TextInput
                 accessibilityLabel="URL del recurso multimedia"
@@ -152,29 +172,44 @@ export default function HomeScreen() {
               onPress={() => void runAnalysis()}
             />
             <Text style={[styles.notice, { color: colors.secondary }]}>
-              Utiliza únicamente recursos autorizados.
+              Utiliza únicamente contenido que tengas permiso para descargar.
             </Text>
           </View>
           {localYoutube && spike.state.status !== 'idle' && (
-            <LocalYoutubeMainCard spike={spike} disabled={isBusy} />
+            <LocalYoutubeMainCard
+              spike={spike}
+              disabled={isBusy}
+              onNewDownload={newDownload}
+            />
           )}
-          {localYoutube && hasLocalYoutubeEngine() && (
-            <>
-              <ActionButton
-                label={
-                  showTechnicalDetails
-                    ? 'Ocultar detalles técnicos'
-                    : 'Detalles técnicos'
-                }
-                onPress={() => setShowTechnicalDetails((value) => !value)}
-                secondary
-              />
-              {showTechnicalDetails && (
-                <LocalYoutubeSpikeCard spike={spike} disabled={isBusy} />
-              )}
-            </>
+          {localYoutube &&
+            hasLocalYoutubeEngine() &&
+            spike.state.status !== 'idle' && (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showTechnicalDetails
+                      ? 'Ocultar detalles técnicos'
+                      : 'Detalles técnicos'
+                  }
+                  onPress={() => setShowTechnicalDetails((value) => !value)}
+                  style={styles.technicalToggle}
+                >
+                  <Text style={{ color: colors.secondary }}>
+                    {showTechnicalDetails
+                      ? 'Detalles técnicos ⌄'
+                      : 'Detalles técnicos ›'}
+                  </Text>
+                </Pressable>
+                {showTechnicalDetails && (
+                  <LocalYoutubeDiagnosticsCard spike={spike} />
+                )}
+              </>
+            )}
+          {!localYoutube && state.status === 'success' && (
+            <MetadataCard state={state} />
           )}
-          {!localYoutube && <MetadataCard state={state} />}
           {!localYoutube &&
             state.status === 'success' &&
             download.state.status !== 'completed' &&
@@ -194,7 +229,7 @@ export default function HomeScreen() {
               state={download.state}
               onCancel={() => void download.cancel()}
               onShare={() => void download.share()}
-              onReset={download.reset}
+              onReset={newDownload}
             />
           )}
         </ScrollView>
@@ -209,14 +244,25 @@ const styles = StyleSheet.create({
   page: {
     flexGrow: 1,
     paddingHorizontal: 22,
-    paddingTop: 26,
-    paddingBottom: 18,
-    gap: 28,
+    paddingTop: 18,
+    paddingBottom: 30,
+    gap: 22,
   },
-  header: { gap: 8 },
-  title: { fontSize: 36, fontWeight: '700', letterSpacing: -1.2 },
-  subtitle: { fontSize: 16, lineHeight: 23 },
-  composer: { gap: 14 },
+  header: { gap: 3 },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  settingsButton: {
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  title: { fontSize: 34, fontWeight: '700', letterSpacing: -1.2 },
+  subtitle: { fontSize: 15, lineHeight: 22 },
+  composer: { gap: 12 },
   label: { fontSize: 15, fontWeight: '600' },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   input: {
@@ -231,4 +277,9 @@ const styles = StyleSheet.create({
   error: { padding: 14, borderRadius: 14 },
   errorText: { fontSize: 14, lineHeight: 21 },
   notice: { fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  technicalToggle: {
+    minHeight: 44,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+  },
 });

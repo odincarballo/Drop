@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { ActionButton } from '@/components/ActionButton';
+import { CompletedFileActions } from '@/components/CompletedFileActions';
 import type { DownloadState } from '@/hooks/useMediaDownload';
 import { useTheme } from '@/theme';
 import { formatSize } from '@/utils/format';
@@ -35,9 +36,11 @@ export function DownloadStatusCard({
         >
           ✓ Descarga completada
         </Text>
-        <Text style={[styles.fileName, { color: colors.text }]}>
-          {state.job.fileName ?? 'Archivo multimedia'}
-        </Text>
+        {state.job.fileName && (
+          <Text style={[styles.fileName, { color: colors.text }]}>
+            {state.job.fileName}
+          </Text>
+        )}
         <Text style={[styles.detail, { color: colors.secondary }]}>
           {formatSize(state.localSize)}
         </Text>
@@ -49,8 +52,12 @@ export function DownloadStatusCard({
             {state.actionError}
           </Text>
         )}
-        <ActionButton label="Compartir" onPress={onShare} />
-        <ActionButton label="Nueva descarga" secondary onPress={onReset} />
+        <CompletedFileActions
+          key={state.localUri}
+          uri={state.localUri}
+          onMoreOptions={onShare}
+          onNewDownload={onReset}
+        />
       </View>
     );
   }

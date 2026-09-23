@@ -2,14 +2,25 @@ import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { useTheme } from '@/theme';
+import { ThemeProvider, useTheme } from '@/theme';
 
-export default function RootLayout() {
-  const { isDark } = useTheme();
+function ThemedRoutes() {
+  const { isDark, ready } = useTheme();
+  if (!ready) return null;
   return (
-    <SafeAreaProvider>
+    <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <Slot />
+    </>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <ThemedRoutes />
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }

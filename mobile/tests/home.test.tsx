@@ -16,6 +16,7 @@ import {
 import { demoMedia, youtubeMedia } from './fixtures/media';
 
 jest.mock('@/services/media', () => ({ analyzeMedia: jest.fn() }));
+jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/jobs', () => ({
   createDownloadJob: jest.fn(),
@@ -159,6 +160,27 @@ test('YouTube uses the on-device engine and never calls Render', async () => {
     'https://www.youtube.com/watch?v=AWGPaFraPN4',
   );
   expect(analyzeMedia).not.toHaveBeenCalled();
+});
+
+test('technical details show diagnostics without laboratory controls', async () => {
+  const native = localYoutubeNativeEngine();
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  expect(await screen.findByText('YouTube local')).toBeTruthy();
+  expect(screen.getByText('Modo de descarga')).toBeTruthy();
+  expect(screen.queryByText(/CPython \/ QuickJS-NG/)).toBeNull();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Detalles técnicos' }),
+  );
+  expect(screen.getByText(/CPython \/ QuickJS-NG/)).toBeTruthy();
+  expect(screen.getByText(/ID: AWGPaFraPN4/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Probar EJS/ })).toBeNull();
+  expect(
+    screen.queryByRole('button', { name: /Descargar .* en este iPhone/ }),
+  ).toBeNull();
+  expect(screen.queryByText('Resolución de prueba')).toBeNull();
+  expect(native.testEjsFixture).not.toHaveBeenCalled();
 });
 
 test('YouTube never falls back to Render when the native engine is absent', async () => {
@@ -318,8 +340,8 @@ test('normal YouTube progress, cancellation, audio-only and sharing stay on-devi
       localUri: 'file:///cache/audio.m4a',
     }),
   );
-  expect(screen.getByText(/✓ Audio completado/)).toBeTruthy();
-  await fireEvent.press(screen.getByRole('button', { name: 'Compartir' }));
+  expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
   expect(shareLocalFile).toHaveBeenCalledWith('file:///cache/audio.m4a');
   expect(createDownloadJob).not.toHaveBeenCalled();
   await fireEvent.changeText(
@@ -327,7 +349,7 @@ test('normal YouTube progress, cancellation, audio-only and sharing stay on-devi
     'https://example.com/video.mp4',
   );
   expect(deleteLocalFile).toHaveBeenCalledWith('file:///cache/audio.m4a');
-  expect(screen.queryByText(/✓ Audio completado/)).toBeNull();
+  expect(screen.queryByText('✓ Descarga completada')).toBeNull();
 });
 
 test('unknown local stream sizes remain downloadable', async () => {
@@ -501,7 +523,7 @@ test('direct file downloads to iPhone storage and can be shared', async () => {
     },
     expect.any(AbortSignal),
   );
-  await fireEvent.press(screen.getByRole('button', { name: 'Compartir' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
   expect(shareLocalFile).toHaveBeenCalledWith('file:///cache/clip.mp4');
 });
 
@@ -546,6 +568,7 @@ test('YouTube offers real resolution, automatic audio, M4A and MP3 output', asyn
   );
 
   await fireEvent.press(screen.getByRole('button', { name: 'Nueva descarga' }));
+  await analyzeExample();
   await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
   expect(screen.getByRole('radio', { name: 'M4A' })).toBeChecked();
   await fireEvent.press(screen.getByRole('radio', { name: 'MP3' }));
@@ -644,10 +667,10 @@ test('nullable fields and empty formats remain usable', async () => {
   });
   await render(<HomeScreen />);
   await analyzeExample();
-  expect(screen.getByText('Sin título')).toBeTruthy();
-  expect(screen.getByText('Miniatura no disponible')).toBeTruthy();
-  expect(screen.getByText(/Duración desconocida/)).toBeTruthy();
-  expect(screen.getByText('Fuente: Fuente desconocida')).toBeTruthy();
+  expect(screen.queryByText('Sin título')).toBeNull();
+  expect(screen.queryByText('Miniatura no disponible')).toBeNull();
+  expect(screen.queryByText(/Duración desconocida/)).toBeNull();
+  expect(screen.queryByText('Fuente: Fuente desconocida')).toBeNull();
   expect(
     screen.getByText('No hay formatos de video disponibles.'),
   ).toBeTruthy();

@@ -246,9 +246,9 @@ export function DownloadOptions({
 }
 
 const styles = StyleSheet.create({
-  sections: { gap: 26 },
-  options: { gap: 10 },
-  heading: { fontSize: 18, fontWeight: '600', marginBottom: 4 },
+  sections: { gap: 18 },
+  options: { gap: 8 },
+  heading: { fontSize: 16, fontWeight: '600', marginBottom: 2 },
   secondary: { fontSize: 14, lineHeight: 21 },
   notice: { fontSize: 12, textAlign: 'center', lineHeight: 18 },
 });

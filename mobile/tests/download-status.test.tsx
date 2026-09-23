@@ -58,7 +58,7 @@ test('shows completed filename and actions', async () => {
   );
   expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
   expect(screen.getByText('clip.mp4')).toBeTruthy();
-  await fireEvent.press(screen.getByRole('button', { name: 'Compartir' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Nueva descarga' }));
   expect(share).toHaveBeenCalledTimes(1);
   expect(reset).toHaveBeenCalledTimes(1);

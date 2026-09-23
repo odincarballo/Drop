@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { ActionButton } from '@/components/ActionButton';
-import { SelectionOption } from '@/components/SelectionOption';
+import { ChoiceChip } from '@/components/ChoiceChip';
+import { CompletedFileActions } from '@/components/CompletedFileActions';
 import { Thumbnail } from '@/components/Thumbnail';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
 import { localYoutubeError } from '@/services/onDeviceYoutube';
@@ -16,7 +17,6 @@ import {
 
 type Mode = 'VIDEO_AUDIO' | 'VIDEO_ONLY' | 'AUDIO_ONLY';
 type Spike = ReturnType<typeof useLocalYoutubeSpike>;
-
 const modes: { value: Mode; label: string }[] = [
   { value: 'VIDEO_AUDIO', label: 'Video + audio' },
   { value: 'VIDEO_ONLY', label: 'Solo video' },
@@ -44,8 +44,6 @@ function downloadFeedback(spike: Spike, mode: Mode) {
       return `Descargando audio… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
     if (state.status === 'muxing')
       return `Combinando…${state.progress === null ? '' : ` ${Math.round(state.progress * 100)} %`}`;
-    if (state.status === 'completed')
-      return `✓ Video con audio completado · ${state.fileName} · ${formatSize(state.fileSize)}`;
     if (state.status === 'error') return state.message;
     if (state.status === 'cancelled') return 'Descarga cancelada.';
   } else {
@@ -53,8 +51,6 @@ function downloadFeedback(spike: Spike, mode: Mode) {
     if (state.status === 'preparing') return 'Preparando…';
     if (state.status === 'downloading')
       return `Descargando ${mode === 'VIDEO_ONLY' ? 'video' : 'audio'}… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
-    if (state.status === 'completed')
-      return `✓ ${mode === 'VIDEO_ONLY' ? 'Video' : 'Audio'} completado · ${state.fileName} · ${formatSize(state.fileSize)}`;
     if (state.status === 'error') return state.message;
     if (state.status === 'cancelled') return 'Descarga cancelada.';
   }
@@ -64,9 +60,11 @@ function downloadFeedback(spike: Spike, mode: Mode) {
 export function LocalYoutubeMainCard({
   spike,
   disabled,
+  onNewDownload,
 }: {
   spike: Spike;
   disabled: boolean;
+  onNewDownload: () => void;
 }) {
   const { colors } = useTheme();
   const [requestedMode, setRequestedMode] = useState<Mode | null>(null);
@@ -89,18 +87,19 @@ export function LocalYoutubeMainCard({
   );
   const hasVideo = Boolean(selectedVideo);
   const hasAudio = Boolean(selectedAudio);
-  const mode =
-    requestedMode ??
-    (hasVideo && hasAudio && metadata?.duration
-      ? 'VIDEO_AUDIO'
-      : hasVideo
-        ? 'VIDEO_ONLY'
-        : 'AUDIO_ONLY');
   const modeAvailable = {
     VIDEO_AUDIO: hasVideo && hasAudio && Boolean(metadata?.duration),
     VIDEO_ONLY: hasVideo,
     AUDIO_ONLY: hasAudio,
   };
+  const mode: Mode =
+    requestedMode && modeAvailable[requestedMode]
+      ? requestedMode
+      : modeAvailable.VIDEO_AUDIO
+        ? 'VIDEO_AUDIO'
+        : modeAvailable.VIDEO_ONLY
+          ? 'VIDEO_ONLY'
+          : 'AUDIO_ONLY';
   const estimatedSize =
     mode === 'AUDIO_ONLY'
       ? (selectedAudio?.estimatedSize ?? null)
@@ -146,13 +145,28 @@ export function LocalYoutubeMainCard({
     else void spike.shareAudio();
   }
 
+  const completion = activeState.status === 'completed' ? activeState : null;
+  const completionDetails = completion
+    ? [
+        formatSize(completion.fileSize),
+        mode === 'AUDIO_ONLY' ? 'M4A' : 'MP4',
+        'height' in completion && completion.height
+          ? `${completion.height}p`
+          : null,
+        'durationSeconds' in completion &&
+        Number.isFinite(completion.durationSeconds)
+          ? formatDuration(completion.durationSeconds)
+          : metadata?.duration
+            ? formatDuration(metadata.duration)
+            : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : null;
+
+  if (spike.state.status === 'idle') return null;
   return (
-    <View
-      style={[
-        styles.card,
-        { backgroundColor: colors.surface, borderColor: colors.border },
-      ]}
-    >
+    <View style={[styles.section, { borderColor: colors.border }]}>
       {spike.state.status === 'loading' && (
         <>
           <Text style={{ color: colors.secondary }}>
@@ -177,108 +191,154 @@ export function LocalYoutubeMainCard({
       )}
       {metadata && (
         <>
-          <Thumbnail key={metadata.id} uri={metadata.thumbnail} />
+          {metadata.thumbnail && (
+            <Thumbnail key={metadata.id} uri={metadata.thumbnail} />
+          )}
           <Text
             accessibilityRole="header"
             style={[styles.title, { color: colors.text }]}
           >
             {metadata.title}
           </Text>
-          <Text style={{ color: colors.secondary }}>
-            {formatDuration(metadata.duration)} · YouTube · análisis en este
-            iPhone
-          </Text>
-          <Text style={[styles.heading, { color: colors.text }]}>
-            Calidad de video
-          </Text>
-          {qualities.length === 0 && (
+          {metadata.duration != null && (
             <Text style={{ color: colors.secondary }}>
-              No hay video MP4/H.264 directo compatible en 360p o 720p.
+              {formatDuration(metadata.duration)}
             </Text>
           )}
-          {qualities.map(({ format, withinLimit }) => (
-            <SelectionOption
-              key={format.id}
-              label={format.resolution ?? `${format.height}p`}
-              detail={
-                withinLimit
-                  ? `MP4 · H.264${format.estimatedSize === null ? ' · Tamaño no disponible' : ` · ~${formatSize(format.estimatedSize)}`}`
-                  : 'Esta calidad supera el límite actual de video de 50 MiB.'
-              }
-              selected={format.id === spike.selectedVideoFormatId}
-              onPress={() => spike.selectVideoFormat(format.id)}
-              disabled={disabled || !withinLimit}
-            />
-          ))}
-          <Text style={[styles.heading, { color: colors.text }]}>
-            Modo de descarga
-          </Text>
-          {modes.map(({ value, label }) => (
-            <SelectionOption
-              key={value}
-              label={label}
-              selected={mode === value}
-              onPress={() => setRequestedMode(value)}
-              disabled={disabled || !modeAvailable[value]}
-            />
-          ))}
-          {!hasAudio && (
-            <Text style={{ color: colors.secondary }}>
-              {audioOverLimit
-                ? 'El audio supera el límite actual de 25 MiB.'
-                : 'No hay audio M4A/AAC directo compatible.'}
-            </Text>
-          )}
-          {!hasVideo && qualities.some((choice) => !choice.withinLimit) && (
-            <Text style={{ color: colors.secondary }}>
-              El video disponible supera el límite actual de 50 MiB.
-            </Text>
-          )}
-          {mode === 'VIDEO_AUDIO' && !metadata.duration && (
-            <Text style={{ color: colors.secondary }}>
-              No se puede combinar sin una duración válida del video.
-            </Text>
-          )}
-          <Text style={{ color: colors.secondary }}>
-            {estimatedSize === null
-              ? 'Tamaño no disponible'
-              : `Tamaño estimado: ~${formatSize(estimatedSize)}`}
-            {' · Límites por pista: video 50 MiB, audio 25 MiB'}
-          </Text>
-          <ActionButton
-            label="Descargar"
-            onPress={startDownload}
-            disabled={disabled || !modeAvailable[mode]}
-          />
-          {feedback && (
-            <Text
-              accessibilityRole={
-                activeState.status === 'error' ? 'alert' : undefined
-              }
-              style={{
-                color:
-                  activeState.status === 'error'
-                    ? colors.error
-                    : colors.secondary,
-              }}
-            >
-              {feedback}
-            </Text>
-          )}
-          {isDownloading && (
-            <ActionButton
-              label="Cancelar descarga"
-              onPress={cancelDownload}
-              secondary
-            />
-          )}
-          {activeState.status === 'completed' && (
-            <ActionButton label="Compartir" onPress={shareDownload} secondary />
-          )}
-          {actionError && (
-            <Text accessibilityRole="alert" style={{ color: colors.error }}>
-              {actionError}
-            </Text>
+          {completion ? (
+            <>
+              <Text
+                accessibilityRole="header"
+                style={[styles.success, { color: colors.text }]}
+              >
+                ✓ Descarga completada
+              </Text>
+              <Text style={[styles.fileName, { color: colors.text }]}>
+                {completion.fileName}
+              </Text>
+              {completionDetails && (
+                <Text style={{ color: colors.secondary }}>
+                  {completionDetails}
+                </Text>
+              )}
+              {actionError && (
+                <Text accessibilityRole="alert" style={{ color: colors.error }}>
+                  {actionError}
+                </Text>
+              )}
+              <CompletedFileActions
+                key={completion.localUri}
+                uri={completion.localUri}
+                onMoreOptions={shareDownload}
+                onNewDownload={onNewDownload}
+              />
+            </>
+          ) : (
+            <>
+              {qualities.length > 0 && (
+                <>
+                  <Text style={[styles.heading, { color: colors.text }]}>
+                    Calidad
+                  </Text>
+                  <View
+                    accessibilityRole="radiogroup"
+                    accessibilityLabel="Calidad de video"
+                    style={styles.chips}
+                  >
+                    {qualities.map(({ format, withinLimit }) => (
+                      <ChoiceChip
+                        key={format.id}
+                        label={format.resolution ?? `${format.height}p`}
+                        detail={
+                          withinLimit
+                            ? format.estimatedSize == null
+                              ? undefined
+                              : `~${formatSize(format.estimatedSize)}`
+                            : 'Supera 50 MiB'
+                        }
+                        selected={format.id === spike.selectedVideoFormatId}
+                        onPress={() => spike.selectVideoFormat(format.id)}
+                        disabled={disabled || !withinLimit}
+                      />
+                    ))}
+                  </View>
+                </>
+              )}
+              <Text style={[styles.heading, { color: colors.text }]}>
+                Modo de descarga
+              </Text>
+              <View
+                accessibilityRole="radiogroup"
+                accessibilityLabel="Modo de descarga"
+                style={styles.chips}
+              >
+                {modes
+                  .filter(({ value }) => modeAvailable[value])
+                  .map(({ value, label }) => (
+                    <ChoiceChip
+                      key={value}
+                      label={label}
+                      selected={mode === value}
+                      onPress={() => setRequestedMode(value)}
+                      disabled={disabled}
+                    />
+                  ))}
+              </View>
+              {!hasAudio && (
+                <Text style={{ color: colors.secondary }}>
+                  {audioOverLimit
+                    ? 'El audio supera el límite actual de 25 MiB.'
+                    : 'No hay audio M4A/AAC directo compatible.'}
+                </Text>
+              )}
+              {!hasVideo && qualities.some((choice) => !choice.withinLimit) && (
+                <Text style={{ color: colors.secondary }}>
+                  Esta calidad supera el límite actual de video de 50 MiB.
+                </Text>
+              )}
+              {hasVideo && hasAudio && !metadata.duration && (
+                <Text style={{ color: colors.secondary }}>
+                  No se puede combinar sin una duración válida.
+                </Text>
+              )}
+              <View style={styles.sizeRow}>
+                <Text style={{ color: colors.secondary }}>
+                  Tamaño aproximado
+                </Text>
+                <Text style={{ color: colors.text }}>
+                  {estimatedSize == null
+                    ? 'Tamaño no disponible'
+                    : `~${formatSize(estimatedSize)}`}
+                </Text>
+              </View>
+              <ActionButton
+                label="Descargar"
+                onPress={startDownload}
+                disabled={disabled || !modeAvailable[mode]}
+              />
+              {feedback && (
+                <Text
+                  accessibilityRole={
+                    activeState.status === 'error' ? 'alert' : undefined
+                  }
+                  style={{
+                    color:
+                      activeState.status === 'error'
+                        ? colors.error
+                        : colors.secondary,
+                  }}
+                >
+                  {feedback}
+                </Text>
+              )}
+              {isDownloading && (
+                <ActionButton
+                  label="Cancelar descarga"
+                  onPress={cancelDownload}
+                  secondary
+                />
+              )}
+            </>
           )}
         </>
       )}
@@ -287,7 +347,16 @@ export function LocalYoutubeMainCard({
 }
 
 const styles = StyleSheet.create({
-  card: { padding: 18, borderRadius: 20, borderWidth: 1, gap: 12 },
+  section: { borderTopWidth: 1, paddingTop: 20, gap: 12 },
   title: { fontSize: 21, lineHeight: 28, fontWeight: '600' },
-  heading: { fontSize: 18, lineHeight: 25, fontWeight: '600', marginTop: 4 },
+  heading: { fontSize: 16, lineHeight: 22, fontWeight: '600', marginTop: 4 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  sizeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  success: { fontSize: 20, fontWeight: '700', marginTop: 4 },
+  fileName: { fontSize: 15, fontWeight: '600' },
 });

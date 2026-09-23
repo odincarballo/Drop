@@ -99,12 +99,46 @@ export async function shareLocalFile(uri: string): Promise<void> {
       'La hoja de compartir no está disponible en este dispositivo.',
     );
   }
-  await Sharing.shareAsync(uri, {
-    dialogTitle: 'Compartir archivo de Drop',
-  });
+  await withLocalFileLease(uri, () =>
+    Sharing.shareAsync(uri, { dialogTitle: 'Compartir archivo de Drop' }),
+  );
+}
+
+const activeFileUses = new Map<string, number>();
+const pendingRemoval = new Set<string>();
+
+function removeLocalFile(uri: string): void {
+  const file = new File(uri);
+  if (file.exists) file.delete();
+}
+
+export async function withLocalFileLease<T>(
+  uri: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  activeFileUses.set(uri, (activeFileUses.get(uri) ?? 0) + 1);
+  try {
+    return await operation();
+  } finally {
+    const remaining = (activeFileUses.get(uri) ?? 1) - 1;
+    if (remaining > 0) activeFileUses.set(uri, remaining);
+    else {
+      activeFileUses.delete(uri);
+      if (pendingRemoval.delete(uri)) {
+        try {
+          removeLocalFile(uri);
+        } catch {
+          // Cleanup must not turn a completed export into an error.
+        }
+      }
+    }
+  }
 }
 
 export function deleteLocalFile(uri: string): void {
-  const file = new File(uri);
-  if (file.exists) file.delete();
+  if (activeFileUses.has(uri)) {
+    pendingRemoval.add(uri);
+    return;
+  }
+  removeLocalFile(uri);
 }

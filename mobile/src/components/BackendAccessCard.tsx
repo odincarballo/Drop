@@ -69,7 +69,7 @@ export function BackendAccessCard() {
         { backgroundColor: colors.surface, borderColor: colors.border },
       ]}
     >
-      <Text style={[styles.title, { color: colors.text }]}>Acceso privado</Text>
+      <Text style={[styles.title, { color: colors.text }]}>Token de Drop</Text>
       {state.status === 'loading' && (
         <Text style={[styles.detail, { color: colors.secondary }]}>
           Comprobando…
@@ -78,7 +78,7 @@ export function BackendAccessCard() {
       {state.status === 'ready' && state.configured && !state.editing && (
         <>
           <Text style={[styles.detail, { color: colors.success }]}>
-            Token guardado de forma segura
+            Configurado ✓
           </Text>
           <ActionButton
             label="Cambiar token"

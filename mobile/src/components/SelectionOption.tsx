@@ -33,15 +33,27 @@ export function SelectionOption({
         styles.option,
         {
           borderColor: selected ? colors.accent : colors.border,
-          backgroundColor: selected ? colors.subtle : colors.surface,
+          backgroundColor: selected ? colors.accent : colors.surface,
           opacity: disabled ? 0.55 : pressed ? 0.8 : 1,
         },
       ]}
     >
       <View style={styles.copy}>
-        <Text style={[styles.label, { color: colors.text }]}>{label}</Text>
+        <Text
+          style={[
+            styles.label,
+            { color: selected ? colors.onAccent : colors.text },
+          ]}
+        >
+          {label}
+        </Text>
         {detail && (
-          <Text style={[styles.detail, { color: colors.secondary }]}>
+          <Text
+            style={[
+              styles.detail,
+              { color: selected ? colors.onAccent : colors.secondary },
+            ]}
+          >
             {detail}
           </Text>
         )}
@@ -49,11 +61,11 @@ export function SelectionOption({
       <View
         style={[
           styles.radio,
-          { borderColor: selected ? colors.accent : colors.secondary },
+          { borderColor: selected ? colors.onAccent : colors.secondary },
         ]}
       >
         {selected && (
-          <View style={[styles.dot, { backgroundColor: colors.accent }]} />
+          <View style={[styles.dot, { backgroundColor: colors.onAccent }]} />
         )}
       </View>
     </Pressable>
@@ -62,17 +74,17 @@ export function SelectionOption({
 
 const styles = StyleSheet.create({
   option: {
-    minHeight: 58,
+    minHeight: 50,
     borderWidth: 1,
     borderRadius: 14,
-    padding: 16,
+    padding: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  copy: { flex: 1, gap: 5 },
-  label: { fontSize: 16, fontWeight: '600' },
-  detail: { fontSize: 13, lineHeight: 20 },
+  copy: { flex: 1, gap: 3 },
+  label: { fontSize: 15, fontWeight: '600' },
+  detail: { fontSize: 12, lineHeight: 18 },
   radio: {
     width: 22,
     height: 22,
