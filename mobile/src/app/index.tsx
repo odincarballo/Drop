@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   KeyboardAvoidingView,
   ScrollView,
@@ -14,6 +15,7 @@ import { DownloadOptions } from '@/components/DownloadOptions';
 import { DownloadStatusCard } from '@/components/DownloadStatusCard';
 import { MetadataCard } from '@/components/MetadataCard';
 import { LocalYoutubeSpikeCard } from '@/components/LocalYoutubeSpikeCard';
+import { LocalYoutubeMainCard } from '@/components/LocalYoutubeMainCard';
 import { config } from '@/config';
 import { useMediaAnalysis } from '@/hooks/useMediaAnalysis';
 import { useMediaDownload } from '@/hooks/useMediaDownload';
@@ -26,6 +28,8 @@ import { useTheme } from '@/theme';
 
 export default function HomeScreen() {
   const { colors } = useTheme();
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const spike = useLocalYoutubeSpike();
   const {
     url,
     state,
@@ -36,10 +40,12 @@ export default function HomeScreen() {
     analyze,
     resetAnalysis,
     select,
-  } = useMediaAnalysis();
+  } = useMediaAnalysis(() => {
+    spike.reset();
+    setShowTechnicalDetails(false);
+  });
   const download = useMediaDownload();
-  const spike = useLocalYoutubeSpike();
-  const localYoutube = hasLocalYoutubeEngine() && isYoutubeUrl(url);
+  const localYoutube = isYoutubeUrl(url);
   const isBusy = isAnalyzing || download.isActive || spike.isBusy;
 
   function changeUrl(value: string) {
@@ -139,9 +145,7 @@ export default function HomeScreen() {
               label={
                 state.status === 'loading' || spike.state.status === 'loading'
                   ? 'Analizando…'
-                  : localYoutube
-                    ? 'Analizar en este iPhone'
-                    : 'Analizar'
+                  : 'Analizar'
               }
               disabled={isBusy}
               loading={state.status === 'loading'}
@@ -151,17 +155,28 @@ export default function HomeScreen() {
               Utiliza únicamente recursos autorizados.
             </Text>
           </View>
-          {hasLocalYoutubeEngine() && (
-            <LocalYoutubeSpikeCard
-              spike={spike}
-              disabled={isBusy}
-              onAnalyze={() => {
-                if (!isBusy) void spike.analyze(url);
-              }}
-            />
+          {localYoutube && spike.state.status !== 'idle' && (
+            <LocalYoutubeMainCard spike={spike} disabled={isBusy} />
           )}
-          <MetadataCard state={state} />
-          {state.status === 'success' &&
+          {localYoutube && hasLocalYoutubeEngine() && (
+            <>
+              <ActionButton
+                label={
+                  showTechnicalDetails
+                    ? 'Ocultar detalles técnicos'
+                    : 'Detalles técnicos'
+                }
+                onPress={() => setShowTechnicalDetails((value) => !value)}
+                secondary
+              />
+              {showTechnicalDetails && (
+                <LocalYoutubeSpikeCard spike={spike} disabled={isBusy} />
+              )}
+            </>
+          )}
+          {!localYoutube && <MetadataCard state={state} />}
+          {!localYoutube &&
+            state.status === 'success' &&
             download.state.status !== 'completed' &&
             !download.isActive && (
               <DownloadOptions
@@ -174,12 +189,14 @@ export default function HomeScreen() {
                 }
               />
             )}
-          <DownloadStatusCard
-            state={download.state}
-            onCancel={() => void download.cancel()}
-            onShare={() => void download.share()}
-            onReset={download.reset}
-          />
+          {!localYoutube && (
+            <DownloadStatusCard
+              state={download.state}
+              onCancel={() => void download.cancel()}
+              onShare={() => void download.share()}
+              onReset={download.reset}
+            />
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

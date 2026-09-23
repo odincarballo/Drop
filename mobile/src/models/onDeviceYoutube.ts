@@ -60,6 +60,8 @@ export type LocalYoutubeResult = z.infer<typeof localYoutubeResultSchema>;
 export type LocalYoutubeMetadata = NonNullable<LocalYoutubeResult['metadata']>;
 export type LocalYoutubeVideoFormat =
   LocalYoutubeMetadata['videoFormats'][number];
+export type LocalYoutubeAudioFormat =
+  LocalYoutubeMetadata['audioFormats'][number];
 
 export const localHttpTransferDiagnosticsSchema = z.object({
   requestedRange: z.string().max(80).optional(),

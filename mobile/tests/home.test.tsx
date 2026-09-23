@@ -9,6 +9,7 @@ import { analyzeMedia } from '@/services/media';
 import {
   createDownloadJob,
   deleteDownloadJob,
+  deleteLocalFile,
   downloadJobFile,
   shareLocalFile,
 } from '@/services/jobs';
@@ -109,6 +110,7 @@ const localYoutubeMetadata = {
 };
 
 function localYoutubeNativeEngine() {
+  const listeners: Record<string, (event: unknown) => void> = {};
   return {
     analyze: jest.fn().mockResolvedValue(JSON.stringify(localYoutubeMetadata)),
     testEjsFixture: jest.fn(),
@@ -119,7 +121,11 @@ function localYoutubeNativeEngine() {
     startCombinedDownload: jest.fn(),
     cancelCombinedDownload: jest.fn(),
     cancel: jest.fn(),
-    addListener: jest.fn(() => ({ remove: jest.fn() })),
+    addListener: jest.fn((name: string, listener: (event: unknown) => void) => {
+      listeners[name] = listener;
+      return { remove: jest.fn() };
+    }),
+    emit: (name: string, event: unknown) => listeners[name]?.(event),
   };
 }
 
@@ -131,22 +137,269 @@ async function analyzeExample() {
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
 }
 
-test('YouTube uses the on-device engine and never calls Render', async () => {
-  const native = localYoutubeNativeEngine();
-  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
-  await render(<HomeScreen />);
+async function analyzeYoutube() {
   await fireEvent.changeText(
     screen.getByLabelText('URL del recurso multimedia'),
     'https://www.youtube.com/watch?v=AWGPaFraPN4',
   );
-  await fireEvent.press(
-    screen.getAllByRole('button', { name: 'Analizar en este iPhone' })[0]!,
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+}
+
+test('YouTube uses the on-device engine and never calls Render', async () => {
+  const native = localYoutubeNativeEngine();
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
   expect(await screen.findByText('YouTube local')).toBeTruthy();
+  expect(screen.getAllByRole('button', { name: 'Analizar' })).toHaveLength(1);
+  expect(screen.getByRole('radio', { name: /360p/ })).toBeTruthy();
+  expect(screen.getByRole('radio', { name: 'Video + audio' })).toBeChecked();
+  expect(screen.queryByText('YouTube · prueba local')).toBeNull();
   expect(native.analyze).toHaveBeenCalledWith(
     'https://www.youtube.com/watch?v=AWGPaFraPN4',
   );
   expect(analyzeMedia).not.toHaveBeenCalled();
+});
+
+test('YouTube never falls back to Render when the native engine is absent', async () => {
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  expect(
+    await screen.findByText(/Actualiza MediaDrop para analizar este enlace/),
+  ).toBeTruthy();
+  expect(analyzeMedia).not.toHaveBeenCalled();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+});
+
+test('changing the URL immediately clears local metadata and prevents stale downloads', async () => {
+  const native = localYoutubeNativeEngine();
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  expect(await screen.findByText('YouTube local')).toBeTruthy();
+  await fireEvent.changeText(
+    screen.getByLabelText('URL del recurso multimedia'),
+    'https://example.com/video.mp4',
+  );
+  expect(screen.queryByText('YouTube local')).toBeNull();
+  expect(screen.queryByRole('radio', { name: /360p/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Descargar' })).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  expect(analyzeMedia).toHaveBeenCalledTimes(1);
+  expect(native.startCombinedDownload).not.toHaveBeenCalled();
+});
+
+test('pasting a new URL also clears the previous YouTube selection', async () => {
+  const native = localYoutubeNativeEngine();
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  expect(await screen.findByText('YouTube local')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Pegar' }));
+  expect(
+    screen.getByDisplayValue('https://example.com/video.mp4'),
+  ).toBeTruthy();
+  expect(screen.queryByText('YouTube local')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Descargar' })).toBeNull();
+});
+
+test('normal YouTube flow uses real 364p and direct 720p, never HLS', async () => {
+  const native = localYoutubeNativeEngine();
+  native.analyze.mockResolvedValue(
+    JSON.stringify({
+      ...localYoutubeMetadata,
+      metadata: {
+        ...localYoutubeMetadata.metadata,
+        preferredVideoFormatId: 'direct-364',
+        videoFormats: [
+          {
+            ...localYoutubeMetadata.metadata.videoFormats[0],
+            id: 'direct-364',
+            height: 364,
+            resolution: '364p',
+          },
+          {
+            ...localYoutubeMetadata.metadata.videoFormats[0],
+            id: 'direct-720',
+            height: 720,
+            resolution: '720p',
+          },
+          {
+            ...localYoutubeMetadata.metadata.videoFormats[0],
+            id: 'hls-720',
+            height: 720,
+            resolution: '720p',
+            protocol: 'm3u8_native',
+            directDownload: false,
+          },
+        ],
+      },
+    }),
+  );
+  native.startCombinedDownload.mockReturnValue(
+    '7D628D93-DC67-4729-83AD-B8EF70877A87',
+  );
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  expect(await screen.findByRole('radio', { name: /364p/ })).toBeChecked();
+  expect(screen.queryByRole('radio', { name: /360p/ })).toBeNull();
+  expect(screen.getAllByRole('radio', { name: /720p/ })).toHaveLength(1);
+  await fireEvent.press(screen.getByRole('radio', { name: /720p/ }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(native.startCombinedDownload).toHaveBeenCalledWith(
+    'a'.repeat(32),
+    'direct-720',
+    '140',
+    121,
+  );
+  expect(analyzeMedia).not.toHaveBeenCalled();
+});
+
+test('normal YouTube modes dispatch video-only and audio-only to the local engine', async () => {
+  const native = localYoutubeNativeEngine();
+  native.startVideoDownload.mockReturnValue(
+    'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
+  );
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  await screen.findByText('YouTube local');
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo video' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(native.startVideoDownload).toHaveBeenCalledWith('a'.repeat(32), '134');
+  expect(createDownloadJob).not.toHaveBeenCalled();
+});
+
+test('normal YouTube progress, cancellation, audio-only and sharing stay on-device', async () => {
+  const native = localYoutubeNativeEngine();
+  const combinedJob = '7D628D93-DC67-4729-83AD-B8EF70877A87';
+  const audioJob = 'D2A73B11-8703-4FB1-8612-8AC3C477C42F';
+  native.startCombinedDownload.mockReturnValue(combinedJob);
+  native.startAudioDownload.mockReturnValue(audioJob);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  jest.mocked(shareLocalFile).mockResolvedValue();
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  await screen.findByText('YouTube local');
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  await act(() =>
+    native.emit('onCombinedDownloadState', {
+      jobId: combinedJob,
+      status: 'DOWNLOADING_VIDEO',
+      bytesDownloaded: 500_000,
+      totalBytes: 1_000_000,
+      progress: 0.5,
+    }),
+  );
+  expect(screen.getByText(/Descargando video… 500 KB \/ 1 MB/)).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Cancelar descarga' }),
+  );
+  expect(native.cancelCombinedDownload).toHaveBeenCalledTimes(1);
+  await act(() =>
+    native.emit('onCombinedDownloadState', {
+      jobId: combinedJob,
+      status: 'CANCELLED',
+    }),
+  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(native.startAudioDownload).toHaveBeenCalledWith('a'.repeat(32), '140');
+  await act(() =>
+    native.emit('onAudioDownloadState', {
+      jobId: audioJob,
+      status: 'COMPLETED',
+      formatId: '140',
+      container: 'm4a',
+      codec: 'mp4a.40.2',
+      fileName: 'audio.m4a',
+      fileSize: 2_000_000,
+      localUri: 'file:///cache/audio.m4a',
+    }),
+  );
+  expect(screen.getByText(/✓ Audio completado/)).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Compartir' }));
+  expect(shareLocalFile).toHaveBeenCalledWith('file:///cache/audio.m4a');
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  await fireEvent.changeText(
+    screen.getByLabelText('URL del recurso multimedia'),
+    'https://example.com/video.mp4',
+  );
+  expect(deleteLocalFile).toHaveBeenCalledWith('file:///cache/audio.m4a');
+  expect(screen.queryByText(/✓ Audio completado/)).toBeNull();
+});
+
+test('unknown local stream sizes remain downloadable', async () => {
+  const native = localYoutubeNativeEngine();
+  native.analyze.mockResolvedValue(
+    JSON.stringify({
+      ...localYoutubeMetadata,
+      metadata: {
+        ...localYoutubeMetadata.metadata,
+        videoFormats: [
+          {
+            ...localYoutubeMetadata.metadata.videoFormats[0],
+            estimatedSize: null,
+          },
+        ],
+        audioFormats: [
+          {
+            ...localYoutubeMetadata.metadata.audioFormats[0],
+            estimatedSize: null,
+          },
+        ],
+      },
+    }),
+  );
+  native.startAudioDownload.mockReturnValue(
+    'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+  );
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  expect(await screen.findByText('YouTube local')).toBeTruthy();
+  expect(screen.getAllByText(/Tamaño no disponible/).length).toBeGreaterThan(0);
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+  expect(screen.getByRole('button', { name: 'Descargar' })).toBeEnabled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(native.startAudioDownload).toHaveBeenCalledWith('a'.repeat(32), '140');
+});
+
+test('known oversized tracks are blocked, while unknown sizes are allowed', async () => {
+  const native = localYoutubeNativeEngine();
+  native.analyze.mockResolvedValue(
+    JSON.stringify({
+      ...localYoutubeMetadata,
+      metadata: {
+        ...localYoutubeMetadata.metadata,
+        preferredAudioFormatId: null,
+        videoFormats: [
+          {
+            ...localYoutubeMetadata.metadata.videoFormats[0],
+            estimatedSize: 50 * 1024 * 1024 + 1,
+          },
+        ],
+        audioFormats: [
+          {
+            ...localYoutubeMetadata.metadata.audioFormats[0],
+            estimatedSize: 25 * 1024 * 1024 + 1,
+          },
+        ],
+      },
+    }),
+  );
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  expect(await screen.findByRole('radio', { name: /360p/ })).toBeDisabled();
+  expect(
+    screen.getByText(/Esta calidad supera el límite actual de video de 50 MiB/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/El audio supera el límite actual de 25 MiB/),
+  ).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Descargar' })).toBeDisabled();
 });
 
 test('a direct URL still uses the authenticated Render API', async () => {

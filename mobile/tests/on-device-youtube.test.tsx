@@ -8,6 +8,7 @@ import {
 import { requireOptionalNativeModule } from 'expo';
 
 import { LocalYoutubeSpikeCard } from '@/components/LocalYoutubeSpikeCard';
+import { ActionButton } from '@/components/ActionButton';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
 import { localYoutubeResultSchema } from '@/models/onDeviceYoutube';
 import {
@@ -18,7 +19,10 @@ import {
 import { shareLocalFile } from '@/services/jobs';
 
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
-jest.mock('@/services/jobs', () => ({ shareLocalFile: jest.fn() }));
+jest.mock('@/services/jobs', () => ({
+  shareLocalFile: jest.fn(),
+  deleteLocalFile: jest.fn(),
+}));
 let audioListener: ((event: unknown) => void) | null = null;
 let videoListener: ((event: unknown) => void) | null = null;
 let combinedListener: ((event: unknown) => void) | null = null;
@@ -265,19 +269,24 @@ test('cancel delegates to the native engine', () => {
 function TestCard() {
   const spike = useLocalYoutubeSpike();
   return (
-    <LocalYoutubeSpikeCard
-      spike={spike}
-      disabled={spike.isBusy}
-      onAnalyze={() => void spike.analyze('https://youtu.be/AWGPaFraPN4')}
-    />
+    <>
+      <ActionButton
+        label={
+          spike.state.status === 'loading'
+            ? 'Analizando en el iPhone…'
+            : 'Analizar'
+        }
+        onPress={() => void spike.analyze('https://youtu.be/AWGPaFraPN4')}
+        disabled={spike.isBusy}
+      />
+      <LocalYoutubeSpikeCard spike={spike} disabled={spike.isBusy} />
+    </>
   );
 }
 
 test('local metadata card selects direct M4A without exposing a stream URL', async () => {
   await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
   expect(screen.getByText('Video autorizado')).toBeTruthy();
   expect(screen.getByText(/360p · mp4 · avc1/)).toBeTruthy();
@@ -296,9 +305,7 @@ test('local metadata card selects direct M4A without exposing a stream URL', asy
 
 test('native video-only progress completes, shares, and never exposes its URL', async () => {
   await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
   expect(
     screen.getByText(/Seleccionado: 360p · MP4 · avc1 · ID 134/),
@@ -352,9 +359,7 @@ test('native video-only progress completes, shares, and never exposes its URL', 
 
 test('native video-only cancellation delegates to URLSession owner', async () => {
   await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
   await fireEvent.press(
     screen.getByRole('button', {
@@ -382,9 +387,7 @@ test('native video-only cancellation delegates to URLSession owner', async () =>
 
 test('combined download reports both transfers, muxes, completes, and shares', async () => {
   await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
   await fireEvent.press(
     screen.getByRole('button', {
@@ -485,9 +488,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
 
 test('720p selection is dynamic and remains opaque to React Native', async () => {
   await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
   expect(
     screen.getByRole('button', {
@@ -531,9 +532,7 @@ test.each([
   ['DOWNLOADING_AUDIO', 'AUDIO_HTTP_ERROR'],
 ] as const)('combined %s failure remains specific', async (phase, code) => {
   await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
   await fireEvent.press(
     screen.getByRole('button', {
@@ -561,9 +560,7 @@ test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
   'combined cancellation works during %s',
   async (phase) => {
     await render(<TestCard />);
-    await fireEvent.press(
-      screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
     await screen.findByText('Video autorizado');
     await fireEvent.press(
       screen.getByRole('button', {
@@ -591,9 +588,7 @@ test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
 
 test('native audio progress completes, shares, and cancellation delegates', async () => {
   await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
   await fireEvent.press(
     screen.getByRole('button', { name: 'Descargar audio en este iPhone' }),
@@ -670,9 +665,7 @@ test('local LOGIN_REQUIRED stays specific, with no login suggestion', async () =
     JSON.stringify({ error: { code: 'LOGIN_REQUIRED' } }),
   );
   await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   expect(screen.getByRole('alert')).toHaveTextContent(
     /Este contenido requiere iniciar sesión y no puede procesarse\./,
   );
@@ -681,9 +674,7 @@ test('local LOGIN_REQUIRED stays specific, with no login suggestion', async () =
 test('pending local analysis prevents a second request and exposes cancellation', async () => {
   native.analyze.mockReturnValue(new Promise(() => {}));
   const view = await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Analizar en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   expect(
     screen.getByRole('button', { name: 'Analizando en el iPhone…' }),
   ).toBeDisabled();

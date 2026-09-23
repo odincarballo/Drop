@@ -8,7 +8,7 @@ import type {
   LocalVideoDownloadEvent,
   LocalYoutubeResult,
 } from '@/models/onDeviceYoutube';
-import { shareLocalFile } from '@/services/jobs';
+import { deleteLocalFile, shareLocalFile } from '@/services/jobs';
 import {
   analyzeYoutubeOnDevice,
   cancelLocalAudioDownload,
@@ -153,12 +153,12 @@ export function useLocalYoutubeSpike() {
   const audioJobId = useRef<string | null>(null);
   const videoJobId = useRef<string | null>(null);
   const combinedJobId = useRef<string | null>(null);
+  const analysisGeneration = useRef(0);
   const mounted = useRef(true);
 
   const handleAudioEvent = useCallback((event: LocalAudioDownloadEvent) => {
     if (!mounted.current) return;
-    if (audioJobId.current && audioJobId.current !== event.jobId) return;
-    audioJobId.current = event.jobId;
+    if (audioJobId.current !== event.jobId) return;
     if (event.status === 'PREPARING') {
       setAudioState({
         status: 'preparing',
@@ -206,8 +206,7 @@ export function useLocalYoutubeSpike() {
 
   const handleVideoEvent = useCallback((event: LocalVideoDownloadEvent) => {
     if (!mounted.current) return;
-    if (videoJobId.current && videoJobId.current !== event.jobId) return;
-    videoJobId.current = event.jobId;
+    if (videoJobId.current !== event.jobId) return;
     if (event.status === 'PREPARING') {
       setVideoState({
         status: 'preparing',
@@ -264,9 +263,7 @@ export function useLocalYoutubeSpike() {
   const handleCombinedEvent = useCallback(
     (event: LocalCombinedDownloadEvent) => {
       if (!mounted.current) return;
-      if (combinedJobId.current && combinedJobId.current !== event.jobId)
-        return;
-      combinedJobId.current = event.jobId;
+      if (combinedJobId.current !== event.jobId) return;
       if (event.status === 'PREPARING') {
         setCombinedState({ status: 'preparing', jobId: event.jobId });
       } else if (
@@ -344,9 +341,23 @@ export function useLocalYoutubeSpike() {
       combinedSubscription.remove();
     };
   }, [handleAudioEvent, handleCombinedEvent, handleVideoEvent]);
+
+  function clearCompletedFiles() {
+    for (const completed of [audioState, videoState, combinedState]) {
+      if (completed.status !== 'completed') continue;
+      try {
+        deleteLocalFile(completed.localUri);
+      } catch {
+        // The result must still be cleared if iOS already removed its cache file.
+      }
+    }
+  }
+
   async function analyze(url: string) {
     if (busy.current) return;
     busy.current = true;
+    const generation = ++analysisGeneration.current;
+    clearCompletedFiles();
     setAudioState({ status: 'idle' });
     setVideoState({ status: 'idle' });
     setCombinedState({ status: 'idle' });
@@ -354,7 +365,7 @@ export function useLocalYoutubeSpike() {
     setState({ status: 'loading' });
     try {
       const result = await analyzeYoutubeOnDevice(url);
-      if (mounted.current) {
+      if (mounted.current && analysisGeneration.current === generation) {
         setState({ status: 'result', result });
         const options = result.metadata
           ? selectLocalVideoOptions(result.metadata.videoFormats)
@@ -364,16 +375,37 @@ export function useLocalYoutubeSpike() {
         );
         setSelectedVideoFormatId(preferred?.id ?? options[0]?.id ?? null);
       }
-    } catch {
-      if (mounted.current)
+    } catch (error) {
+      if (mounted.current && analysisGeneration.current === generation)
         setState({
           status: 'error',
           message:
-            'No se pudo iniciar el análisis local. Revisa la URL y esta build.',
+            error instanceof Error
+              ? error.message
+              : 'No se pudo iniciar el análisis local. Revisa la URL y esta build.',
         });
     } finally {
-      busy.current = false;
+      if (analysisGeneration.current === generation) busy.current = false;
     }
+  }
+
+  function reset() {
+    ++analysisGeneration.current;
+    clearCompletedFiles();
+    if (busy.current) cancelLocalYoutube();
+    if (audioJobId.current) cancelLocalAudioDownload();
+    if (videoJobId.current) cancelLocalVideoDownload();
+    if (combinedJobId.current) cancelLocalCombinedDownload();
+    busy.current = false;
+    audioJobId.current = null;
+    videoJobId.current = null;
+    combinedJobId.current = null;
+    setState({ status: 'idle' });
+    setEjsState({ status: 'idle' });
+    setAudioState({ status: 'idle' });
+    setVideoState({ status: 'idle' });
+    setCombinedState({ status: 'idle' });
+    setSelectedVideoFormatId(null);
   }
 
   const videoOptions =
@@ -608,6 +640,7 @@ export function useLocalYoutubeSpike() {
     videoOptions,
     selectVideoFormat,
     analyze,
+    reset,
     testEjs,
     downloadAudio,
     cancelAudio,

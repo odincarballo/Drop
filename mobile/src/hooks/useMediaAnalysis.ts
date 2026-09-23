@@ -13,7 +13,7 @@ import { ApiError } from '@/services/errors';
 import { analyzeMedia } from '@/services/media';
 import { validateMediaUrl } from '@/utils/validation';
 
-export function useMediaAnalysis() {
+export function useMediaAnalysis(onUrlChange?: () => void) {
   const [url, setUrl] = useState('');
   const [state, setState] = useState<AnalysisState>({ status: 'idle' });
   const [isPasting, setIsPasting] = useState(false);
@@ -32,6 +32,7 @@ export function useMediaAnalysis() {
   function updateUrl(value: string) {
     request.current?.abort();
     request.current = null;
+    onUrlChange?.();
     setUrl(value);
     setState({ status: 'idle' });
   }

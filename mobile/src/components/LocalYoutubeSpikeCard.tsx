@@ -10,7 +10,6 @@ import { formatDuration, formatSize } from '@/utils/format';
 
 type Props = {
   spike: ReturnType<typeof useLocalYoutubeSpike>;
-  onAnalyze: () => void;
   disabled: boolean;
 };
 
@@ -42,7 +41,7 @@ function HttpDiagnostics({
   );
 }
 
-export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
+export function LocalYoutubeSpikeCard({ spike, disabled }: Props) {
   const { colors } = useTheme();
   const result = spike.state.status === 'result' ? spike.state.result : null;
   const metadata = result?.metadata;
@@ -138,17 +137,6 @@ export function LocalYoutubeSpikeCard({ spike, onAnalyze, disabled }: Props) {
             {`\nRespuesta segura: ${spike.ejsState.result.diagnostics.responsePreview ?? 'no disponible'}`}
           </Text>
         ))}
-      <ActionButton
-        label={
-          spike.state.status === 'loading'
-            ? 'Analizando en el iPhone…'
-            : 'Analizar en este iPhone'
-        }
-        onPress={onAnalyze}
-        disabled={disabled}
-        loading={spike.state.status === 'loading'}
-        secondary
-      />
       {spike.state.status === 'loading' && (
         <ActionButton
           label="Cancelar análisis local"

@@ -40,7 +40,7 @@ function engine() {
 }
 
 export function hasLocalYoutubeEngine() {
-  return engine() !== null;
+  return Boolean(engine());
 }
 
 export function isYoutubeUrl(value: string): boolean {
@@ -62,7 +62,9 @@ export async function analyzeYoutubeOnDevice(url: string) {
     throw new Error('Introduce una URL pública individual de YouTube.');
   const native = engine();
   if (!native)
-    throw new Error('Esta build no incluye el motor local experimental.');
+    throw new Error(
+      'Esta versión no incluye el motor de YouTube en el iPhone. Actualiza MediaDrop para analizar este enlace.',
+    );
   const raw = await native.analyze(url.trim());
   if (raw.length > 512 * 1024)
     throw new Error('La respuesta local superó el límite permitido.');
