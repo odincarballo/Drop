@@ -10,6 +10,7 @@ properties['EXPO_USE_PRECOMPILED_MODULES'] = 'false'
 File.write(properties_path, JSON.pretty_generate(properties) + "\n")
 
 project, target = IOSApplicationProject.open
+name = '[Drop] Embed Python for on-device'
 phase = IOSApplicationProject.embed_phase(target)
 unless phase
   phase = target.new_shell_script_build_phase(name)
@@ -17,7 +18,7 @@ unless phase
   index = target.build_phases.index { |item| item.display_name == '[CP] Embed Pods Frameworks' }
   target.build_phases.insert(index || target.build_phases.length, phase)
 end
-phase.name = '[Drop] Embed Python for on-device'
+phase.name = name
 phase.shell_path = '/bin/bash'
 phase.shell_script = 'bash "$PROJECT_DIR/../scripts/embed_on_device_python.sh"'
 phase.always_out_of_date = '1'
