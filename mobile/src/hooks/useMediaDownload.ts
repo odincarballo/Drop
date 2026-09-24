@@ -132,6 +132,14 @@ export function useMediaDownload() {
           }
         },
       );
+      if (
+        requestController.signal.aborted ||
+        operation.current !== currentOperation ||
+        !mounted.current
+      ) {
+        deleteLocalFile(file.uri);
+        return;
+      }
       localUri.current = file.uri;
       jobId.current = null;
       void deleteDownloadJob(job.id).catch(() => undefined);

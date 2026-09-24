@@ -486,6 +486,8 @@ export function useLocalYoutubeSpike() {
 
   function cancelAudio() {
     if (!audioJobId.current) return;
+    audioJobId.current = null;
+    setAudioState({ status: 'cancelled' });
     cancelLocalAudioDownload();
   }
 
@@ -548,6 +550,8 @@ export function useLocalYoutubeSpike() {
 
   function cancelVideo() {
     if (!videoJobId.current) return;
+    videoJobId.current = null;
+    setVideoState({ status: 'cancelled' });
     cancelLocalVideoDownload();
   }
 
@@ -613,6 +617,8 @@ export function useLocalYoutubeSpike() {
 
   function cancelCombined() {
     if (!combinedJobId.current) return;
+    combinedJobId.current = null;
+    setCombinedState({ status: 'cancelled' });
     cancelLocalCombinedDownload();
   }
 

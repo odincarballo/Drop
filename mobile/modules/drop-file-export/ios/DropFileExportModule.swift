@@ -45,6 +45,15 @@ public final class DropFileExportModule: Module {
   public func definition() -> ModuleDefinition {
     Name("DropFileExport")
 
+    Function("cleanupAbandonedFiles") { () -> [String: Int] in
+      guard let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+        NSLog("[Drop files] Startup cache directory unavailable")
+        return ["removed": 0, "failures": 1]
+      }
+      let result = DropOwnedCacheCleanup.runOnceAtStartup(cacheDirectory: cache)
+      return ["removed": result.removed, "failures": result.failures]
+    }
+
     AsyncFunction("saveToFiles") { (uri: String, promise: Promise) in
       guard let url = URL(string: uri), url.isFileURL else {
         promise.reject(InvalidExportFileException())

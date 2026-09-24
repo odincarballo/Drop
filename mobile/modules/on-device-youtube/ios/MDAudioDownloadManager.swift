@@ -130,6 +130,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   private var redirectCount = 0
   private var responseValidated = false
   private var forcedFailureCode: String?
+  private var cancellationRequested = false
   private let videoChunkSize: Int64 = 256 * 1024
   private var usesRangeTransfer = false
   private var videoBytesPersisted: Int64 = 0
@@ -202,21 +203,27 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
 
   func cancel() {
     lock.lock()
-    guard let jobID = activeJobID, let kind = activeKind else {
+    guard let jobID = activeJobID, let kind = activeKind, !cancellationRequested else {
       lock.unlock()
       return
     }
-    activeJobID = nil
     let activeTask = task
     let activeSession = session
     let directory = workspaceURL
-    resetLocked()
+    if activeTask != nil {
+      cancellationRequested = true
+    } else {
+      activeJobID = nil
+      resetLocked()
+    }
     lock.unlock()
     MDPythonBridge.cancel()
     activeTask?.cancel()
     activeSession?.invalidateAndCancel()
-    MDAudioDownloadPolicy.removeWorkspace(directory)
-    emit(jobID: jobID, kind: kind, status: "CANCELLED")
+    if activeTask == nil {
+      MDAudioDownloadPolicy.removeWorkspace(directory)
+      emit(jobID: jobID, kind: kind, status: "CANCELLED")
+    }
   }
 
   private func prepared(jobID: String, kind: MDLocalDownloadKind, raw: String) {
@@ -583,6 +590,10 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     else {
       return
     }
+    lock.lock()
+    let isCancelling = cancellationRequested
+    lock.unlock()
+    if isCancelling { return }
     do {
       if let response = downloadTask.response as? HTTPURLResponse {
         try MDAudioDownloadPolicy.validateResponse(response, kind: kind)
@@ -626,6 +637,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     task: URLSessionTask,
     didCompleteWithError error: Error?
   ) {
+    if finishCancellationIfNeeded(for: task) { return }
     lock.lock()
     guard task === self.task, let jobID = activeJobID, let kind = activeKind else {
       lock.unlock()
@@ -653,8 +665,10 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
           code: kind == .audio ? "AUDIO_STORAGE_UNAVAILABLE" : "VIDEO_STORAGE_UNAVAILABLE"
         )
       }
+      _ = finishCancellationIfNeeded(for: task)
       return
     }
+    if finishCancellationIfNeeded(for: task) { return }
     fail(
       jobID: jobID,
       code: code
@@ -662,6 +676,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
           ? failureCode(kind, "AUDIO_TIMEOUT", "VIDEO_TIMEOUT")
           : failureCode(kind, "AUDIO_DOWNLOAD_FAILED", "VIDEO_DOWNLOAD_FAILED"))
     )
+    _ = finishCancellationIfNeeded(for: task)
   }
 
   private func finishFullBodyDataTask(jobID: String, kind: MDLocalDownloadKind) throws {
@@ -789,7 +804,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
     let nextTask = session.dataTask(with: request)
     lock.lock()
-    guard activeJobID == jobID else {
+    guard activeJobID == jobID, !cancellationRequested else {
       lock.unlock()
       nextTask.cancel()
       return
@@ -816,6 +831,29 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     return candidate === task ? activeKind : nil
   }
 
+  @discardableResult
+  private func finishCancellationIfNeeded(for candidate: URLSessionTask) -> Bool {
+    lock.lock()
+    guard
+      candidate === task,
+      cancellationRequested,
+      let jobID = activeJobID,
+      let kind = activeKind
+    else {
+      lock.unlock()
+      return false
+    }
+    let directory = workspaceURL
+    let activeSession = session
+    activeJobID = nil
+    resetLocked()
+    lock.unlock()
+    activeSession?.finishTasksAndInvalidate()
+    MDAudioDownloadPolicy.removeWorkspace(directory)
+    emit(jobID: jobID, kind: kind, status: "CANCELLED")
+    return true
+  }
+
   private func setForcedFailure(_ code: String) {
     lock.lock()
     forcedFailureCode = code
@@ -830,7 +868,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     descriptor: MDAudioDescriptor
   ) {
     lock.lock()
-    guard activeJobID == jobID else {
+    guard activeJobID == jobID, !cancellationRequested else {
       lock.unlock()
       return
     }
@@ -860,7 +898,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
 
   private func fail(jobID: String, code: String) {
     lock.lock()
-    guard activeJobID == jobID, let kind = activeKind else {
+    guard activeJobID == jobID, let kind = activeKind, !cancellationRequested else {
       lock.unlock()
       return
     }
@@ -890,6 +928,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     redirectCount = 0
     responseValidated = false
     forcedFailureCode = nil
+    cancellationRequested = false
     workspaceURL = nil
     activeKind = nil
     usesRangeTransfer = false

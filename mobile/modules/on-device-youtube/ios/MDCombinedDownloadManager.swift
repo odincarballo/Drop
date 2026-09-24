@@ -10,11 +10,13 @@ final class MDCombinedDownloadManager {
   }
 
   private let lock = NSLock()
+  private let stateQueue = DispatchQueue(label: "MediaDrop.CombinedFileLifecycle")
   private let emitEvent: EventSink
   private lazy var transfer = MDAudioDownloadManager { [weak self] event in
     self?.handleTransferEvent(event)
   }
   private var activeJobID: String?
+  private var activeTransferJobID: String?
   private var phase: Phase?
   private var analysisID = ""
   private var videoFormatID = ""
@@ -29,6 +31,7 @@ final class MDCombinedDownloadManager {
   private var audioCodec: String?
   private var videoHTTPDiagnostics: [String: Any]?
   private var muxer: MDAVMuxer?
+  private var cancellationRequested = false
 
   init(emitEvent: @escaping EventSink) {
     self.emitEvent = emitEvent
@@ -52,8 +55,10 @@ final class MDCombinedDownloadManager {
       return nil
     }
     let jobID = UUID().uuidString
+    var createdWorkspace: URL?
     do {
       let workspace = try MDAudioDownloadPolicy.workspace(for: jobID)
+      createdWorkspace = workspace
       _ = try MDAVMuxPolicy.validatedDuration(expectedDurationSeconds)
       activeJobID = jobID
       phase = .video
@@ -64,17 +69,24 @@ final class MDCombinedDownloadManager {
       workspaceURL = workspace
       lock.unlock()
       emit(jobID: jobID, status: "PREPARING")
-      guard transfer.startVideo(analysisID: analysisID, formatID: videoFormatID) != nil else {
+      guard let transferJobID = transfer.startVideo(
+        analysisID: analysisID, formatID: videoFormatID
+      ) else {
         fail(jobID: jobID, code: "COMBINED_DOWNLOAD_BUSY")
         return nil
       }
+      lock.lock()
+      if activeJobID == jobID { activeTransferJobID = transferJobID }
+      lock.unlock()
       return jobID
     } catch let failure as MDAVMuxFailure {
       lock.unlock()
+      MDAudioDownloadPolicy.removeWorkspace(createdWorkspace)
       emit(jobID: jobID, status: "FAILED", errorCode: failure.code)
       return nil
     } catch {
       lock.unlock()
+      MDAudioDownloadPolicy.removeWorkspace(createdWorkspace)
       emit(jobID: jobID, status: "FAILED", errorCode: "COMBINED_STORAGE_UNAVAILABLE")
       return nil
     }
@@ -82,28 +94,59 @@ final class MDCombinedDownloadManager {
 
   func cancel() {
     lock.lock()
-    guard let jobID = activeJobID else {
+    guard activeJobID != nil, !cancellationRequested else {
       lock.unlock()
       return
     }
-    let workspace = workspaceURL
-    let activeMuxer = muxer
-    resetLocked()
+    cancellationRequested = true
     lock.unlock()
-    transfer.cancel()
-    activeMuxer?.cancel()
-    MDAudioDownloadPolicy.removeWorkspace(workspace)
-    emit(jobID: jobID, status: "CANCELLED")
+    stateQueue.async { [weak self] in self?.performCancel() }
+  }
+
+  private func performCancel() {
+    lock.lock()
+    guard let jobID = activeJobID, cancellationRequested else {
+      lock.unlock()
+      return
+    }
+    let currentPhase = phase
+    let activeMuxer = muxer
+    lock.unlock()
+    if currentPhase == .muxing {
+      if let activeMuxer { activeMuxer.cancel() }
+      else { finishCancelled(jobID: jobID) }
+    } else if transfer.isActive {
+      transfer.cancel()
+    } else {
+      finishCancelled(jobID: jobID)
+    }
   }
 
   private func handleTransferEvent(_ event: [String: Any?]) {
+    stateQueue.async { [weak self] in self?.processTransferEvent(event) }
+  }
+
+  private func processTransferEvent(_ event: [String: Any?]) {
     lock.lock()
-    guard let jobID = activeJobID, let phase else {
-      lock.unlock()
-      return
-    }
+    let jobID = activeJobID
+    let currentPhase = phase
+    let transferJobID = activeTransferJobID
+    let isCancelling = cancellationRequested
     lock.unlock()
     guard let status = event["status"] as? String else { return }
+    guard let jobID, let phase = currentPhase,
+          let eventTransferJobID = event["jobId"] as? String,
+          eventTransferJobID == transferJobID else {
+      if status == "COMPLETED" { cleanupLateCompletedTransfer(event) }
+      return
+    }
+    if isCancelling {
+      if status == "COMPLETED" { cleanupLateCompletedTransfer(event) }
+      if status == "COMPLETED" || status == "FAILED" || status == "CANCELLED" {
+        finishCancelled(jobID: jobID)
+      }
+      return
+    }
     if phase == .video, let diagnostics = event["httpDiagnostics"] as? [String: Any] {
       lock.lock()
       videoHTTPDiagnostics = diagnostics
@@ -148,10 +191,15 @@ final class MDCombinedDownloadManager {
         let analysisID = self.analysisID
         let audioFormatID = self.audioFormatID
         lock.unlock()
-        guard transfer.startRangedAudio(analysisID: analysisID, formatID: audioFormatID) != nil else {
+        guard let transferJobID = transfer.startRangedAudio(
+          analysisID: analysisID, formatID: audioFormatID
+        ) else {
           fail(jobID: jobID, code: "COMBINED_DOWNLOAD_BUSY")
           return
         }
+        lock.lock()
+        if activeJobID == jobID { activeTransferJobID = transferJobID }
+        lock.unlock()
       } else {
         lock.lock()
         audioURL = stored
@@ -161,8 +209,18 @@ final class MDCombinedDownloadManager {
         startMux(jobID: jobID)
       }
     } catch {
+      cleanupLateCompletedTransfer(event)
       fail(jobID: jobID, code: "COMBINED_STORAGE_UNAVAILABLE")
     }
+  }
+
+  private func cleanupLateCompletedTransfer(_ event: [String: Any?]) {
+    guard let rawURI = event["localUri"] as? String,
+          let source = URL(string: rawURI), source.isFileURL else { return }
+    let directory = source.deletingLastPathComponent()
+    guard UUID(uuidString: directory.lastPathComponent) != nil,
+          directory.deletingLastPathComponent().lastPathComponent == "MediaDrop" else { return }
+    MDAudioDownloadPolicy.removeWorkspace(directory)
   }
 
   private func storeCompletedTransfer(rawURI: String, phase: Phase) throws -> URL {
@@ -185,6 +243,7 @@ final class MDCombinedDownloadManager {
     lock.lock()
     guard
       activeJobID == jobID,
+      !cancellationRequested,
       let workspaceURL,
       let videoURL,
       let audioURL
@@ -209,14 +268,24 @@ final class MDCombinedDownloadManager {
         self?.emit(jobID: jobID, status: "MUXING", progress: progress)
       },
       completion: { [weak self] result in
-        switch result {
-        case .success(let muxResult):
-          self?.complete(jobID: jobID, outputURL: outputURL, result: muxResult)
-        case .failure(let failure):
-          if failure.code == "LOCAL_CANCELLED" {
-            self?.cancel()
-          } else {
-            self?.fail(jobID: jobID, code: failure.code)
+        self?.stateQueue.async { [weak self] in
+          guard let self else { return }
+          self.lock.lock()
+          let isCancelling = self.cancellationRequested
+          self.lock.unlock()
+          if isCancelling {
+            self.finishCancelled(jobID: jobID)
+            return
+          }
+          switch result {
+          case .success(let muxResult):
+            self.complete(jobID: jobID, outputURL: outputURL, result: muxResult)
+          case .failure(let failure):
+            if failure.code == "LOCAL_CANCELLED" {
+              self.finishCancelled(jobID: jobID)
+            } else {
+              self.fail(jobID: jobID, code: failure.code)
+            }
           }
         }
       }
@@ -225,7 +294,7 @@ final class MDCombinedDownloadManager {
 
   private func complete(jobID: String, outputURL: URL, result: MDAVMuxResult) {
     lock.lock()
-    guard activeJobID == jobID else {
+    guard activeJobID == jobID, !cancellationRequested else {
       lock.unlock()
       return
     }
@@ -237,8 +306,13 @@ final class MDCombinedDownloadManager {
     let diagnostics = videoHTTPDiagnostics
     resetLocked()
     lock.unlock()
-    if let inputVideo { try? FileManager.default.removeItem(at: inputVideo) }
-    if let inputAudio { try? FileManager.default.removeItem(at: inputAudio) }
+    for input in [inputVideo, inputAudio].compactMap({ $0 }) {
+      do {
+        try FileManager.default.removeItem(at: input)
+      } catch {
+        NSLog("[Drop files] Completed mux input cleanup failed (code %ld)", (error as NSError).code)
+      }
+    }
     emit(
       jobID: jobID,
       status: "COMPLETED",
@@ -264,6 +338,11 @@ final class MDCombinedDownloadManager {
       lock.unlock()
       return
     }
+    if cancellationRequested {
+      lock.unlock()
+      finishCancelled(jobID: jobID)
+      return
+    }
     let workspace = workspaceURL
     let activeMuxer = muxer
     let finalDiagnostics = diagnostics ?? videoHTTPDiagnostics
@@ -280,8 +359,22 @@ final class MDCombinedDownloadManager {
     )
   }
 
+  private func finishCancelled(jobID: String) {
+    lock.lock()
+    guard activeJobID == jobID else {
+      lock.unlock()
+      return
+    }
+    let workspace = workspaceURL
+    resetLocked()
+    lock.unlock()
+    MDAudioDownloadPolicy.removeWorkspace(workspace)
+    emit(jobID: jobID, status: "CANCELLED")
+  }
+
   private func resetLocked() {
     activeJobID = nil
+    activeTransferJobID = nil
     phase = nil
     analysisID = ""
     videoFormatID = ""
@@ -296,6 +389,7 @@ final class MDCombinedDownloadManager {
     audioCodec = nil
     videoHTTPDiagnostics = nil
     muxer = nil
+    cancellationRequested = false
   }
 
   private func emit(

@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react-native';
 import { requireOptionalNativeModule } from 'expo';
 import * as Clipboard from 'expo-clipboard';
 
@@ -525,6 +531,60 @@ test('direct file downloads to iPhone storage and can be shared', async () => {
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
   expect(shareLocalFile).toHaveBeenCalledWith('file:///cache/clip.mp4');
+});
+
+test('a direct transfer finishing after cancellation cannot become a completed result', async () => {
+  const directMedia: MediaAnalysis = {
+    id: 'direct-media',
+    title: 'clip.mp4',
+    thumbnail: null,
+    duration: null,
+    source: 'direct',
+    estimatedSize: 12,
+    videoFormats: [
+      {
+        id: 'format-original',
+        resolution: 'Original',
+        container: 'mp4',
+        codec: null,
+        hasAudio: null,
+        estimatedSize: 12,
+      },
+    ],
+    audioFormats: [],
+  };
+  const completedJob = {
+    id: 'job-1',
+    status: 'COMPLETED' as const,
+    progress: 1,
+    bytesDownloaded: 12,
+    totalBytes: 12,
+    fileName: 'clip.mp4',
+    fileSize: 12,
+    error: null,
+    downloadUrl: '/jobs/job-1/file',
+  };
+  let finishTransfer!: (value: { uri: string; size: number }) => void;
+  jest.mocked(analyzeMedia).mockResolvedValue(directMedia);
+  jest.mocked(createDownloadJob).mockResolvedValue(completedJob);
+  jest.mocked(downloadJobFile).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishTransfer = resolve;
+      }),
+  );
+
+  await render(<HomeScreen />);
+  await analyzeExample();
+  await fireEvent.press(screen.getByRole('radio', { name: /Original/ }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  await waitFor(() => expect(downloadJobFile).toHaveBeenCalledTimes(1));
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
+  await act(() => {
+    finishTransfer({ uri: 'file:///cache/late.mp4', size: 12 });
+  });
+  expect(screen.queryByText('✓ Descarga completada')).toBeNull();
+  expect(deleteLocalFile).toHaveBeenCalledWith('file:///cache/late.mp4');
 });
 
 test('YouTube offers real resolution, automatic audio, M4A and MP3 output', async () => {

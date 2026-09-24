@@ -383,6 +383,16 @@ test('native video-only cancellation delegates to URLSession owner', async () =>
     screen.getByRole('button', { name: 'Cancelar descarga de video' }),
   );
   expect(native.cancelVideoDownload).toHaveBeenCalledTimes(1);
+  await act(() => {
+    videoListener?.({
+      jobId: 'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
+      status: 'COMPLETED',
+      fileName: 'late.mp4',
+      fileSize: 100_000,
+      localUri: 'file:///cache/late.mp4',
+    });
+  });
+  expect(screen.queryByText('✓ Descarga completada')).toBeNull();
 });
 
 test('combined download reports both transfers, muxes, completes, and shares', async () => {
@@ -583,10 +593,21 @@ test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
       }),
     );
     expect(native.cancelCombinedDownload).toHaveBeenCalledTimes(1);
+    await act(() => {
+      combinedListener?.({
+        jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+        status: 'COMPLETED',
+        fileName: 'late.mp4',
+        fileSize: 100_000,
+        localUri: 'file:///cache/late.mp4',
+        durationSeconds: 754,
+      });
+    });
+    expect(screen.queryByText('✓ Video con audio completado')).toBeNull();
   },
 );
 
-test('native audio progress completes, shares, and cancellation delegates', async () => {
+test('late audio completion after cancellation is ignored, then a retry can share', async () => {
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
@@ -622,6 +643,24 @@ test('native audio progress completes, shares, and cancellation delegates', asyn
       bytesDownloaded: 2_000_000,
       totalBytes: 2_000_000,
       progress: 1,
+      fileName: 'Own audio.m4a',
+      fileSize: 2_000_000,
+      localUri: 'file:///cache/Own%20audio.m4a',
+    });
+  });
+  expect(screen.queryByText('✓ Descarga completada')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await screen.findByText('Video autorizado');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Descargar audio en este iPhone' }),
+  );
+  await act(() => {
+    audioListener?.({
+      jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+      status: 'COMPLETED',
+      formatId: '140',
+      container: 'm4a',
+      codec: 'mp4a.40.2',
       fileName: 'Own audio.m4a',
       fileSize: 2_000_000,
       localUri: 'file:///cache/Own%20audio.m4a',

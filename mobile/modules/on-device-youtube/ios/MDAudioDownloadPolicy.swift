@@ -267,9 +267,18 @@ enum MDAudioDownloadPolicy {
     return directory
   }
 
-  static func removeWorkspace(_ directory: URL?, fileManager: FileManager = .default) {
-    guard let directory else { return }
-    try? fileManager.removeItem(at: directory)
+  @discardableResult
+  static func removeWorkspace(_ directory: URL?, fileManager: FileManager = .default) -> Bool {
+    guard let directory else { return true }
+    guard fileManager.fileExists(atPath: directory.path) else { return true }
+    do {
+      try fileManager.removeItem(at: directory)
+      return true
+    } catch {
+      let failure = error as NSError
+      NSLog("[Drop files] Workspace cleanup failed (%@:%ld)", failure.domain, failure.code)
+      return false
+    }
   }
 
   private static func hostResolvesOnlyToPublicAddresses(_ host: String) -> Bool {

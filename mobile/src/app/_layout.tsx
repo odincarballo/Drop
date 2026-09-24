@@ -2,7 +2,10 @@ import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { cleanupAbandonedFilesAtStartup } from '@/services/fileExport';
 import { ThemeProvider, useTheme } from '@/theme';
+
+cleanupAbandonedFilesAtStartup();
 
 function ThemedRoutes() {
   const { isDark, ready } = useTheme();

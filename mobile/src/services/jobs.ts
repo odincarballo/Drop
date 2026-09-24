@@ -1,4 +1,4 @@
-import { File, Paths } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
 import {
@@ -82,6 +82,14 @@ export async function downloadJobFile(
     }
     return { uri: file.uri, size: file.size };
   } catch (error) {
+    try {
+      if (destination.exists) destination.delete();
+    } catch (cleanupError) {
+      console.warn(
+        '[Drop files] Could not clean failed direct download',
+        cleanupError,
+      );
+    }
     if (signal.aborted) throw error;
     throw new ApiError(
       'TRANSFER_FAILED',
@@ -108,8 +116,33 @@ const activeFileUses = new Map<string, number>();
 const pendingRemoval = new Set<string>();
 
 function removeLocalFile(uri: string): void {
-  const file = new File(uri);
-  if (file.exists) file.delete();
+  try {
+    const file = new File(uri);
+    if (file.exists) file.delete();
+    const directoryUri = ownedYoutubeWorkspace(uri);
+    if (directoryUri) {
+      const directory = new Directory(directoryUri);
+      if (directory.exists && directory.list().length === 0) directory.delete();
+    }
+  } catch (error) {
+    console.warn('[Drop files] Could not clean completed file', error);
+  }
+}
+
+function ownedYoutubeWorkspace(uri: string): string | null {
+  const match = uri.match(
+    /^(file:\/\/\/[^?#]+\/MediaDrop\/[0-9a-fA-F-]{36})\/[^/]+\.(?:mp4|m4a)$/,
+  );
+  const workspace = match?.[1];
+  if (!workspace) return null;
+  const jobId = workspace.slice(workspace.lastIndexOf('/') + 1);
+  if (
+    !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+      jobId,
+    )
+  )
+    return null;
+  return workspace;
 }
 
 export async function withLocalFileLease<T>(
@@ -125,11 +158,7 @@ export async function withLocalFileLease<T>(
     else {
       activeFileUses.delete(uri);
       if (pendingRemoval.delete(uri)) {
-        try {
-          removeLocalFile(uri);
-        } catch {
-          // Cleanup must not turn a completed export into an error.
-        }
+        removeLocalFile(uri);
       }
     }
   }
