@@ -69,3 +69,12 @@ test('cancelled direct transfer removes its destination', async () => {
   expect(remove).toHaveBeenCalledTimes(2);
   expect(release).toHaveBeenCalledTimes(1);
 });
+
+test('a write failure does not expose a truncated direct file', async () => {
+  downloadAsync.mockRejectedValueOnce(new Error('No space left on device'));
+  await expect(
+    downloadJobFile(job, new AbortController().signal, jest.fn()),
+  ).rejects.toThrow('Revisa el espacio disponible');
+  expect(remove).toHaveBeenCalledTimes(2);
+  expect(release).toHaveBeenCalledTimes(1);
+});
