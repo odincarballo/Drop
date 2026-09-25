@@ -303,6 +303,56 @@ test('local metadata card selects direct M4A without exposing a stream URL', asy
   );
 });
 
+test.each(['audio', 'combined'] as const)(
+  'opaque audio-track identity reaches the native %s download',
+  async (mode) => {
+    const selectedTrack = `140@${'a'.repeat(24)}`;
+    native.analyze.mockResolvedValue(
+      JSON.stringify({
+        ...result,
+        metadata: {
+          ...metadata,
+          preferredAudioFormatId: selectedTrack,
+          audioFormats: [
+            { ...metadata.audioFormats[0], id: `140@${'b'.repeat(24)}` },
+            { ...metadata.audioFormats[0], id: selectedTrack },
+          ],
+        },
+      }),
+    );
+    await render(<TestCard />);
+    await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+    await screen.findByText('Video autorizado');
+    await fireEvent.press(
+      screen.getByRole('button', {
+        name:
+          mode === 'audio'
+            ? 'Descargar audio en este iPhone'
+            : 'Descargar video con audio en este iPhone',
+      }),
+    );
+    if (mode === 'audio') {
+      expect(native.startAudioDownload).toHaveBeenCalledWith(
+        'a'.repeat(32),
+        selectedTrack,
+      );
+    } else {
+      expect(native.startCombinedDownload).toHaveBeenCalledWith(
+        'a'.repeat(32),
+        '134',
+        selectedTrack,
+        754,
+      );
+    }
+    expect(JSON.stringify(native.startAudioDownload.mock.calls)).not.toContain(
+      'googlevideo',
+    );
+    expect(
+      JSON.stringify(native.startCombinedDownload.mock.calls),
+    ).not.toContain('googlevideo');
+  },
+);
+
 test('native video-only progress completes, shares, and never exposes its URL', async () => {
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));

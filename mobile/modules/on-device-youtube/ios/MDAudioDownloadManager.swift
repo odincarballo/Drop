@@ -154,7 +154,12 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   }
 
   func start(analysisID: String, formatID: String) -> String? {
-    start(kind: .audio, analysisID: analysisID, formatID: formatID, useRanges: false)
+    start(
+      kind: .audio,
+      analysisID: analysisID,
+      formatID: formatID,
+      useRanges: MDAudioDownloadPolicy.standaloneAudioUsesRanges
+    )
   }
 
   func startRangedAudio(analysisID: String, formatID: String) -> String? {

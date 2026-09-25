@@ -171,6 +171,99 @@ class SpikeTests(unittest.TestCase):
                     )
                 )
 
+    def test_original_audio_keeps_unique_identity_across_reordered_reextraction(self):
+        english = self.audio_payload(
+            language="en-US",
+            language_preference=-1,
+            format_note="English (US), medium",
+            abr=130,
+            filesize=14_848_193,
+            url="https://rr1.googlevideo.com/videoplayback?signature=english",
+        )["formats"][0]
+        spanish = self.audio_payload(
+            language="es-US",
+            language_preference=10,
+            format_note="Spanish (US) original (default), medium",
+            abr=129,
+            filesize=14_846_784,
+            url="https://rr1.googlevideo.com/videoplayback?signature=spanish",
+        )["formats"][0]
+        payload = {"id": "HdQHE3zg4SE", "title": "Authorized video", "formats": [english, spanish]}
+        refreshed = {
+            **payload,
+            "formats": [
+                {**spanish, "url": "https://rr2.googlevideo.com/videoplayback?signature=new-spanish"},
+                {**english, "url": "https://rr2.googlevideo.com/videoplayback?signature=new-english"},
+            ],
+        }
+        with patch.object(
+            spike.LocalYoutubeDL, "extract_info", side_effect=[payload, refreshed]
+        ):
+            metadata = json.loads(spike.analyze("https://youtu.be/HdQHE3zg4SE"))["metadata"]
+            selected_id = metadata["preferredAudioFormatId"]
+            prepared = json.loads(
+                spike.prepare_audio_download(
+                    json.dumps({"analysisId": metadata["analysisId"], "formatId": selected_id})
+                )
+            )
+        self.assertNotEqual(selected_id, "140")
+        self.assertTrue(selected_id.startswith("140@"))
+        self.assertEqual(len({item["id"] for item in metadata["audioFormats"]}), 2)
+        self.assertNotIn("signature", json.dumps(metadata))
+        self.assertEqual(prepared["descriptor"]["formatId"], selected_id)
+        self.assertEqual(prepared["descriptor"]["url"], refreshed["formats"][0]["url"])
+
+    def test_multiple_languages_without_preference_are_not_silently_selected(self):
+        english = self.audio_payload(language="en-US", language_preference=-1)["formats"][0]
+        spanish = self.audio_payload(language="es-US", language_preference=-1)["formats"][0]
+        self.assertIsNone(spike.preferred_audio([english, spanish]))
+
+    def test_original_preference_is_not_tied_to_spanish(self):
+        english = self.audio_payload(
+            language="en-US", language_preference=10, abr=128
+        )["formats"][0]
+        spanish = self.audio_payload(
+            language="es-US", language_preference=-1, abr=130
+        )["formats"][0]
+        self.assertIs(spike.preferred_audio([spanish, english]), english)
+
+    def test_direct_audio_identity_does_not_collide_with_manifest_variant(self):
+        direct = self.audio_payload(language="es-US", language_preference=10)["formats"][0]
+        manifest = {**direct, "protocol": "m3u8_native"}
+        formats = [manifest, direct]
+        self.assertIs(spike.preferred_audio(formats), direct)
+        self.assertNotEqual(
+            spike.audio_public_id(manifest, formats),
+            spike.audio_public_id(direct, formats),
+        )
+
+    def test_reextraction_rejects_missing_or_ambiguous_audio_track(self):
+        original = self.audio_payload(
+            language="es-US", language_preference=10, format_note="Spanish original"
+        )
+        analysis_id, selected, _ = spike.create_session(
+            "https://www.youtube.com/watch?v=HdQHE3zg4SE", original
+        )
+        selected_id = spike.audio_public_id(selected, original["formats"])
+        missing = self.audio_payload(language="en-US", language_preference=-1)
+        ambiguous = {
+            **original,
+            "formats": [original["formats"][0], {**original["formats"][0], "url": "https://rr2.googlevideo.com/videoplayback?signature=other"}],
+        }
+        for refreshed, code in [
+            (missing, "AUDIO_TRACK_CHANGED"),
+            (ambiguous, "AUDIO_TRACK_AMBIGUOUS"),
+        ]:
+            with self.subTest(code=code), patch.object(
+                spike.LocalYoutubeDL, "extract_info", return_value=refreshed
+            ):
+                prepared = json.loads(
+                    spike.prepare_audio_download(
+                        json.dumps({"analysisId": analysis_id, "formatId": selected_id})
+                    )
+                )
+            self.assertEqual(prepared["error"]["code"], code)
+
     def test_video_selection_prefers_direct_360p_avc_mp4(self):
         payload = self.video_payload()
         payload["formats"].extend(

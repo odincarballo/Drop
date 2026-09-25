@@ -458,18 +458,66 @@ def is_direct_mp4_video(item):
     return urlsplit(url).path.rstrip("/").endswith("/videoplayback")
 
 
+def audio_track_identity(item):
+    """Stable, non-URL fields that distinguish raw yt-dlp audio tracks."""
+    preference = item.get("language_preference")
+    if not isinstance(preference, (int, float)) or isinstance(preference, bool) or not math.isfinite(preference):
+        preference = None
+    return (
+        str(item.get("format_id") or ""),
+        str(item.get("language") or "").strip().lower(),
+        preference,
+        str(item.get("format_note") or "").strip(),
+        str(item.get("acodec") or "").lower(),
+        positive_integer(item.get("audio_channels")),
+        positive_integer(item.get("asr")),
+        is_direct_m4a_audio(item),
+    )
+
+
+def audio_public_id(item, formats):
+    """Keep ordinary format IDs, disambiguating reused itags without leaking URLs."""
+    format_id = str(item.get("format_id") or "")
+    if sum(str(candidate.get("format_id") or "") == format_id for candidate in formats) == 1:
+        return format_id
+    fingerprint = json.dumps(audio_track_identity(item), ensure_ascii=False, separators=(",", ":"))
+    suffix = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:24]
+    return f"{format_id[:55]}@{suffix}"
+
+
+def unique_audio_tracks(formats):
+    direct = [item for item in formats if is_direct_m4a_audio(item)]
+    identities = [audio_track_identity(item) for item in direct]
+    return [item for item, identity in zip(direct, identities) if identities.count(identity) == 1]
+
+
 def preferred_audio(formats):
     candidates = [
         item
-        for item in formats
-        if is_direct_m4a_audio(item)
-        and (
+        for item in unique_audio_tracks(formats)
+        if (
             (positive_integer(item.get("filesize") or item.get("filesize_approx")))
             or 0
         )
         <= MAX_AUDIO_BYTES
     ]
     if not candidates:
+        return None
+
+    # YouTube may reuse one itag for original and dubbed tracks. A bitrate
+    # difference must never override an explicit original/default indication.
+    best_preference = max(audio_track_identity(item)[2] or -1 for item in candidates)
+    if best_preference >= 5:
+        candidates = [
+            item for item in candidates
+            if audio_track_identity(item)[2] == best_preference
+        ]
+    elif any((audio_track_identity(item)[2] or -1) > -10 for item in candidates):
+        candidates = [
+            item for item in candidates
+            if (audio_track_identity(item)[2] or -1) > -10
+        ]
+    if len({audio_track_identity(item)[1] for item in candidates}) != 1:
         return None
 
     def rank(item):
@@ -525,10 +573,10 @@ def clean_sessions(now=None):
 
 def create_session(url, payload):
     clean_sessions()
-    compatible = {
-        str(item.get("format_id"))
-        for item in payload.get("formats", [])
-        if is_direct_m4a_audio(item)
+    formats = payload.get("formats", [])
+    audio_tracks = {
+        audio_public_id(item, formats): audio_track_identity(item)
+        for item in unique_audio_tracks(formats)
     }
     compatible_video = {
         str(item.get("format_id"))
@@ -540,7 +588,7 @@ def create_session(url, payload):
         "created": time.monotonic(),
         "url": url,
         "title": str(payload.get("title") or "YouTube")[:240],
-        "audioFormatIds": compatible,
+        "audioTracks": audio_tracks,
         "videoFormatIds": compatible_video,
     }
     return (
@@ -577,17 +625,21 @@ def audio_headers(payload, item, forbidden_code="AUDIO_HEADERS_FORBIDDEN"):
     return result
 
 
-def build_audio_descriptor(payload, format_id):
-    item = next(
-        (
-            candidate
-            for candidate in payload.get("formats", [])
-            if str(candidate.get("format_id")) == format_id
-        ),
-        None,
-    )
-    if item is None:
-        raise ValueError("FORMAT_NOT_AVAILABLE")
+def build_audio_descriptor(payload, format_id, identity=None):
+    matches = [
+        candidate
+        for candidate in payload.get("formats", [])
+        if (
+            audio_track_identity(candidate) == identity
+            if identity is not None
+            else str(candidate.get("format_id")) == format_id
+        )
+    ]
+    if not matches:
+        raise ValueError("AUDIO_TRACK_CHANGED" if identity is not None else "FORMAT_NOT_AVAILABLE")
+    if len(matches) != 1:
+        raise ValueError("AUDIO_TRACK_AMBIGUOUS")
+    item = matches[0]
     if not is_direct_m4a_audio(item):
         raise ValueError("AUDIO_FORMAT_NOT_SUPPORTED")
     expected = positive_integer(item.get("filesize"))
@@ -670,7 +722,9 @@ def normalize(payload, analysis_id=None, selected_audio=None, selected_video=Non
             continue
         height = number(item.get("height"))
         record = {
-            "id": str(item["format_id"]),
+            "id": (
+                audio_public_id(item, formats) if not has_video else str(item["format_id"])
+            ),
             "container": item.get("ext"),
             "codec": item.get("vcodec") if has_video else item.get("acodec"),
             "height": height,
@@ -711,7 +765,7 @@ def normalize(payload, analysis_id=None, selected_audio=None, selected_video=Non
     if analysis_id is not None:
         result["analysisId"] = analysis_id
         result["preferredAudioFormatId"] = (
-            str(selected_audio.get("format_id")) if selected_audio else None
+            audio_public_id(selected_audio, formats) if selected_audio else None
         )
         result["preferredVideoFormatId"] = (
             str(selected_video.get("format_id")) if selected_video else None
@@ -805,7 +859,8 @@ def prepare_audio_download(raw):
         session = analysis_sessions.get(analysis_id)
         if session is None:
             raise ValueError("ANALYSIS_NOT_FOUND")
-        if format_id not in session["audioFormatIds"]:
+        identity = session["audioTracks"].get(format_id)
+        if identity is None:
             raise ValueError("FORMAT_NOT_AVAILABLE")
         check()
         with LocalYoutubeDL(local_options()) as downloader:
@@ -813,7 +868,7 @@ def prepare_audio_download(raw):
                 session["url"], download=False, process=False
             )
         check()
-        result["descriptor"] = build_audio_descriptor(payload, format_id)
+        result["descriptor"] = build_audio_descriptor(payload, format_id, identity)
     except json.JSONDecodeError:
         result["error"] = {"code": "AUDIO_REQUEST_INVALID"}
     except DownloadError as error:

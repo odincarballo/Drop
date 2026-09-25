@@ -125,6 +125,10 @@ export function localAudioError(code: string): string {
     ANALYSIS_NOT_FOUND:
       'El análisis local caducó. Analiza nuevamente el video.',
     FORMAT_NOT_AVAILABLE: 'El formato seleccionado ya no está disponible.',
+    AUDIO_TRACK_CHANGED:
+      'La pista de audio cambió desde el análisis. Analiza nuevamente el video.',
+    AUDIO_TRACK_AMBIGUOUS:
+      'No se puede identificar con seguridad la pista de audio. Analiza nuevamente el video.',
     AUDIO_FORMAT_NOT_SUPPORTED:
       'Este formato no es un audio M4A directo compatible.',
     AUDIO_FILE_TOO_LARGE: 'El audio supera el límite de 25 MB de esta prueba.',

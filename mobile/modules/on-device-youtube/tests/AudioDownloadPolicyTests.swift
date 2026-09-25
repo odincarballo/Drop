@@ -18,7 +18,8 @@ enum AudioDownloadPolicyTests {
   static func main() throws {
     guard
       MDAudioDownloadPolicy.requestTimeoutSeconds == 60,
-      MDAudioDownloadPolicy.resourceTimeoutSeconds == 300
+      MDAudioDownloadPolicy.resourceTimeoutSeconds == 300,
+      MDAudioDownloadPolicy.standaloneAudioUsesRanges
     else {
       throw TestFailure.failed("Download timeouts must remain finite")
     }
@@ -211,6 +212,86 @@ enum AudioDownloadPolicyTests {
     )
     guard audioRange.total == 2073130 else {
       throw TestFailure.failed("Audio total length was not recovered")
+    }
+    let fullBodyAudioResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 200,
+      httpVersion: "HTTP/1.1",
+      headerFields: [
+        "Content-Type": "audio/mp4",
+        "Content-Length": "2073130",
+      ]
+    )!
+    guard
+      try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
+        fullBodyAudioResponse,
+        requestedStart: 0,
+        bytesAlreadyPersisted: 0,
+        kind: .audio
+      ) == 2073130
+    else {
+      throw TestFailure.failed("Audio full-body fallback length was not recovered")
+    }
+    try expectFailure("AUDIO_RANGE_NOT_SUPPORTED") {
+      _ = try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
+        fullBodyAudioResponse,
+        requestedStart: 262144,
+        bytesAlreadyPersisted: 262144,
+        kind: .audio
+      )
+    }
+    let forbiddenAudioResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 403,
+      httpVersion: "HTTP/1.1",
+      headerFields: ["Content-Type": "audio/mp4"]
+    )!
+    try expectFailure("AUDIO_HTTP_FORBIDDEN") {
+      _ = try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
+        forbiddenAudioResponse,
+        requestedStart: 0,
+        bytesAlreadyPersisted: 0,
+        kind: .audio
+      )
+    }
+    try expectFailure("AUDIO_HTTP_FORBIDDEN") {
+      _ = try MDAudioDownloadPolicy.validateRangeResponse(
+        forbiddenAudioResponse,
+        requestedStart: 0,
+        requestedEnd: 262143,
+        kind: .audio
+      )
+    }
+    let unsatisfiableAudioResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 416,
+      httpVersion: "HTTP/1.1",
+      headerFields: ["Content-Range": "bytes */2073130"]
+    )!
+    try expectFailure("AUDIO_RANGE_REJECTED") {
+      _ = try MDAudioDownloadPolicy.validateRangeResponse(
+        unsatisfiableAudioResponse,
+        requestedStart: 0,
+        requestedEnd: 262143,
+        kind: .audio
+      )
+    }
+    let oversizedAudioResponse = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 200,
+      httpVersion: "HTTP/1.1",
+      headerFields: [
+        "Content-Type": "audio/mp4",
+        "Content-Length": "\(MDAudioDownloadPolicy.maximumBytes + 1)",
+      ]
+    )!
+    try expectFailure("AUDIO_FILE_TOO_LARGE") {
+      _ = try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
+        oversizedAudioResponse,
+        requestedStart: 0,
+        bytesAlreadyPersisted: 0,
+        kind: .audio
+      )
     }
     try expectFailure("AUDIO_RANGE_NOT_SUPPORTED") {
       _ = try MDAudioDownloadPolicy.validateRangeResponse(

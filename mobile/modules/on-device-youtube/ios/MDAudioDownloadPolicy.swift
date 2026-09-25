@@ -34,6 +34,7 @@ enum MDAudioDownloadPolicy {
   // URLSession applies this as an inactivity timeout, not only to connection setup.
   static let requestTimeoutSeconds: TimeInterval = 60
   static let resourceTimeoutSeconds: TimeInterval = 5 * 60
+  static let standaloneAudioUsesRanges = true
   static let allowedHeaders = Set([
     "accept", "accept-language", "origin", "referer", "user-agent",
   ])
