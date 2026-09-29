@@ -90,7 +90,7 @@ export function LocalYoutubeMainCard({
   const modeAvailable = {
     VIDEO_AUDIO: hasVideo && hasAudio && Boolean(metadata?.duration),
     VIDEO_ONLY: hasVideo,
-    AUDIO_ONLY: hasAudio,
+    AUDIO_ONLY: hasAudio && Boolean(metadata?.duration),
   };
   const mode: Mode =
     requestedMode && modeAvailable[requestedMode]
@@ -296,9 +296,9 @@ export function LocalYoutubeMainCard({
                   Esta calidad supera el límite actual de video de 50 MiB.
                 </Text>
               )}
-              {hasVideo && hasAudio && !metadata.duration && (
+              {hasAudio && !metadata.duration && (
                 <Text style={{ color: colors.secondary }}>
-                  No se puede combinar sin una duración válida.
+                  No se puede preparar audio sin una duración válida.
                 </Text>
               )}
               <View style={styles.sizeRow}>

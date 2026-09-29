@@ -25,17 +25,10 @@ function HttpDiagnostics({
     <Text selectable style={[styles.diagnostics, { color }]}>
       {[
         `Primer Range solicitado: ${value.requestedRange ?? 'no disponible'}`,
-        `Primer Range efectivo: ${value.effectiveRange ?? 'ausente'}`,
-        `Primer response: HTTP ${value.statusCode ?? 'desconocido'} · modo ${value.transferMode ?? 'sin determinar'}`,
+        `Primer response: HTTP ${value.statusCode ?? 'desconocido'}`,
         `Primer Content-Range: ${value.contentRange ?? 'ausente'}`,
-        `Primer Content-Length: ${value.contentLength ?? 'ausente'} · Accept-Ranges: ${value.acceptRanges ?? 'ausente'}`,
-        `Primer Content-Type: ${value.contentType ?? 'ausente'}`,
-        `Redirects del primer request: ${value.redirectCount}${value.redirectHosts.length ? ` · ${value.redirectHosts.join(' · ')}` : ''}`,
+        `Primer Content-Length: ${value.contentLength ?? 'ausente'}`,
         `Host final del primer request: ${value.finalHost ?? 'no disponible'}`,
-        `Request: Accept-Encoding=${value.acceptEncoding ?? 'ausente'}`,
-        `User-Agent=${value.userAgent ?? 'ausente'}`,
-        `Accept=${value.accept ?? 'ausente'}`,
-        `Referer=${value.refererOrigin ?? 'ausente'} · Origin=${value.origin ?? 'ausente'}`,
       ].join('\n')}
     </Text>
   );

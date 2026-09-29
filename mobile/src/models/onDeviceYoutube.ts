@@ -63,23 +63,33 @@ export type LocalYoutubeVideoFormat =
 export type LocalYoutubeAudioFormat =
   LocalYoutubeMetadata['audioFormats'][number];
 
+const diagnosticRange = z
+  .string()
+  .max(80)
+  .regex(/^bytes=\d+-\d+$/);
+const diagnosticContentRange = z
+  .string()
+  .max(160)
+  .regex(/^bytes (?:\d+-\d+|\*)\/\d+$/);
+const diagnosticLength = z.string().max(40).regex(/^\d+$/);
+const diagnosticHost = z
+  .string()
+  .max(253)
+  .regex(/^(?:[a-z0-9-]+\.)*googlevideo\.com$/);
+
 export const localHttpTransferDiagnosticsSchema = z.object({
-  requestedRange: z.string().max(80).optional(),
-  effectiveRange: z.string().max(80).optional(),
+  requestedRange: diagnosticRange.optional(),
   statusCode: z.number().int().min(100).max(599).optional(),
-  contentRange: z.string().max(160).optional(),
-  contentLength: z.string().max(40).optional(),
-  acceptRanges: z.string().max(80).optional(),
-  contentType: z.string().max(160).optional(),
-  redirectCount: z.number().int().nonnegative().max(3),
-  redirectHosts: z.array(z.string().max(600)).max(3),
-  finalHost: z.string().max(253).optional(),
-  acceptEncoding: z.string().max(80).optional(),
-  userAgent: z.string().max(300).optional(),
-  accept: z.string().max(300).optional(),
-  refererOrigin: z.string().max(300).optional(),
-  origin: z.string().max(300).optional(),
-  transferMode: z.enum(['range', 'full-stream-fallback']).optional(),
+  contentRange: diagnosticContentRange.optional(),
+  contentLength: diagnosticLength.optional(),
+  finalHost: diagnosticHost.optional(),
+  failureStatusCode: z.number().int().min(100).max(599).optional(),
+  failureRequestedRange: diagnosticRange.optional(),
+  failureHost: diagnosticHost.optional(),
+  failureContentRange: diagnosticContentRange.optional(),
+  failureContentLength: diagnosticLength.optional(),
+  failureRangeIndex: z.number().int().positive().optional(),
+  failureBytesPersisted: z.number().int().nonnegative().optional(),
 });
 
 export type LocalHttpTransferDiagnostics = z.infer<

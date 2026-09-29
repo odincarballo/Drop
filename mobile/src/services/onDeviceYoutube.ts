@@ -15,7 +15,11 @@ import { serverError } from '@/services/errors';
 type LocalEngine = {
   analyze: (url: string) => Promise<string>;
   testEjsFixture: () => Promise<string>;
-  startAudioDownload: (analysisId: string, formatId: string) => string | null;
+  startAudioDownload: (
+    analysisId: string,
+    formatId: string,
+    durationSeconds: number,
+  ) => string | null;
   cancelAudioDownload: () => void;
   startVideoDownload: (analysisId: string, formatId: string) => string | null;
   cancelVideoDownload: () => void;
@@ -96,11 +100,18 @@ export function cancelLocalYoutube() {
 export function startLocalAudioDownload(
   analysisId: string,
   formatId: string,
+  durationSeconds: number,
 ): string {
   const native = engine();
   if (!native)
     throw new Error('Esta build no incluye el motor local experimental.');
-  const jobId = native.startAudioDownload(analysisId, formatId);
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0)
+    throw new Error('No se puede preparar el audio sin una duración válida.');
+  const jobId = native.startAudioDownload(
+    analysisId,
+    formatId,
+    durationSeconds,
+  );
   if (!jobId) throw new Error('Ya hay una descarga local activa.');
   return jobId;
 }
@@ -142,6 +153,18 @@ export function localAudioError(code: string): string {
     AUDIO_RANGE_INVALID:
       'YouTube devolvió un fragmento de audio incompleto o inesperado.',
     AUDIO_TIMEOUT: 'La descarga tardó demasiado tiempo.',
+    AUDIO_DURATION_INVALID:
+      'No se puede preparar el audio sin una duración válida.',
+    AUDIO_NORMALIZATION_INPUT_INVALID:
+      'El audio descargado no contiene una pista completa compatible.',
+    AUDIO_NORMALIZATION_CODEC_UNSUPPORTED:
+      'El audio descargado no conserva una pista AAC compatible.',
+    AUDIO_NORMALIZATION_EXPORT_UNAVAILABLE:
+      'Este iPhone no pudo preparar el archivo M4A sin conversión.',
+    AUDIO_NORMALIZATION_EXPORT_FAILED:
+      'No se pudo preparar el archivo M4A. Inténtalo nuevamente.',
+    AUDIO_NORMALIZATION_OUTPUT_INVALID:
+      'El archivo M4A resultante no pasó la validación de duración.',
     AUDIO_STORAGE_UNAVAILABLE:
       'No se pudo guardar el audio. Comprueba el espacio disponible.',
     AUDIO_MIME_NOT_ALLOWED:

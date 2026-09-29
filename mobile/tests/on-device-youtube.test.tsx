@@ -8,9 +8,13 @@ import {
 import { requireOptionalNativeModule } from 'expo';
 
 import { LocalYoutubeSpikeCard } from '@/components/LocalYoutubeSpikeCard';
+import { LocalYoutubeDiagnosticsCard } from '@/components/LocalYoutubeDiagnosticsCard';
 import { ActionButton } from '@/components/ActionButton';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
-import { localYoutubeResultSchema } from '@/models/onDeviceYoutube';
+import {
+  localHttpTransferDiagnosticsSchema,
+  localYoutubeResultSchema,
+} from '@/models/onDeviceYoutube';
 import {
   analyzeYoutubeOnDevice,
   cancelLocalYoutube,
@@ -284,6 +288,77 @@ function TestCard() {
   );
 }
 
+function TestAudioDiagnostics() {
+  const spike = useLocalYoutubeSpike();
+  return (
+    <>
+      <ActionButton
+        label="Analizar"
+        onPress={() => void spike.analyze('https://youtu.be/AWGPaFraPN4')}
+      />
+      <ActionButton label="Solo audio" onPress={spike.downloadAudio} />
+      <LocalYoutubeDiagnosticsCard spike={spike} />
+    </>
+  );
+}
+
+test('solo-audio HTTP failure exposes only bounded, sanitized range diagnostics', async () => {
+  await render(<TestAudioDiagnostics />);
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await screen.findByText(/ID: AWGPaFraPN4/);
+  await fireEvent.press(screen.getByRole('button', { name: 'Solo audio' }));
+  await act(() => {
+    audioListener?.({
+      jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+      status: 'FAILED',
+      errorCode: 'AUDIO_HTTP_ERROR',
+      httpDiagnostics: {
+        failureStatusCode: 503,
+        failureRequestedRange: 'bytes=262144-524287',
+        failureHost: 'rr1.googlevideo.com',
+        failureContentRange: 'bytes */2000000',
+        failureContentLength: '42',
+        failureRangeIndex: 2,
+        failureBytesPersisted: 262144,
+      },
+    });
+  });
+  const details = screen.getByText(/HTTP audio fallido:/);
+  const diagnosticText = String(details.props.children);
+  expect(diagnosticText).toContain('Status HTTP: 503');
+  expect(diagnosticText).toContain('Range solicitado: bytes=262144-524287');
+  expect(diagnosticText).toContain('Petición de rango: 2');
+  expect(diagnosticText).toContain('Bytes acumulados antes del fallo: 262144');
+  expect(diagnosticText).toContain('Host: rr1.googlevideo.com');
+  expect(diagnosticText).toContain('Content-Range: bytes */2000000');
+  expect(diagnosticText).toContain('Content-Length: 42');
+  expect(diagnosticText).not.toContain('https://');
+});
+
+test('HTTP diagnostics reject signed URLs and arbitrary header strings', () => {
+  expect(
+    localHttpTransferDiagnosticsSchema.safeParse({
+      failureHost: 'rr1.googlevideo.com?sig=secret',
+    }).success,
+  ).toBe(false);
+  expect(
+    localHttpTransferDiagnosticsSchema.safeParse({
+      failureContentRange: 'bytes */2000000?token=secret',
+    }).success,
+  ).toBe(false);
+  expect(
+    localHttpTransferDiagnosticsSchema.safeParse({
+      failureRequestedRange: 'bytes=0-99&authorization=secret',
+    }).success,
+  ).toBe(false);
+  const parsed = localHttpTransferDiagnosticsSchema.parse({
+    failureStatusCode: 403,
+    failureHost: 'rr1.googlevideo.com',
+    signedUrl: 'https://rr1.googlevideo.com/path?sig=secret',
+  });
+  expect(JSON.stringify(parsed)).not.toContain('secret');
+});
+
 test('local metadata card selects direct M4A without exposing a stream URL', async () => {
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
@@ -297,7 +372,11 @@ test('local metadata card selects direct M4A without exposing a stream URL', asy
       name: 'Descargar audio en este iPhone',
     }),
   );
-  expect(native.startAudioDownload).toHaveBeenCalledWith('a'.repeat(32), '140');
+  expect(native.startAudioDownload).toHaveBeenCalledWith(
+    'a'.repeat(32),
+    '140',
+    754,
+  );
   expect(JSON.stringify(native.startAudioDownload.mock.calls)).not.toContain(
     'googlevideo',
   );
@@ -335,6 +414,7 @@ test.each(['audio', 'combined'] as const)(
       expect(native.startAudioDownload).toHaveBeenCalledWith(
         'a'.repeat(32),
         selectedTrack,
+        754,
       );
     } else {
       expect(native.startCombinedDownload).toHaveBeenCalledWith(
@@ -504,19 +584,10 @@ test('combined download reports both transfers, muxes, completes, and shares', a
       audioCodec: 'mp4a.40.2',
       videoHttpDiagnostics: {
         requestedRange: 'bytes=0-262143',
-        effectiveRange: 'bytes=0-262143',
         statusCode: 206,
         contentRange: 'bytes 0-262143/586796',
         contentLength: '262144',
-        acceptRanges: 'bytes',
-        contentType: 'video/mp4',
-        redirectCount: 0,
-        redirectHosts: [],
         finalHost: 'rr1.googlevideo.com',
-        acceptEncoding: 'identity',
-        userAgent: 'MediaDrop test',
-        accept: '*/*',
-        transferMode: 'range',
       },
     });
   });
@@ -524,12 +595,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
   expect(
     screen.getByText(/Primer Range solicitado: bytes=0-262143/),
   ).toBeTruthy();
-  expect(
-    screen.getByText(/Primer Range efectivo: bytes=0-262143/),
-  ).toBeTruthy();
-  expect(
-    screen.getByText(/Primer response: HTTP 206 · modo range/),
-  ).toBeTruthy();
+  expect(screen.getByText(/Primer response: HTTP 206/)).toBeTruthy();
   expect(
     screen.getByText(/Primer Content-Range: bytes 0-262143\/586796/),
   ).toBeTruthy();
@@ -725,6 +791,36 @@ test('late audio completion after cancellation is ignored, then a retry can shar
       'file:///cache/Own%20audio.m4a',
     ),
   );
+});
+
+test('downloaded audio is not published when passthrough normalization fails', async () => {
+  await render(<TestCard />);
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await screen.findByText('Video autorizado');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Descargar audio en este iPhone' }),
+  );
+  await act(() => {
+    audioListener?.({
+      jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+      status: 'DOWNLOADING',
+      bytesDownloaded: 2_000_000,
+      totalBytes: 2_000_000,
+      progress: 1,
+    });
+  });
+  expect(screen.queryByText('✓ Descarga completada')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Compartir audio' })).toBeNull();
+  await act(() => {
+    audioListener?.({
+      jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+      status: 'FAILED',
+      errorCode: 'AUDIO_NORMALIZATION_EXPORT_FAILED',
+    });
+  });
+  expect(screen.queryByText('✓ Descarga completada')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Compartir audio' })).toBeNull();
+  expect(screen.getByText(/No se pudo preparar el archivo M4A/)).toBeTruthy();
 });
 
 test('invalid local audio events are ignored', async () => {

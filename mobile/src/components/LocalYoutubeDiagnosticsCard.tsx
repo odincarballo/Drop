@@ -11,17 +11,10 @@ function httpLines(value: LocalHttpTransferDiagnostics | null): string[] {
   if (!value) return [];
   return [
     `Primer Range solicitado: ${value.requestedRange ?? 'no disponible'}`,
-    `Primer Range efectivo: ${value.effectiveRange ?? 'ausente'}`,
-    `Primer response: HTTP ${value.statusCode ?? 'desconocido'} · modo ${value.transferMode ?? 'sin determinar'}`,
+    `Primer response: HTTP ${value.statusCode ?? 'desconocido'}`,
     `Primer Content-Range: ${value.contentRange ?? 'ausente'}`,
-    `Primer Content-Length: ${value.contentLength ?? 'ausente'} · Accept-Ranges: ${value.acceptRanges ?? 'ausente'}`,
-    `Primer Content-Type: ${value.contentType ?? 'ausente'}`,
-    `Redirects: ${value.redirectCount}${value.redirectHosts.length ? ` · ${value.redirectHosts.join(' · ')}` : ''}`,
+    `Primer Content-Length: ${value.contentLength ?? 'ausente'}`,
     `Host final: ${value.finalHost ?? 'no disponible'}`,
-    `Request: Accept-Encoding=${value.acceptEncoding ?? 'ausente'}`,
-    `User-Agent=${value.userAgent ?? 'ausente'}`,
-    `Accept=${value.accept ?? 'ausente'}`,
-    `Referer=${value.refererOrigin ?? 'ausente'} · Origin=${value.origin ?? 'ausente'}`,
   ];
 }
 
@@ -39,6 +32,10 @@ export function LocalYoutubeDiagnosticsCard({ spike }: { spike: Spike }) {
     spike.videoState.status === 'completed' ||
     spike.videoState.status === 'error'
       ? spike.videoState.httpDiagnostics
+      : null;
+  const audioHttp =
+    spike.audioState.status === 'error'
+      ? spike.audioState.httpDiagnostics
       : null;
   const combinedHttp =
     spike.combinedState.status === 'completed' ||
@@ -79,6 +76,20 @@ export function LocalYoutubeDiagnosticsCard({ spike }: { spike: Spike }) {
       `Video + audio: ${spike.combinedState.status}${spike.combinedState.status === 'error' ? ` · ${spike.combinedState.code}` : ''}`,
     spike.audioState.status !== 'idle' &&
       `Audio directo: ${spike.audioState.status}${spike.audioState.status === 'error' ? ` · ${spike.audioState.code}` : ''}`,
+    audioHttp?.failureStatusCode != null && 'HTTP audio fallido:',
+    audioHttp?.failureStatusCode != null &&
+      `Status HTTP: ${audioHttp.failureStatusCode}`,
+    audioHttp?.failureRequestedRange &&
+      `Range solicitado: ${audioHttp.failureRequestedRange}`,
+    audioHttp?.failureRangeIndex != null &&
+      `Petición de rango: ${audioHttp.failureRangeIndex}`,
+    audioHttp?.failureBytesPersisted != null &&
+      `Bytes acumulados antes del fallo: ${audioHttp.failureBytesPersisted}`,
+    audioHttp?.failureHost && `Host: ${audioHttp.failureHost}`,
+    audioHttp?.failureContentRange &&
+      `Content-Range: ${audioHttp.failureContentRange}`,
+    audioHttp?.failureContentLength &&
+      `Content-Length: ${audioHttp.failureContentLength}`,
     combinedHttp && 'HTTP video + audio:',
     ...httpLines(combinedHttp),
     videoHttp && 'HTTP video directo:',

@@ -24,9 +24,12 @@ public class OnDeviceYouTubeModule: Module {
       MDPythonBridge.testEJS { result in promise.resolve(result) }
     }
 
-    Function("startAudioDownload") { (analysisId: String, formatId: String) -> String? in
+    Function("startAudioDownload") {
+      (analysisId: String, formatId: String, durationSeconds: Double) -> String? in
       guard !combinedDownload.isActive else { return nil }
-      return audioDownload.start(analysisID: analysisId, formatID: formatId)
+      return audioDownload.start(
+        analysisID: analysisId, formatID: formatId, durationSeconds: durationSeconds
+      )
     }
 
     Function("cancelAudioDownload") { audioDownload.cancel() }

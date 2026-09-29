@@ -65,7 +65,12 @@ export type LocalAudioState =
       actionError: string | null;
     }
   | { status: 'cancelled' }
-  | { status: 'error'; message: string; code: string };
+  | {
+      status: 'error';
+      message: string;
+      code: string;
+      httpDiagnostics: LocalHttpTransferDiagnostics | null;
+    };
 
 export type LocalVideoState =
   | { status: 'idle' }
@@ -200,7 +205,12 @@ export function useLocalYoutubeSpike() {
     } else if (event.status === 'FAILED') {
       audioJobId.current = null;
       const code = event.errorCode ?? 'AUDIO_DOWNLOAD_FAILED';
-      setAudioState({ status: 'error', code, message: localAudioError(code) });
+      setAudioState({
+        status: 'error',
+        code,
+        message: localAudioError(code),
+        httpDiagnostics: event.httpDiagnostics ?? null,
+      });
     }
   }, []);
 
@@ -458,6 +468,16 @@ export function useLocalYoutubeSpike() {
         status: 'error',
         code: 'AUDIO_FORMAT_NOT_SUPPORTED',
         message: localAudioError('AUDIO_FORMAT_NOT_SUPPORTED'),
+        httpDiagnostics: null,
+      });
+      return;
+    }
+    if (!metadata.duration || !Number.isFinite(metadata.duration)) {
+      setAudioState({
+        status: 'error',
+        code: 'AUDIO_DURATION_INVALID',
+        message: localAudioError('AUDIO_DURATION_INVALID'),
+        httpDiagnostics: null,
       });
       return;
     }
@@ -465,6 +485,7 @@ export function useLocalYoutubeSpike() {
       const jobId = startLocalAudioDownload(
         metadata.analysisId,
         metadata.preferredAudioFormatId,
+        metadata.duration,
       );
       audioJobId.current = jobId;
       setAudioState({
@@ -480,6 +501,7 @@ export function useLocalYoutubeSpike() {
           error instanceof Error
             ? error.message
             : localAudioError('AUDIO_DOWNLOAD_FAILED'),
+        httpDiagnostics: null,
       });
     }
   }

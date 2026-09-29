@@ -333,7 +333,11 @@ test('normal YouTube progress, cancellation, audio-only and sharing stay on-devi
   );
   await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
-  expect(native.startAudioDownload).toHaveBeenCalledWith('a'.repeat(32), '140');
+  expect(native.startAudioDownload).toHaveBeenCalledWith(
+    'a'.repeat(32),
+    '140',
+    121,
+  );
   await act(() =>
     native.emit('onAudioDownloadState', {
       jobId: audioJob,
@@ -391,7 +395,11 @@ test('unknown local stream sizes remain downloadable', async () => {
   await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
   expect(screen.getByRole('button', { name: 'Descargar' })).toBeEnabled();
   await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
-  expect(native.startAudioDownload).toHaveBeenCalledWith('a'.repeat(32), '140');
+  expect(native.startAudioDownload).toHaveBeenCalledWith(
+    'a'.repeat(32),
+    '140',
+    121,
+  );
 });
 
 test('known oversized tracks are blocked, while unknown sizes are allowed', async () => {
