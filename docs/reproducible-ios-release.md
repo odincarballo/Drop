@@ -1,4 +1,4 @@
-# Drop: Release iOS desde checkout limpio
+# Drop 1.0.1: Release iOS desde checkout limpio
 
 Partir de un clon o worktree temporal sin `mobile/ios`, `node_modules`, Pods,
 `vendor` ni DerivedData. La Mac necesita Xcode con licencia aceptada, Node según
@@ -36,3 +36,13 @@ Xcode. `DROP_DEVELOPMENT_TEAM` permite indicar el Team de firma; por defecto es
 El script no instala la app ni borra un proyecto iOS existente. Si falta la
 identidad o el perfil de firma, Xcode debe fallar con su error de firma; no se
 reemplaza por material privado versionado.
+
+Para la Release Candidate 1.0.1, generar el checkout limpio desde el **HEAD
+final ya confirmado** de `feature/v1.0.1-reliability`, no desde el directorio
+de desarrollo con cambios pendientes. Verificar en `Drop.app/Info.plist`:
+`CFBundleDisplayName=Drop`, `CFBundleShortVersionString=1.0.1`,
+`CFBundleVersion=2` y `CFBundleIdentifier=com.odincarballo.mediadrop`.
+Comprobar además firma `HK927RUDLZ`, arquitectura ARM64 y presencia de Hermes,
+CPython 3.13.15, yt-dlp 2026.08.19, QuickJS-NG 0.16.2 y los módulos
+`on-device-youtube` y `drop-file-export`. No instalar ni etiquetar esta build
+como `v1.0.1` antes de aprobar la Release Candidate.

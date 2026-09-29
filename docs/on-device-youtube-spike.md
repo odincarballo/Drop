@@ -1,200 +1,97 @@
-# Spike de YouTube en el iPhone
+# Drop on-device: estado de v1.0.1
 
-## Estado y alcance
+Este documento sustituye el plan histórico del spike. Describe el motor que
+está implementado en Drop y delimita qué se comprobó en el iPhone frente a lo
+que solo tiene pruebas automatizadas. El tag `v1.0.0` conserva el primer estado
+estable; esta rama prepara la Release Candidate `1.0.1` sin modificar ese tag.
 
-Experimento en `feature/on-device-youtube`, creado desde `main` limpio en
-`407d2a2`. No sustituye MediaDrop 0.6. La viabilidad de análisis quedó demostrada
-en el iPhone físico el 11 de septiembre de 2026. Una compilación, tests o un
-resultado en macOS por sí solos no habrían satisfecho ese criterio.
+## Flujo implementado
 
-Se añade una sección «YouTube · prueba local» con el botón «Analizar en este
-iPhone». Usa el enlace del campo existente y no tiene acción de descarga.
-El botón original «Analizar», el cliente API, SecureStore y las descargas siguen
-utilizando su implementación anterior. No existe fallback del spike a Render.
-No se ha modificado el backend, Render, la firma ni el metadato nativo 0.3.0.
+- El botón principal «Analizar» envía YouTube al módulo local
+  `on-device-youtube`, sin fallback a Render. Las URL de recursos directos
+  compatibles mantienen su ruta anterior. No se exponen URL firmadas de los
+  streams a React Native.
+- CPython 3.13.15 ejecuta yt-dlp 2026.08.19 dentro del iPhone. QuickJS-NG
+  0.16.2 está empaquetado para el proveedor EJS, pero su presencia no garantiza
+  compatibilidad completa con todos los videos de YouTube.
+- La selección usa el catálogo del análisis actual y la identidad única de la
+  pista de audio. Prioriza la pista original/predeterminada cuando los metadatos
+  permiten identificarla; si hay ambigüedad, no sustituye silenciosamente la
+  pista. Excluye HLS de la ruta de MP4 directo.
+- Audio M4A/AAC y video MP4/H.264 se descargan directamente al iPhone mediante
+  URLSession. El video y Solo audio usan rangos de 256 KiB. La respuesta HTTP
+  200 tiene un fallback de streaming a disco únicamente donde la política
+  existente lo permite. Los límites son **50 MiB por pista de video** y
+  **25 MiB por pista de audio**, comprobados durante la transferencia.
+- Video + audio utiliza AVFoundation passthrough para combinar las pistas en
+  MP4. Solo audio normaliza con AVFoundation passthrough el timeline de un M4A
+  DASH a la duración validada del análisis: no cambia códec ni bitrate de
+  forma intencionada y no publica el M4A descargado antes de validar la salida.
+- Se muestran progreso, cancelación, resultado y «Guardar en Archivos» mediante
+  UIDocumentPicker; «Más opciones» mantiene la hoja de compartir. Los archivos
+  activos quedan retenidos durante descarga, mux y exportación. Los parciales y
+  trabajos abandonados propios de Drop se limpian de forma conservadora.
+- Los detalles HTTP visibles se limitan a status, Range, índice de petición,
+  host, Content-Range, Content-Length y bytes acumulados. Se reconstruyen desde
+  números o valores estrictamente validados; no se transfieren URL, queries,
+  cookies, Authorization ni headers arbitrarios.
 
-## Auditoría y elección
+## Validado físicamente en «iPhone de Odín»
 
-La app existente utiliza Expo 57.0.20, React Native 0.86.3, Hermes y un proyecto
-Xcode ya generado. Expo Modules permite incorporar el adaptador Swift/Objective-C
-sin convertir la UI a Swift ni regenerar `ios/`.
+- YouTube: análisis local, Video + audio, Solo video y Solo audio; selección
+  de calidades directas 360p/364p y 720p según el recurso; progreso, mux,
+  exportación a Archivos y reproducción externa con imagen y sonido
+  sincronizados. La selección de 720p y la distinción HLS frente a MP4 directo
+  se comprobaron con contenidos distintos, incluido NASA IRIS.
+- `HdQHE3zg4SE`: Solo audio M4A/AAC en español descargó con rapidez y duró
+  aproximadamente 15:17, sin cola de silencio ni `AUDIO_TIMEOUT`/
+  `AUDIO_HTTP_ERROR`. Video + audio 360p conservó español, sincronización y
+  duración. La pista original/predeterminada quedó identificada correctamente.
+- `AWGPaFraPN4`: Solo audio duró aproximadamente 2:01 sin silencio añadido;
+  Video + audio 360p mantuvo imagen, sonido y sincronización.
+- Se canceló y reintentó una descarga de YouTube; también se forzó el cierre
+  durante una descarga, se reabrió Drop y se inició otra descarga sin falso
+  «completado» ni bloqueo. La limpieza de carpetas internas no fue inspeccionada
+  manualmente en el teléfono.
+- «Guardar en Archivos» exportó y reprodujo archivos fuera de Drop. El recurso
+  directo de Samplelib se analizó y descargó normalmente. Sistema/Claro/Oscuro,
+  Ajustes, token preservado y preferencias se validaron en el iPhone.
 
-```text
-Pantalla React Native (solo prueba de metadatos)
-  → módulo Expo OnDeviceYouTube
-  → hilo nativo → API C de CPython
-  → yt-dlp Python + transporte HTTPS restringido
-  → YouTube desde la conexión del iPhone
-  → EJS → API C de QuickJS-NG, cuando hace falta JavaScript
-  → metadatos JSON normalizados → pantalla
-```
+## Validado por tests o revisión de código, no físicamente
 
-### Python y yt-dlp
+- Cancelación y reintento del recurso directo: el archivo físico usado para la
+  prueba terminaba demasiado rápido para provocar una cancelación manual.
+- Fallos de escritura, limpieza de parciales y barrido conservador de trabajos
+  abandonados al arranque; leases de archivos durante UIDocumentPicker y hoja
+  de compartir; cancelación durante mux y exportación.
+- El M4A real de `HdQHE3zg4SE`, copiado del iPhone, se normalizó en un laboratorio
+  macOS a **917,0 s** y conservó AAC. También se comprobó `AWGPaFraPN4` a
+  **121,0 s**. La validación física de esas duraciones se enumera arriba.
+- Las suites móviles, Python y Swift y la construcción Release ARM64 desde
+  checkout limpio forman parte del cierre de la Release Candidate. Sus conteos
+  definitivos se registran al terminar esa validación, no se infieren aquí.
 
-CPython **3.13.15**, distribución iOS de BeeWare **3.13-b15**, como XCFramework
-ARM64. Se inicializa mediante `Py_InitializeFromConfig`, en modo aislado, sin
-variables Python del entorno, bytecode en disco ni intérprete externo.
-La biblioteca estándar y sus extensiones se empaquetan como frameworks firmados,
-con los marcadores `.fwork` y `.origin` de Python para iOS.
+## Reproducibilidad y configuración
 
-Se incluyen wheels pure-Python de **yt-dlp 2026.8.19**, **yt-dlp-ejs 0.8.0** y
-**certifi 2026.7.22**. Versiones y SHA-256 están fijados en el script de preparación.
-No se instala nada ni se actualiza código Python desde el teléfono.
+El procedimiento versionado se detalla en
+[`reproducible-ios-release.md`](reproducible-ios-release.md). Parte sin `ios/`,
+`node_modules`, `vendor`, Pods ni DerivedData previos; ejecuta `npm ci`, prepara
+las dependencias fijadas, genera el proyecto Expo, integra los módulos nativos,
+instala Pods con Bundler y compila Release ARM64 firmada. Regenera el icono, el
+nombre Drop, el módulo `on-device-youtube` y `drop-file-export` desde archivos
+versionados. El bundle ID permanece `com.odincarballo.mediadrop` y el Team de
+desarrollo `HK927RUDLZ`; SecureStore no cambia.
 
-No se invoca la CLI de yt-dlp: se utiliza `YoutubeDL.extract_info` con
-`download=False`, `process=False`, `noplaylist=True`. El único extractor permitido
-es YouTube. Un audit hook rechaza creación de procesos.
+## Limitaciones actuales
 
-### JavaScript
-
-QuickJS-NG **0.16.2**, compilado como C dentro del pod. No se incluye `qjs`, Node,
-Deno, `quickjs-libc`, JIT, loader de módulos ni APIs de filesystem/red/procesos.
-Un proveedor EJS adapta el punto de extensión de yt-dlp a una función C de Python.
-Conserva la validación upstream de versión/hash de los scripts EJS empaquetados.
-Los scripts del reproductor se procesan dentro de este contexto restringido; no
-se habilitan cookies, autenticación, proxies ni mecanismos para continuar ante
-una exigencia de login o DRM.
-
-### FFmpeg y ffprobe: todavía no incorporados
-
-La vía posterior sería un XCFramework compilado para iOS con `libavformat`,
-`libavcodec`, `libavutil` y `libswresample`, invocados por C/Objective-C++.
-Mux/remux no necesita ejecutar el binario `ffmpeg`. La inspección puede utilizar
-`avformat_open_input` / `avformat_find_stream_info` y sustituir al proceso ffprobe.
-MP3 requeriría habilitar un encoder compatible, por ejemplo libmp3lame, con revisión
-de licencias. Se preferiría una configuración LGPL sin componentes GPL innecesarios.
-No se incluye ahora ningún framework FFmpeg ni una dependencia FFmpegKit abandonada.
-
-## Seguridad y límites del spike
-
-- Solo URLs individuales watch/youtu.be/shorts; listas sin video inequívoco, lives,
-  contenido privado/restringido y DRM se rechazan.
-- Solo HTTPS, puerto 443 y dominios YouTube/googlevideo/ytimg y
-  `youtubei.googleapis.com`. Render no pertenece a esa lista.
-- DNS público comprobado antes de conectar; se rechaza cualquier respuesta
-  privada, reservada, multicast, loopback o link-local, incluso mezclada con IP pública.
-- Conexión fijada a la IP validada, SNI/certificado/Host del hostname original.
-  Certificados CA de certifi; verificación TLS activa.
-- Cada redirect se vuelve a validar y resolver, máximo tres.
-- No se envían Cookie, Authorization ni Proxy-Authorization. No se conservan
-  Set-Cookie. No se leen credenciales del usuario.
-- Un análisis activo; 40 solicitudes, 12 MiB por respuesta, 32 MiB acumulados,
-  socket hasta 10 s, presupuesto cooperativo de análisis 90 s.
-- QuickJS: heap hasta 96 MiB, stack 2 MiB y ejecución hasta 25 s por llamada.
-  El worker nativo tiene stack de 8 MiB. Estos **no son límites de RAM de toda la app**.
-- Cancelación cooperativa en solicitudes, lecturas y QuickJS; cancelar también al
-  pasar a background. Una resolución DNS del sistema ya iniciada no se puede
-  interrumpir con este mecanismo. No se promete ejecución en segundo plano.
-- No se descargan archivos multimedia ni se generan temporales multimedia.
-  La respuesta a React Native descarta URLs firmadas de streams. Los diagnósticos
-  contienen versión, host sin query, conteos, tiempo y RAM residente al terminar;
-  nunca tokens, cookies ni tracebacks.
-
-## Compilación desde checkout limpio
-
-El procedimiento de Release actual se documenta en
-[`reproducible-ios-release.md`](reproducible-ios-release.md). No requiere un
-`mobile/ios/` histórico: Expo genera el proyecto, el script versionado localiza
-el target por el bundle ID de `app.json`, y Bundler fija CocoaPods y `xcodeproj`.
-Las dependencias descargadas, Pods y builds permanecen ignorados por Git.
-
-## Verificación
-
-Desde la raíz:
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python -B -m unittest discover \
-  -s mobile/modules/on-device-youtube/tests -v
-backend/.venv/bin/ruff check --isolated --select E,F,I \
-  mobile/modules/on-device-youtube/python mobile/modules/on-device-youtube/tests
-backend/.venv/bin/ruff format --isolated --check \
-  mobile/modules/on-device-youtube/python mobile/modules/on-device-youtube/tests
-```
-
-Desde `mobile/`: `npm test -- --silent`, `npm run lint`,
-`npm run format:check`, `npm run typecheck`, `npx expo-doctor`.
-Para Expo Doctor en esta Mac utilizar el mismo PATH/RUBYOPT que en `pod install`.
-
-Resultados locales: 108 tests móviles aprobados, 1 integración opt-in omitida;
-15 tests offline del spike aprobados; ESLint, Prettier y TypeScript correctos.
-Backend sin cambios: 133 aprobados, 1 opt-in omitido; Ruff, formato y mypy correctos.
-Expo Doctor: 20/21, únicamente recomienda los parches Expo 57.0.21 y Router
-57.0.20; no se actualizaron dependencias principales ni se ocultó el aviso.
-
-## Resultado físico
-
-La Release se instaló sobre MediaDrop existente, sin desinstalarla, con el mismo
-ID y Team. No utilizó Metro. En `iPhone de Odín` la URL autorizada
-`https://www.youtube.com/watch?v=AWGPaFraPN4` produjo directamente:
-
-- título, ID `AWGPaFraPN4`, duración `2:01` y miniatura;
-- 10 formatos de video y 3 de audio;
-- resoluciones 144p, 360p, 720p y 1080p;
-- MP4/AVC1 y WebM/VP9; M4A/mp4a y WebM/Opus;
-- `ios-device`, 1.74 s, 3 solicitudes, 201.9 MB residentes al terminar;
-- hosts `www.youtube.com` y `manifest.googlevideo.com`.
-
-No hubo llamada de análisis a Render. El valor EJS fue cero: yt-dlp no acumuló
-retos de firma o parámetro `n` para los formatos de este video, así que no llamó
-al método `_run_js_runtime` del proveedor EJS. QuickJS sí ejecutó el autodiagnóstico
-básico de la línea anterior a `extract_info`, pero ese autodiagnóstico no incrementa
-el contador EJS y no representa una carga EJS real.
-
-Por ello queda demostrada la arquitectura on-device de metadatos, pero **no queda
-cerrado el riesgo EJS**. Antes de desarrollar descargas debe hacerse un segundo
-spike físico que ejecute el EJS empaquetado sobre un fixture upstream reproducible
-y, si se encuentra sin evasión, un video público autorizado que entregue un reto
-real. La condición de éxito debe incluir `jsChallengeCalls > 0` y formatos válidos.
-No se usarán cookies, login, proxies ni credenciales. Una URL pública no es una
-prueba estable porque YouTube decide dinámicamente qué respuestas llevan retos.
-
-La medición de RAM mostrada es del proceso completo al finalizar, **no un pico ni
-un incremento aislado**. Para decidir el motor definitivo hay que medir pico y
-presión de memoria con Instruments en el dispositivo. El coste de almacenamiento
-también debe medirse en la build terminada; no equivale al tamaño del SDK descargado.
-
-## Plan condicionado al éxito físico (no implementado)
-
-1. Estabilizar análisis nativo y modelar proveedor/capacidades sin cambiar Direct.
-2. Catálogo local efímero de streams identificados, URLs no expuestas en logs.
-3. Descarga con transporte seguro y streaming a `Caches/MediaDrop/<job UUID>/`;
-   límites agregados, un job, validación de cada redirect y limpieza al iniciar/TTL.
-4. Video + audio: conservar progresivo o descargar pistas y mux sin recodificar
-   si son compatibles con MP4; rechazar alternativas costosas no autorizadas.
-5. Solo video: mapear únicamente stream de video, comprobar salida con libav.
-6. M4A: copiar/remuxear AAC compatible; convertir otros codecs cuando se apruebe.
-7. MP3: conversión local con bitrate de salida 128/192/256, sin prometer mejora.
-8. Progreso: bytes reales de red y timestamps de procesamiento cuando sean
-   fiables. Cancelación atómica, interrupción de I/O y cierre/liberación de libav.
-9. Mantener solo archivo final hasta TTL; compartirlo con expo-sharing existente.
-10. Pruebas físicas separadas de consumo, suspensión, almacenamiento insuficiente
-    y regresión Direct antes de migrar el routing normal.
-
-Se pueden reutilizar UI, tipos de selección, formatos, errores, utilidades y hoja
-Compartir. Jobs/almacenamiento/backend streaming actuales sirven de referencia,
-pero no se pueden copiar como procesos/subprocess dentro de iOS. Solo tras validar
-el nuevo flujo dejarían de ser necesarios para YouTube el análisis, jobs, descarga
-y procesamiento remotos; permanecerían disponibles para Direct. No se eliminan ahora.
-
-## Veredicto
-
-**GO: YouTube on-device en iPhone es técnicamente viable y razonablemente
-mantenible para MediaDrop.** La evidencia física demuestra CPython, imports,
-yt-dlp, red/TLS del dispositivo, extracción y puente React Native en ARM64 iOS.
-La implementación usa un proveedor EJS pequeño en lugar de una bifurcación de
-yt-dlp. El GO habilita únicamente continuar el proyecto; no autoriza implementar
-la descarga hasta validar el camino EJS real.
-
-Riesgos: cambios frecuentes de YouTube/EJS, desafío de la propia IP móvil,
-compatibilidad de extensiones CPython, memoria/temperatura, suspensión de iOS y
-renovación periódica de la firma Personal Team. Cambiar el origen a iPhone no
-garantiza que YouTube autorice todos los videos públicos. No hay afirmación de
-distribuibilidad App Store ni se solicita publicación.
-
-## Referencias primarias
-
-- [Python: ejecución embebida y empaquetado iOS](https://docs.python.org/3/using/ios.html).
-- [BeeWare Python-Apple-support](https://github.com/beeware/Python-Apple-support).
-- [QuickJS-NG](https://quickjs-ng.github.io/quickjs/).
-- [yt-dlp: proveedores de JavaScript](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/youtube/jsc/README.md).
-- [libavformat: inspección y demux](https://ffmpeg.org/doxygen/trunk/group__lavf__decoding.html).
+- Funciona en **foreground**; no hay background downloads.
+- El video directo compatible es MP4/H.264 y el audio directo M4A/AAC. La UI
+  expone calidades compatibles alrededor de 360p y 720p cuando existen, no
+  1080p. No hay MP3, FFmpeg ni libav.
+- HLS/m3u8 no pertenece a la ruta primaria de descarga. La disponibilidad de
+  streams directos y sus metadatos depende de YouTube; no se promete cobertura
+  universal ni funcionamiento con contenido privado, de pago o con DRM.
+- Los límites actuales son 50 MiB por pista de video y 25 MiB por pista de
+  audio. La caché de Drop es temporal, no almacenamiento permanente.
+- EJS/QuickJS está empaquetado, pero no se declara compatibilidad EJS completa.
+  No se incluyen cookies, login, credenciales, proxies ni evasión de DRM.

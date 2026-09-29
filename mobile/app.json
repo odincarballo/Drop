@@ -2,7 +2,7 @@
   "expo": {
     "name": "Drop",
     "slug": "mediadrop",
-    "version": "0.6.0",
+    "version": "1.0.1",
     "scheme": "mediadrop",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
@@ -10,6 +10,7 @@
     "platforms": ["ios"],
     "ios": {
       "bundleIdentifier": "com.odincarballo.mediadrop",
+      "buildNumber": "2",
       "supportsTablet": false,
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Drop se conecta al backend de desarrollo en tu red local."
