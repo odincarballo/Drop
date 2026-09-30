@@ -15,6 +15,44 @@ struct MDHTTPTransferDiagnostics {
   private(set) var failureContentLength: String?
   private(set) var failureRangeIndex: Int?
   private(set) var failureBytesPersisted: Int64?
+  private(set) var failurePhase: String?
+  private(set) var failureCategory: String?
+  private(set) var failureTransportCode: Int?
+  private(set) var failureRangeAttempt: Int?
+  private(set) var retriesUsed: Int?
+  private(set) var recoverySecondsRemaining: Int?
+
+  mutating func captureFailure(
+    phase: String, category: String, transportCode: Error?, status: Int?,
+    start: Int64, end: Int64, index: Int, offset: Int64, attempt: Int,
+    globalRetries: Int, remainingSeconds: TimeInterval?, host: String?,
+    contentRange: String?, contentLength: String?
+  ) {
+    failurePhase = ["audio", "video"].contains(phase) ? phase : nil
+    failureCategory = ["connection", "timeout", "server", "forbidden", "range",
+      "rate_limit", "integrity", "security", "dns", "cancelled", "other"].contains(category)
+      ? category : nil
+    let ns = transportCode as NSError?
+    if let ns, ns.domain == NSURLErrorDomain,
+       [NSURLErrorTimedOut, NSURLErrorCannotConnectToHost,
+        NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet,
+        NSURLErrorCannotFindHost, NSURLErrorSecureConnectionFailed,
+        NSURLErrorServerCertificateUntrusted, NSURLErrorCancelled].contains(ns.code) {
+      failureTransportCode = ns.code
+    } else {
+      failureTransportCode = nil
+    }
+    failureStatusCode = status.flatMap(Self.safeStatus)
+    failureRequestedRange = Self.safeRange(start: start, end: end)
+    failureRangeIndex = index > 0 ? index : nil
+    failureBytesPersisted = offset >= 0 ? offset : nil
+    failureRangeAttempt = (1...3).contains(attempt) ? attempt : nil
+    retriesUsed = (0...4).contains(globalRetries) ? globalRetries : nil
+    recoverySecondsRemaining = remainingSeconds.map { max(0, min(30, Int($0.rounded(.down)))) }
+    failureHost = Self.safeHost(host)
+    failureContentRange = Self.safeContentRange(contentRange)
+    failureContentLength = Self.safeContentLength(contentLength)
+  }
 
   mutating func captureRequest(start: Int64, end: Int64) {
     guard requestedRange == nil else { return }
@@ -63,6 +101,12 @@ struct MDHTTPTransferDiagnostics {
     value["failureContentLength"] = failureContentLength
     value["failureRangeIndex"] = failureRangeIndex
     value["failureBytesPersisted"] = failureBytesPersisted
+    value["failurePhase"] = failurePhase
+    value["failureCategory"] = failureCategory
+    value["failureTransportCode"] = failureTransportCode
+    value["failureRangeAttempt"] = failureRangeAttempt
+    value["retriesUsed"] = retriesUsed
+    value["recoverySecondsRemaining"] = recoverySecondsRemaining
     return value
   }
 

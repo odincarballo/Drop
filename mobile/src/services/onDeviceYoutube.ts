@@ -144,6 +144,8 @@ export function localAudioError(code: string): string {
       'Este formato no es un audio M4A directo compatible.',
     AUDIO_FILE_TOO_LARGE: 'El audio supera el límite de 25 MB de esta prueba.',
     AUDIO_URL_EXPIRED: 'El enlace de descarga caducó. Analiza nuevamente.',
+    AUDIO_URL_INVALID: 'YouTube devolvió un enlace de audio no permitido.',
+    AUDIO_DNS_INVALID: 'El host del audio no pasó la validación de seguridad.',
     AUDIO_RANGE_NOT_SUPPORTED:
       'YouTube no permitió descargar el audio por fragmentos.',
     AUDIO_HTTP_FORBIDDEN: 'YouTube rechazó la descarga de audio (HTTP 403).',
@@ -153,6 +155,22 @@ export function localAudioError(code: string): string {
     AUDIO_RANGE_INVALID:
       'YouTube devolvió un fragmento de audio incompleto o inesperado.',
     AUDIO_TIMEOUT: 'La descarga tardó demasiado tiempo.',
+    AUDIO_CONNECTION_RETRIES_EXHAUSTED:
+      'La conexión se interrumpió varias veces. Intenta nuevamente o cambia de red.',
+    AUDIO_TIMEOUT_RETRIES_EXHAUSTED:
+      'La descarga dejó de recibir datos varias veces. Intenta nuevamente o cambia de red.',
+    AUDIO_SERVER_RETRIES_EXHAUSTED:
+      'El servidor de video no respondió correctamente. Intenta nuevamente más tarde.',
+    AUDIO_RECOVERY_BUDGET_EXHAUSTED:
+      'La conexión no se recuperó a tiempo. Intenta nuevamente o cambia de red.',
+    AUDIO_RETRY_AFTER_TOO_LONG:
+      'El servidor pidió esperar más de lo permitido. Intenta nuevamente más tarde.',
+    AUDIO_RETRY_AFTER_INVALID:
+      'El servidor respondió con un tiempo de espera no válido. Intenta nuevamente más tarde.',
+    AUDIO_DNS_UNAVAILABLE:
+      'No se pudo resolver el servidor de audio. Revisa la conexión e inténtalo nuevamente.',
+    AUDIO_TLS_ERROR:
+      'No se pudo establecer una conexión segura para descargar el audio.',
     AUDIO_DURATION_INVALID:
       'No se puede preparar el audio sin una duración válida.',
     AUDIO_NORMALIZATION_INPUT_INVALID:
@@ -224,6 +242,22 @@ export function localVideoError(code: string): string {
     VIDEO_RANGE_INVALID:
       'YouTube devolvió un fragmento de video incompleto o inesperado.',
     VIDEO_TIMEOUT: 'La descarga tardó demasiado tiempo.',
+    VIDEO_CONNECTION_RETRIES_EXHAUSTED:
+      'La conexión se interrumpió varias veces. Intenta nuevamente o cambia de red.',
+    VIDEO_TIMEOUT_RETRIES_EXHAUSTED:
+      'La descarga dejó de recibir datos varias veces. Intenta nuevamente o cambia de red.',
+    VIDEO_SERVER_RETRIES_EXHAUSTED:
+      'El servidor de video no respondió correctamente. Intenta nuevamente más tarde.',
+    VIDEO_RECOVERY_BUDGET_EXHAUSTED:
+      'La conexión no se recuperó a tiempo. Intenta nuevamente o cambia de red.',
+    VIDEO_RETRY_AFTER_TOO_LONG:
+      'El servidor pidió esperar más de lo permitido. Intenta nuevamente más tarde.',
+    VIDEO_RETRY_AFTER_INVALID:
+      'El servidor respondió con un tiempo de espera no válido. Intenta nuevamente más tarde.',
+    VIDEO_DNS_UNAVAILABLE:
+      'No se pudo resolver el servidor de video. Revisa la conexión e inténtalo nuevamente.',
+    VIDEO_TLS_ERROR:
+      'No se pudo establecer una conexión segura para descargar el video.',
     VIDEO_STORAGE_UNAVAILABLE:
       'No se pudo guardar el video. Comprueba el espacio disponible.',
     VIDEO_MIME_NOT_ALLOWED: 'YouTube devolvió un tipo de video no compatible.',

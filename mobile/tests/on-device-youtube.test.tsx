@@ -12,12 +12,18 @@ import { LocalYoutubeDiagnosticsCard } from '@/components/LocalYoutubeDiagnostic
 import { ActionButton } from '@/components/ActionButton';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
 import {
+  localAudioDownloadEventSchema,
+  localCombinedDownloadEventSchema,
   localHttpTransferDiagnosticsSchema,
+  localVideoDownloadEventSchema,
   localYoutubeResultSchema,
 } from '@/models/onDeviceYoutube';
 import {
   analyzeYoutubeOnDevice,
   cancelLocalYoutube,
+  localAudioError,
+  localCombinedError,
+  localVideoError,
   testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
 import { shareLocalFile } from '@/services/jobs';
@@ -357,6 +363,59 @@ test('HTTP diagnostics reject signed URLs and arbitrary header strings', () => {
     signedUrl: 'https://rr1.googlevideo.com/path?sig=secret',
   });
   expect(JSON.stringify(parsed)).not.toContain('secret');
+});
+
+test('bounded retries are parsed for all YouTube modes without exposing URLs', () => {
+  const jobId = 'D2A73B11-8703-4FB1-8612-8AC3C477C42F';
+  expect(
+    localAudioDownloadEventSchema.safeParse({
+      jobId,
+      status: 'RETRYING',
+      retryCategory: 'timeout',
+      bytesDownloaded: 262144,
+    }).success,
+  ).toBe(true);
+  expect(
+    localVideoDownloadEventSchema.safeParse({
+      jobId,
+      status: 'RETRYING',
+      retryCategory: 'server',
+    }).success,
+  ).toBe(true);
+  expect(
+    localCombinedDownloadEventSchema.safeParse({
+      jobId,
+      status: 'RETRYING_AUDIO',
+      retryCategory: 'connection',
+    }).success,
+  ).toBe(true);
+  expect(localAudioError('AUDIO_TIMEOUT_RETRIES_EXHAUSTED')).toContain(
+    'dejó de recibir datos',
+  );
+  expect(localVideoError('VIDEO_SERVER_RETRIES_EXHAUSTED')).toContain(
+    'servidor',
+  );
+  expect(localCombinedError('AUDIO_CONNECTION_RETRIES_EXHAUSTED')).toContain(
+    'cambia de red',
+  );
+  expect(
+    localHttpTransferDiagnosticsSchema.safeParse({
+      failurePhase: 'audio',
+      failureCategory: 'server',
+      failureStatusCode: 503,
+      failureRequestedRange: 'bytes=262144-524287',
+      failureRangeIndex: 2,
+      failureRangeAttempt: 3,
+      retriesUsed: 4,
+      recoverySecondsRemaining: 0,
+      failureHost: 'rr1.googlevideo.com',
+    }).success,
+  ).toBe(true);
+  expect(
+    localHttpTransferDiagnosticsSchema.safeParse({
+      failureHost: 'rr1.googlevideo.com?sig=SECRET',
+    }).success,
+  ).toBe(false);
 });
 
 test('local metadata card selects direct M4A without exposing a stream URL', async () => {

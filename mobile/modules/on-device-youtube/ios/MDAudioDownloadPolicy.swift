@@ -27,7 +27,122 @@ struct MDVideoContentRange: Equatable {
   let total: Int64
 }
 
+// A combined job passes the same instance to its video and audio transfers.
+// Uptime is monotonic, so changing the device clock cannot extend recovery.
+final class MDRangeRetryBudget {
+  static let maximumPerRange = 2
+  static let maximumPerJob = 4
+  static let recoverySeconds: TimeInterval = 30
+
+  private let lock = NSLock()
+  private let now: () -> TimeInterval
+  private let recoverySeconds: TimeInterval
+  private var firstRetryAt: TimeInterval?
+  private var used = 0
+
+  init(
+    now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    recoverySeconds: TimeInterval = MDRangeRetryBudget.recoverySeconds
+  ) {
+    self.now = now
+    self.recoverySeconds = recoverySeconds
+  }
+
+  var retriesUsed: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return used
+  }
+
+  var secondsRemaining: TimeInterval? {
+    lock.lock()
+    defer { lock.unlock() }
+    return firstRetryAt.map { max(0, recoverySeconds - (now() - $0)) }
+  }
+
+  func reserve(perRangeRetries: Int, delay: TimeInterval) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    let instant = now()
+    let start = firstRetryAt ?? instant
+    let remaining = recoverySeconds - (instant - start)
+    firstRetryAt = start
+    guard perRangeRetries < Self.maximumPerRange,
+          used < Self.maximumPerJob,
+          delay >= 0, delay < remaining else { return false }
+    used += 1
+    return true
+  }
+}
+
 enum MDAudioDownloadPolicy {
+  static let retryableHTTPStatuses: Set<Int> = [408, 500, 502, 503, 504]
+
+  static func isRetryableTransport(_ error: Error) -> Bool {
+    let ns = error as NSError
+    guard ns.domain == NSURLErrorDomain else { return false }
+    return [
+      NSURLErrorNetworkConnectionLost,
+      NSURLErrorTimedOut,
+      NSURLErrorCannotConnectToHost,
+      NSURLErrorNotConnectedToInternet,
+    ].contains(ns.code)
+  }
+
+  static func retryAfterSeconds(_ raw: String?, now: Date = Date()) -> TimeInterval? {
+    guard let raw, !raw.isEmpty, raw.utf8.count <= 64,
+          !raw.contains("\r"), !raw.contains("\n") else { return nil }
+    if raw.utf8.allSatisfy({ (48...57).contains($0) }),
+       let seconds = Int(raw), seconds >= 0 {
+      return TimeInterval(seconds)
+    }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+    formatter.isLenient = false
+    guard let date = formatter.date(from: raw), formatter.string(from: date) == raw else { return nil }
+    return max(0, date.timeIntervalSince(now))
+  }
+
+  static func strongETag(_ raw: String?) -> String? {
+    guard let raw, raw.utf8.count <= 200, raw.count >= 2,
+          raw.first == "\"", raw.last == "\"",
+          !raw.contains("\r"), !raw.contains("\n"),
+          !raw.dropFirst().dropLast().contains("\"") else { return nil }
+    return raw
+  }
+
+  static func validateRangeIdentity(
+    _ range: MDVideoContentRange,
+    response: HTTPURLResponse,
+    previousTotal: Int64?,
+    previousStrongETag: String?,
+    kind: MDLocalDownloadKind
+  ) throws {
+    guard previousTotal == nil || previousTotal == range.total,
+          previousStrongETag == nil || previousStrongETag ==
+            strongETag(response.value(forHTTPHeaderField: "ETag")),
+          response.expectedContentLength < 0 ||
+            response.expectedContentLength == range.end - range.start + 1 else {
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+      )
+    }
+  }
+
+  static func truncateUnverifiedBytes(at url: URL, verifiedOffset: Int64) throws {
+    guard verifiedOffset >= 0 else {
+      throw MDAudioDownloadFailure.code("LOCAL_RANGE_OFFSET_INVALID")
+    }
+    let writer = try FileHandle(forWritingTo: url)
+    defer { try? writer.close() }
+    guard try writer.seekToEnd() >= UInt64(verifiedOffset) else {
+      throw MDAudioDownloadFailure.code("LOCAL_RANGE_OFFSET_INVALID")
+    }
+    try writer.truncate(atOffset: UInt64(verifiedOffset))
+  }
   static let maximumBytes: Int64 = 25 * 1024 * 1024
   static let maximumVideoBytes: Int64 = 50 * 1024 * 1024
   static let maximumRedirects = 3

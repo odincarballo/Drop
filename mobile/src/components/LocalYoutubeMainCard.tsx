@@ -34,14 +34,25 @@ function transferProgress(
     : `${amount} · ${Math.round(progress * 100)} %`;
 }
 
+function retryFeedback(category: 'connection' | 'timeout' | 'server' | null) {
+  if (category === 'server') return 'El servidor no respondió. Reintentando…';
+  if (category === 'timeout')
+    return 'La descarga dejó de recibir datos. Reintentando…';
+  return 'Problema de conexión. Reintentando…';
+}
+
 function downloadFeedback(spike: Spike, mode: Mode) {
   if (mode === 'VIDEO_AUDIO') {
     const state = spike.combinedState;
     if (state.status === 'preparing') return 'Preparando…';
     if (state.status === 'downloading-video')
-      return `Descargando video… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
+      return state.retrying
+        ? retryFeedback(state.retryCategory)
+        : `Descargando video… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
     if (state.status === 'downloading-audio')
-      return `Descargando audio… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
+      return state.retrying
+        ? retryFeedback(state.retryCategory)
+        : `Descargando audio… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
     if (state.status === 'muxing')
       return `Combinando…${state.progress === null ? '' : ` ${Math.round(state.progress * 100)} %`}`;
     if (state.status === 'error') return state.message;
@@ -50,7 +61,9 @@ function downloadFeedback(spike: Spike, mode: Mode) {
     const state = mode === 'VIDEO_ONLY' ? spike.videoState : spike.audioState;
     if (state.status === 'preparing') return 'Preparando…';
     if (state.status === 'downloading')
-      return `Descargando ${mode === 'VIDEO_ONLY' ? 'video' : 'audio'}… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
+      return state.retrying
+        ? retryFeedback(state.retryCategory)
+        : `Descargando ${mode === 'VIDEO_ONLY' ? 'video' : 'audio'}… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
     if (state.status === 'error') return state.message;
     if (state.status === 'cancelled') return 'Descarga cancelada.';
   }

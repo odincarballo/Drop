@@ -313,11 +313,92 @@ enum AudioDownloadPolicyTests {
       )
     }
 
+    guard MDAudioDownloadPolicy.retryableHTTPStatuses == [408, 500, 502, 503, 504] else {
+      throw TestFailure.failed("HTTP retry allowlist changed")
+    }
+    for status in [403, 416, 429, 501, 505] {
+      guard !MDAudioDownloadPolicy.retryableHTTPStatuses.contains(status) else {
+        throw TestFailure.failed("HTTP \(status) must not retry")
+      }
+    }
+    for code in [NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost,
+      NSURLErrorCannotConnectToHost, NSURLErrorNotConnectedToInternet] {
+      guard MDAudioDownloadPolicy.isRetryableTransport(
+        NSError(domain: NSURLErrorDomain, code: code)) else {
+        throw TestFailure.failed("Transient transport \(code) not retried")
+      }
+    }
+    for code in [NSURLErrorCancelled, NSURLErrorCannotFindHost,
+      NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted] {
+      guard !MDAudioDownloadPolicy.isRetryableTransport(
+        NSError(domain: NSURLErrorDomain, code: code)) else {
+        throw TestFailure.failed("Security, DNS, or cancellation \(code) retried")
+      }
+    }
+    guard MDAudioDownloadPolicy.retryAfterSeconds("4") == 4,
+          MDAudioDownloadPolicy.retryAfterSeconds("429496729999999999999") == nil,
+          MDAudioDownloadPolicy.retryAfterSeconds("4; token=SECRET") == nil,
+          MDAudioDownloadPolicy.strongETag("\"stable\"") == "\"stable\"",
+          MDAudioDownloadPolicy.strongETag("W/\"weak\"") == nil else {
+      throw TestFailure.failed("Retry-After or strong ETag validation failed")
+    }
+    var instant: TimeInterval = 100
+    let sharedBudget = MDRangeRetryBudget(now: { instant })
+    guard sharedBudget.reserve(perRangeRetries: 0, delay: 0.5),
+          sharedBudget.reserve(perRangeRetries: 1, delay: 1.5),
+          !sharedBudget.reserve(perRangeRetries: 2, delay: 1.5),
+          sharedBudget.reserve(perRangeRetries: 0, delay: 0.5),
+          sharedBudget.reserve(perRangeRetries: 0, delay: 0.5),
+          !sharedBudget.reserve(perRangeRetries: 0, delay: 0.5),
+          sharedBudget.retriesUsed == 4 else {
+      throw TestFailure.failed("Per-range or combined global retry budget failed")
+    }
+    instant = 131
+    guard sharedBudget.secondsRemaining == 0 else {
+      throw TestFailure.failed("Monotonic recovery deadline failed")
+    }
+    let temporalBudget = MDRangeRetryBudget(now: { instant })
+    guard !temporalBudget.reserve(perRangeRetries: 0, delay: 31),
+          temporalBudget.retriesUsed == 0,
+          temporalBudget.secondsRemaining == 30 else {
+      throw TestFailure.failed("Long Retry-After bypassed the time budget")
+    }
+    instant += 30
+    guard !temporalBudget.reserve(perRangeRetries: 0, delay: 0.5) else {
+      throw TestFailure.failed("Expired backoff budget allowed a retry")
+    }
+    let identityRange = MDVideoContentRange(start: 0, end: 99, total: 200)
+    let sameETag = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/file")!, statusCode: 206,
+      httpVersion: nil, headerFields: [
+        "Content-Range": "bytes 0-99/200", "Content-Length": "100", "ETag": "\"same\"",
+      ])!
+    try MDAudioDownloadPolicy.validateRangeIdentity(
+      identityRange, response: sameETag, previousTotal: 200,
+      previousStrongETag: "\"same\"", kind: .audio)
+    try MDAudioDownloadPolicy.validateRangeIdentity(
+      identityRange, response: sameETag, previousTotal: 200,
+      previousStrongETag: nil, kind: .audio)
+    try expectFailure("AUDIO_RANGE_INVALID") {
+      try MDAudioDownloadPolicy.validateRangeIdentity(
+        identityRange, response: sameETag, previousTotal: 201,
+        previousStrongETag: "\"same\"", kind: .audio)
+    }
+    try expectFailure("AUDIO_RANGE_INVALID") {
+      try MDAudioDownloadPolicy.validateRangeIdentity(
+        identityRange, response: sameETag, previousTotal: 200,
+        previousStrongETag: "\"changed\"", kind: .audio)
+    }
+
     let fileManager = FileManager.default
     let jobID = UUID().uuidString
     let workspace = try MDAudioDownloadPolicy.workspace(for: jobID, fileManager: fileManager)
     let temporary = workspace.appendingPathComponent("partial")
     try Data("audio".utf8).write(to: temporary)
+    try MDAudioDownloadPolicy.truncateUnverifiedBytes(at: temporary, verifiedOffset: 3)
+    guard try Data(contentsOf: temporary) == Data("aud".utf8) else {
+      throw TestFailure.failed("Incomplete range was not truncated before retry")
+    }
     let final = workspace.appendingPathComponent(
       MDAudioDownloadPolicy.safeFileName("../Own: audio.m4a")
     )

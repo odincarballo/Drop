@@ -90,6 +90,37 @@ export const localHttpTransferDiagnosticsSchema = z.object({
   failureContentLength: diagnosticLength.optional(),
   failureRangeIndex: z.number().int().positive().optional(),
   failureBytesPersisted: z.number().int().nonnegative().optional(),
+  failurePhase: z.enum(['audio', 'video']).optional(),
+  failureCategory: z
+    .enum([
+      'connection',
+      'timeout',
+      'server',
+      'forbidden',
+      'range',
+      'rate_limit',
+      'integrity',
+      'security',
+      'dns',
+      'cancelled',
+      'other',
+    ])
+    .optional(),
+  failureTransportCode: z
+    .union([
+      z.literal(-999),
+      z.literal(-1001),
+      z.literal(-1003),
+      z.literal(-1004),
+      z.literal(-1005),
+      z.literal(-1009),
+      z.literal(-1200),
+      z.literal(-1202),
+    ])
+    .optional(),
+  failureRangeAttempt: z.number().int().min(1).max(3).optional(),
+  retriesUsed: z.number().int().min(0).max(4).optional(),
+  recoverySecondsRemaining: z.number().int().min(0).max(30).optional(),
 });
 
 export type LocalHttpTransferDiagnostics = z.infer<
@@ -101,6 +132,7 @@ export const localAudioDownloadEventSchema = z.object({
   status: z.enum([
     'PREPARING',
     'DOWNLOADING',
+    'RETRYING',
     'COMPLETED',
     'FAILED',
     'CANCELLED',
@@ -111,6 +143,7 @@ export const localAudioDownloadEventSchema = z.object({
   bytesDownloaded: z.number().int().nonnegative().optional(),
   totalBytes: z.number().int().nonnegative().optional(),
   progress: z.number().min(0).max(1).optional(),
+  retryCategory: z.enum(['connection', 'timeout', 'server']).optional(),
   fileName: z.string().max(120).optional(),
   fileSize: z.number().int().nonnegative().optional(),
   localUri: z.string().startsWith('file://').optional(),
@@ -130,6 +163,7 @@ export const localVideoDownloadEventSchema = z.object({
   status: z.enum([
     'PREPARING',
     'DOWNLOADING',
+    'RETRYING',
     'COMPLETED',
     'FAILED',
     'CANCELLED',
@@ -141,6 +175,7 @@ export const localVideoDownloadEventSchema = z.object({
   bytesDownloaded: z.number().int().nonnegative().optional(),
   totalBytes: z.number().int().nonnegative().optional(),
   progress: z.number().min(0).max(1).optional(),
+  retryCategory: z.enum(['connection', 'timeout', 'server']).optional(),
   fileName: z.string().max(120).optional(),
   fileSize: z.number().int().nonnegative().optional(),
   localUri: z.string().startsWith('file://').optional(),
@@ -161,6 +196,8 @@ export const localCombinedDownloadEventSchema = z.object({
     'PREPARING',
     'DOWNLOADING_VIDEO',
     'DOWNLOADING_AUDIO',
+    'RETRYING_VIDEO',
+    'RETRYING_AUDIO',
     'MUXING',
     'COMPLETED',
     'FAILED',
@@ -171,6 +208,7 @@ export const localCombinedDownloadEventSchema = z.object({
   bytesDownloaded: z.number().int().nonnegative().optional(),
   totalBytes: z.number().int().nonnegative().optional(),
   progress: z.number().min(0).max(1).optional(),
+  retryCategory: z.enum(['connection', 'timeout', 'server']).optional(),
   fileName: z.string().max(120).optional(),
   fileSize: z.number().int().nonnegative().optional(),
   localUri: z.string().startsWith('file://').optional(),

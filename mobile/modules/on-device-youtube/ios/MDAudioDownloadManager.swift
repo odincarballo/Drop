@@ -27,6 +27,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
 
   private let lock = NSLock()
   private let emitEvent: EventSink
+  private let makeSessionConfiguration: () -> URLSessionConfiguration
+  private let validateTransferURL: (URL, MDLocalDownloadKind) throws -> Void
   private var activeJobID: String?
   private var activeKind: MDLocalDownloadKind?
   private var workspaceURL: URL?
@@ -51,10 +53,28 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   private var expectedAudioDurationSeconds: Double?
   private var audioNormalizer: MDAVAudioNormalizer?
   private var rangeRequestIndex = 0
+  private var rangeRetryCount = 0
+  private var retryBudget = MDRangeRetryBudget()
+  private var retryWorkItem: DispatchWorkItem?
+  private var deadlineWorkItem: DispatchWorkItem?
+  private var retryGeneration = 0
+  private var resourceETag: String?
+  private var lastResponseStatus: Int?
+  private var lastRetryAfter: String?
   private var httpDiagnostics = MDHTTPTransferDiagnostics()
 
-  init(emitEvent: @escaping EventSink) {
+  init(
+    emitEvent: @escaping EventSink,
+    makeSessionConfiguration: @escaping () -> URLSessionConfiguration = {
+      URLSessionConfiguration.ephemeral
+    },
+    validateTransferURL: @escaping (URL, MDLocalDownloadKind) throws -> Void = {
+      try MDAudioDownloadPolicy.validateURL($0, kind: $1)
+    }
+  ) {
     self.emitEvent = emitEvent
+    self.makeSessionConfiguration = makeSessionConfiguration
+    self.validateTransferURL = validateTransferURL
   }
 
   var isActive: Bool {
@@ -74,14 +94,18 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     )
   }
 
-  func startRangedAudio(analysisID: String, formatID: String) -> String? {
+  func startRangedAudio(
+    analysisID: String, formatID: String, retryBudget: MDRangeRetryBudget? = nil
+  ) -> String? {
     start(kind: .audio, analysisID: analysisID, formatID: formatID, useRanges: true,
-      standaloneAudio: false, expectedAudioDurationSeconds: nil)
+      standaloneAudio: false, expectedAudioDurationSeconds: nil, retryBudget: retryBudget)
   }
 
-  func startVideo(analysisID: String, formatID: String) -> String? {
+  func startVideo(
+    analysisID: String, formatID: String, retryBudget: MDRangeRetryBudget? = nil
+  ) -> String? {
     start(kind: .video, analysisID: analysisID, formatID: formatID, useRanges: true,
-      standaloneAudio: false, expectedAudioDurationSeconds: nil)
+      standaloneAudio: false, expectedAudioDurationSeconds: nil, retryBudget: retryBudget)
   }
 
   private func start(
@@ -90,7 +114,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     formatID: String,
     useRanges: Bool,
     standaloneAudio: Bool,
-    expectedAudioDurationSeconds: Double?
+    expectedAudioDurationSeconds: Double?,
+    retryBudget: MDRangeRetryBudget? = nil
   ) -> String? {
     lock.lock()
     guard activeJobID == nil else {
@@ -103,6 +128,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     usesRangeTransfer = useRanges
     self.standaloneAudio = standaloneAudio
     self.expectedAudioDurationSeconds = expectedAudioDurationSeconds
+    self.retryBudget = retryBudget ?? MDRangeRetryBudget()
     lock.unlock()
     emit(jobID: jobID, kind: kind, status: "PREPARING", formatID: formatID)
     let completion: (String) -> Void = { [weak self] raw in
@@ -134,7 +160,8 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     let activeSession = session
     let activeNormalizer = audioNormalizer
     let directory = workspaceURL
-    if activeNormalizer != nil || activeTask != nil {
+    let waitingForRetry = retryWorkItem != nil
+    if activeNormalizer != nil || (activeTask != nil && !waitingForRetry) {
       cancellationRequested = true
     } else {
       activeJobID = nil
@@ -145,7 +172,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     activeNormalizer?.cancel()
     activeTask?.cancel()
     activeSession?.invalidateAndCancel()
-    if activeNormalizer == nil && activeTask == nil {
+    if activeNormalizer == nil && (activeTask == nil || waitingForRetry) {
       MDAudioDownloadPolicy.removeWorkspace(directory)
       emit(jobID: jobID, kind: kind, status: "CANCELLED")
     }
@@ -181,7 +208,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       guard let url = URL(string: descriptor.url) else {
         throw MDAudioDownloadFailure.code("AUDIO_URL_INVALID")
       }
-      try MDAudioDownloadPolicy.validateURL(url, kind: kind)
+      try validateTransferURL(url, kind)
       let headers = try MDAudioDownloadPolicy.validateHeaders(
         descriptor.headers,
         kind: kind
@@ -200,7 +227,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       for (name, value) in headers {
         request.setValue(value, forHTTPHeaderField: name)
       }
-      let configuration = URLSessionConfiguration.ephemeral
+      let configuration = makeSessionConfiguration()
       configuration.timeoutIntervalForRequest = MDAudioDownloadPolicy.requestTimeoutSeconds
       configuration.timeoutIntervalForResource = MDAudioDownloadPolicy.resourceTimeoutSeconds
       configuration.httpCookieStorage = nil
@@ -248,6 +275,10 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
         videoChunkBytesReceived = 0
         videoContentRange = nil
         fullBodyFallback = false
+        rangeRetryCount = 0
+        resourceETag = nil
+        lastResponseStatus = nil
+        lastRetryAfter = nil
         httpDiagnostics = MDHTTPTransferDiagnostics()
         httpDiagnostics.captureRequest(start: 0, end: videoChunkSize - 1)
       }
@@ -255,6 +286,15 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       responseValidated = false
       forcedFailureCode = nil
       lock.unlock()
+      armRecoveryDeadline(jobID: jobID)
+      lock.lock()
+      let expired = retryBudget.secondsRemaining.map { $0 <= 0 } ?? false
+      lock.unlock()
+      if expired {
+        fail(jobID: jobID, code: failureCode(kind,
+          "AUDIO_RECOVERY_BUDGET_EXHAUSTED", "VIDEO_RECOVERY_BUDGET_EXHAUSTED"))
+        return
+      }
       emit(
         jobID: jobID,
         kind: kind,
@@ -281,6 +321,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     completionHandler: @escaping (URLRequest?) -> Void
   ) {
     lock.lock()
+    guard task === self.task, !cancellationRequested else {
+      lock.unlock()
+      completionHandler(nil)
+      return
+    }
     redirectCount += 1
     let count = redirectCount
     let kind = activeKind
@@ -295,7 +340,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       return
     }
     do {
-      try MDAudioDownloadPolicy.validateURL(url, kind: kind)
+      try validateTransferURL(url, kind)
       var sanitized = request
       var externalHeaders = request.allHTTPHeaderFields ?? [:]
       for key in Array(externalHeaders.keys) {
@@ -327,6 +372,10 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     didReceive response: URLResponse,
     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
   ) {
+    guard currentJobID(for: dataTask) != nil else {
+      completionHandler(.cancel)
+      return
+    }
     guard
       usesRangeTransfer,
       let kind = currentKind(for: dataTask),
@@ -341,11 +390,20 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     do {
       lock.lock()
       httpDiagnostics.captureResponse(response)
+      lastResponseStatus = response.statusCode
+      lastRetryAfter = response.statusCode == 503
+        ? response.value(forHTTPHeaderField: "Retry-After") : nil
       lock.unlock()
       if response.statusCode == 200 {
         lock.lock()
         let persisted = videoBytesPersisted
+        let retried = rangeRetryCount > 0
         lock.unlock()
+        guard !retried else {
+          throw MDAudioDownloadFailure.code(
+            kind == .audio ? "AUDIO_RANGE_NOT_SUPPORTED" : "VIDEO_RANGE_NOT_SUPPORTED"
+          )
+        }
         let expectedLength = try MDAudioDownloadPolicy.validateFullBodyFallbackResponse(
           response,
           requestedStart: start,
@@ -366,6 +424,19 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
           kind: kind
         )
         lock.lock()
+        let previousTotal = videoTotalBytes
+        let previousETag = resourceETag
+        let persisted = videoBytesPersisted
+        lock.unlock()
+        try MDAudioDownloadPolicy.validateRangeIdentity(
+          range, response: response, previousTotal: previousTotal,
+          previousStrongETag: previousETag, kind: kind)
+        lock.lock()
+        if persisted == 0 && previousETag == nil {
+          resourceETag = MDAudioDownloadPolicy.strongETag(
+            response.value(forHTTPHeaderField: "ETag")
+          )
+        }
         videoTotalBytes = range.total
         videoContentRange = range
         fullBodyFallback = false
@@ -411,8 +482,15 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       let persisted = videoBytesPersisted
       let chunkReceived = videoChunkBytesReceived
       let total = videoTotalBytes
+      let contentRange = videoContentRange
       lock.unlock()
       let cumulative = persisted + chunkReceived + Int64(data.count)
+      if let contentRange,
+         chunkReceived + Int64(data.count) > contentRange.end - contentRange.start + 1 {
+        throw MDAudioDownloadFailure.code(
+          kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+        )
+      }
       try MDAudioDownloadPolicy.validateTransferredBytes(
         cumulative,
         maximumBytes: kind.maximumBytes
@@ -578,8 +656,30 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     }
     let code = forcedFailureCode
     let completed = error == nil && activeJobID == nil
+    let isRecoveryAttempt = rangeRetryCount > 0
     lock.unlock()
     if completed { return }
+    if isRecoveryAttempt && retryBudget.secondsRemaining.map({ $0 <= 0 }) == true {
+      failRecoveryBudget(jobID: jobID, kind: kind)
+      return
+    }
+    if usesRangeTransfer {
+      let response = task.response as? HTTPURLResponse
+      lock.lock()
+      let usedFallback = fullBodyFallback
+      let shortRange = error == nil && code == nil && responseValidated &&
+        !usedFallback && videoContentRange.map {
+          videoChunkBytesReceived < $0.end - $0.start + 1
+        } == true
+      lock.unlock()
+      if !usedFallback && (error != nil || shortRange ||
+          MDAudioDownloadPolicy.retryableHTTPStatuses.contains(
+            response?.statusCode ?? lastResponseStatus ?? 0)),
+         scheduleRetryIfAllowed(jobID: jobID, kind: kind, task: task,
+           error: error, shortRange: shortRange) {
+        return
+      }
+    }
     if usesRangeTransfer, error == nil, code == nil {
       do {
         lock.lock()
@@ -602,12 +702,29 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       return
     }
     if finishCancellationIfNeeded(for: task) { return }
+    lock.lock()
+    let response = task.response as? HTTPURLResponse
+    let validatedRange = videoContentRange.map {
+      "bytes \($0.start)-\($0.end)/\($0.total)"
+    }
+    let validatedLength = responseValidated
+      ? response?.value(forHTTPHeaderField: "Content-Length") : nil
+    httpDiagnostics.captureFailure(
+      phase: kind.rawValue,
+      category: terminalCategory(code: code,
+        status: response?.statusCode ?? lastResponseStatus, error: error),
+      transportCode: error, status: response?.statusCode ?? lastResponseStatus,
+      start: videoRangeStart ?? 0, end: videoRangeEnd ?? 0,
+      index: rangeRequestIndex, offset: videoBytesPersisted,
+      attempt: rangeRetryCount + 1, globalRetries: retryBudget.retriesUsed,
+      remainingSeconds: retryBudget.secondsRemaining,
+      host: response?.url?.host ?? task.currentRequest?.url?.host,
+      contentRange: validatedRange, contentLength: validatedLength
+    )
+    lock.unlock()
     fail(
       jobID: jobID,
-      code: code
-        ?? ((error as? URLError)?.code == .timedOut
-          ? failureCode(kind, "AUDIO_TIMEOUT", "VIDEO_TIMEOUT")
-          : failureCode(kind, "AUDIO_DOWNLOAD_FAILED", "VIDEO_DOWNLOAD_FAILED"))
+      code: retryFailureCode(for: kind, error: error, fallback: code)
     )
     _ = finishCancellationIfNeeded(for: task)
   }
@@ -713,16 +830,22 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   private func startNextRangeChunk(
     jobID: String,
     start: Int64,
-    total: Int64,
+    total: Int64?,
     descriptor: MDAudioDescriptor,
-    kind: MDLocalDownloadKind
+    kind: MDLocalDownloadKind,
+    requestedEnd: Int64? = nil,
+    isRetry: Bool = false
   ) throws {
     guard let session, let url = URL(string: descriptor.url) else {
       throw MDAudioDownloadFailure.code(
         kind == .audio ? "AUDIO_URL_INVALID" : "VIDEO_URL_INVALID"
       )
     }
-    let end = min(total - 1, start + videoChunkSize - 1)
+    guard let end = requestedEnd ?? total.map({ min($0 - 1, start + videoChunkSize - 1) }) else {
+      throw MDAudioDownloadFailure.code(
+        kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
+      )
+    }
     var request = URLRequest(url: url)
     request.httpMethod = "GET"
     request.timeoutInterval = MDAudioDownloadPolicy.requestTimeoutSeconds
@@ -743,14 +866,301 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       return
     }
     task = nextTask
-    rangeRequestIndex += 1
+    redirectCount = 0
+    if !isRetry {
+      deadlineWorkItem?.cancel()
+      deadlineWorkItem = nil
+      retryGeneration += 1
+      rangeRequestIndex += 1
+      rangeRetryCount = 0
+    }
     videoRangeStart = start
     videoRangeEnd = end
     videoChunkBytesReceived = 0
     videoContentRange = nil
     responseValidated = false
+    lastResponseStatus = nil
+    lastRetryAfter = nil
+    forcedFailureCode = nil
+    retryWorkItem = nil
     lock.unlock()
     nextTask.resume()
+  }
+
+  private func scheduleRetryIfAllowed(
+    jobID: String,
+    kind: MDLocalDownloadKind,
+    task candidate: URLSessionTask,
+    error: Error?,
+    shortRange: Bool
+  ) -> Bool {
+    lock.lock()
+    guard candidate === task, !cancellationRequested,
+          let descriptor, let partialURL = videoPartialURL,
+          let start = videoRangeStart, let end = videoRangeEnd else {
+      lock.unlock()
+      return false
+    }
+    let response = candidate.response as? HTTPURLResponse
+    let status = response?.statusCode ?? lastResponseStatus
+    let retryableHTTP = status.map { MDAudioDownloadPolicy.retryableHTTPStatuses.contains($0) } == true
+    let retryableTransport = error.map(MDAudioDownloadPolicy.isRetryableTransport) == true
+    guard retryableHTTP || retryableTransport || shortRange else {
+      lock.unlock()
+      return false
+    }
+    let retryAfter = status == 503 ? lastRetryAfter : nil
+    let budget = retryBudget
+    let nextPerRangeRetry = rangeRetryCount + 1
+    let persisted = videoBytesPersisted
+    let total = videoTotalBytes
+    let rangeIndex = rangeRequestIndex
+    let responseRange = videoContentRange.map {
+      "bytes \($0.start)-\($0.end)/\($0.total)"
+    }
+    let responseLength = responseValidated
+      ? response?.value(forHTTPHeaderField: "Content-Length") : nil
+    let responseHost = response?.url?.host ?? URL(string: descriptor.url)?.host
+    lock.unlock()
+
+    let delay: TimeInterval
+    if let retryAfter {
+      guard let parsed = MDAudioDownloadPolicy.retryAfterSeconds(retryAfter) else {
+        lock.lock()
+        if activeJobID == jobID && candidate === task {
+          httpDiagnostics.captureFailure(
+            phase: kind.rawValue, category: "server", transportCode: nil,
+            status: status, start: start, end: end, index: rangeIndex,
+            offset: persisted, attempt: nextPerRangeRetry,
+            globalRetries: budget.retriesUsed,
+            remainingSeconds: budget.secondsRemaining,
+            host: responseHost, contentRange: responseRange,
+            contentLength: responseLength
+          )
+        }
+        lock.unlock()
+        fail(jobID: jobID, code: failureCode(kind,
+          "AUDIO_RETRY_AFTER_INVALID", "VIDEO_RETRY_AFTER_INVALID"))
+        return true
+      }
+      delay = parsed
+    } else {
+      delay = nextPerRangeRetry == 1 ? 0.5 : 1.5
+    }
+    guard budget.reserve(perRangeRetries: rangeRetryCount, delay: delay) else {
+      let remaining = budget.secondsRemaining
+      let code: String
+      if retryAfter != nil && remaining.map({ delay >= $0 }) == true {
+        code = failureCode(kind, "AUDIO_RETRY_AFTER_TOO_LONG", "VIDEO_RETRY_AFTER_TOO_LONG")
+      } else if remaining.map({ $0 <= 0 }) == true {
+        code = failureCode(kind,
+          "AUDIO_RECOVERY_BUDGET_EXHAUSTED", "VIDEO_RECOVERY_BUDGET_EXHAUSTED")
+      } else {
+        code = retryFailureCode(for: kind, error: error, fallback: forcedFailureCode,
+          exhausted: true)
+      }
+      lock.lock()
+      if activeJobID == jobID && candidate === task {
+        httpDiagnostics.captureFailure(
+          phase: kind.rawValue, category: retryCategory(status: status, error: error),
+          transportCode: error, status: status, start: start, end: end,
+          index: rangeIndex, offset: persisted, attempt: nextPerRangeRetry,
+          globalRetries: budget.retriesUsed,
+          remainingSeconds: budget.secondsRemaining,
+          host: responseHost, contentRange: responseRange, contentLength: responseLength
+        )
+      }
+      lock.unlock()
+      fail(jobID: jobID, code: code)
+      return true
+    }
+
+    do {
+      try MDAudioDownloadPolicy.truncateUnverifiedBytes(
+        at: partialURL, verifiedOffset: persisted)
+    } catch {
+      fail(jobID: jobID, code: failureCode(kind,
+        "AUDIO_STORAGE_UNAVAILABLE", "VIDEO_STORAGE_UNAVAILABLE"))
+      return true
+    }
+    lock.lock()
+    guard activeJobID == jobID, candidate === task, !cancellationRequested else {
+      lock.unlock()
+      return true
+    }
+    rangeRetryCount = nextPerRangeRetry
+    videoChunkBytesReceived = 0
+    videoContentRange = nil
+    responseValidated = false
+    forcedFailureCode = nil
+    httpDiagnostics.captureFailure(
+      phase: kind.rawValue, category: retryCategory(status: status, error: error),
+      transportCode: error, status: status, start: start, end: end,
+      index: rangeIndex, offset: persisted, attempt: nextPerRangeRetry,
+      globalRetries: budget.retriesUsed,
+      remainingSeconds: budget.secondsRemaining,
+      host: responseHost, contentRange: responseRange, contentLength: responseLength
+    )
+    retryGeneration += 1
+    let generation = retryGeneration
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.lock.lock()
+      let valid = self.activeJobID == jobID && !self.cancellationRequested &&
+        self.retryGeneration == generation
+      self.lock.unlock()
+      guard valid else { return }
+      guard budget.secondsRemaining.map({ $0 > 0 }) == true else {
+        self.failRecoveryBudget(jobID: jobID, kind: kind)
+        return
+      }
+      do {
+        try self.startNextRangeChunk(jobID: jobID, start: start, total: total,
+          descriptor: descriptor, kind: kind, requestedEnd: end, isRetry: true)
+      } catch let failure as MDAudioDownloadFailure {
+        self.fail(jobID: jobID, code: failure.code)
+      } catch {
+        self.fail(jobID: jobID, code: self.failureCode(kind,
+          "AUDIO_STORAGE_UNAVAILABLE", "VIDEO_STORAGE_UNAVAILABLE"))
+      }
+    }
+    retryWorkItem = work
+    lock.unlock()
+    armRecoveryDeadline(jobID: jobID)
+    emit(jobID: jobID, kind: kind, status: "RETRYING",
+      bytesDownloaded: persisted, totalBytes: total,
+      retryCategory: retryCategory(status: status, error: error),
+      httpDiagnostics: httpDiagnostics.eventValue())
+    DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: work)
+    return true
+  }
+
+  private func armRecoveryDeadline(jobID: String) {
+    lock.lock()
+    guard activeJobID == jobID,
+          let remaining = retryBudget.secondsRemaining, remaining > 0 else {
+      lock.unlock()
+      return
+    }
+    deadlineWorkItem?.cancel()
+    let generation = retryGeneration
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.lock.lock()
+      let valid = self.activeJobID == jobID && !self.cancellationRequested &&
+        self.retryGeneration == generation
+      let activeTask = self.task
+      let waiting = self.retryWorkItem != nil
+      let kind = self.activeKind
+      self.lock.unlock()
+      guard valid, let kind else { return }
+      if waiting {
+        self.failRecoveryBudget(jobID: jobID, kind: kind)
+      } else {
+        self.captureBudgetExhaustion(jobID: jobID, kind: kind)
+        self.setForcedFailure(self.failureCode(kind,
+          "AUDIO_RECOVERY_BUDGET_EXHAUSTED", "VIDEO_RECOVERY_BUDGET_EXHAUSTED"),
+          forJobID: jobID)
+        activeTask?.cancel()
+      }
+    }
+    deadlineWorkItem = work
+    lock.unlock()
+    DispatchQueue.global().asyncAfter(deadline: .now() + remaining, execute: work)
+  }
+
+  private func retryCategory(status: Int?, error: Error?) -> String {
+    if status.map({ MDAudioDownloadPolicy.retryableHTTPStatuses.contains($0) }) == true {
+      return "server"
+    }
+    if (error as NSError?)?.domain == NSURLErrorDomain &&
+      (error as NSError?)?.code == NSURLErrorTimedOut { return "timeout" }
+    return "connection"
+  }
+
+  private func captureBudgetExhaustion(jobID: String, kind: MDLocalDownloadKind) {
+    lock.lock()
+    guard activeJobID == jobID else {
+      lock.unlock()
+      return
+    }
+    let response = task?.response as? HTTPURLResponse
+    let range = videoContentRange.map { "bytes \($0.start)-\($0.end)/\($0.total)" }
+    httpDiagnostics.captureFailure(
+      phase: kind.rawValue, category: "timeout", transportCode: nil,
+      status: response?.statusCode ?? lastResponseStatus, start: videoRangeStart ?? 0,
+      end: videoRangeEnd ?? 0, index: rangeRequestIndex,
+      offset: videoBytesPersisted, attempt: rangeRetryCount + 1,
+      globalRetries: retryBudget.retriesUsed, remainingSeconds: 0,
+      host: response?.url?.host ?? task?.currentRequest?.url?.host,
+      contentRange: range,
+      contentLength: responseValidated ? response?.value(forHTTPHeaderField: "Content-Length") : nil
+    )
+    lock.unlock()
+  }
+
+  private func failRecoveryBudget(jobID: String, kind: MDLocalDownloadKind) {
+    captureBudgetExhaustion(jobID: jobID, kind: kind)
+    fail(jobID: jobID, code: failureCode(kind,
+      "AUDIO_RECOVERY_BUDGET_EXHAUSTED", "VIDEO_RECOVERY_BUDGET_EXHAUSTED"))
+  }
+
+  private func terminalCategory(code: String?, status: Int?, error: Error?) -> String {
+    switch status {
+    case 403: return "forbidden"
+    case 416: return "range"
+    case 429: return "rate_limit"
+    default: break
+    }
+    if code?.contains("DNS_INVALID") == true || code?.contains("URL_INVALID") == true {
+      return "security"
+    }
+    if code?.contains("RANGE_INVALID") == true || code?.contains("MIME") == true {
+      return "integrity"
+    }
+    let transport = error as NSError?
+    if transport?.domain == NSURLErrorDomain {
+      if transport?.code == NSURLErrorCannotFindHost { return "dns" }
+      if [NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted]
+        .contains(transport?.code ?? 0) { return "security" }
+    }
+    if status.map({ MDAudioDownloadPolicy.retryableHTTPStatuses.contains($0) }) == true {
+      return "server"
+    }
+    if (error as NSError?)?.domain == NSURLErrorDomain &&
+      (error as NSError?)?.code == NSURLErrorTimedOut { return "timeout" }
+    if error.map(MDAudioDownloadPolicy.isRetryableTransport) == true { return "connection" }
+    return "other"
+  }
+
+  private func retryFailureCode(
+    for kind: MDLocalDownloadKind, error: Error?, fallback: String?, exhausted: Bool = false
+  ) -> String {
+    if let fallback, !exhausted { return fallback }
+    let transport = error as NSError?
+    if transport?.domain == NSURLErrorDomain {
+      if transport?.code == NSURLErrorCannotFindHost {
+        return failureCode(kind, "AUDIO_DNS_UNAVAILABLE", "VIDEO_DNS_UNAVAILABLE")
+      }
+      if [NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted]
+        .contains(transport?.code ?? 0) {
+        return failureCode(kind, "AUDIO_TLS_ERROR", "VIDEO_TLS_ERROR")
+      }
+    }
+    if lastResponseStatus.map({ MDAudioDownloadPolicy.retryableHTTPStatuses.contains($0) }) == true {
+      return failureCode(kind,
+        exhausted ? "AUDIO_SERVER_RETRIES_EXHAUSTED" : "AUDIO_HTTP_ERROR",
+        exhausted ? "VIDEO_SERVER_RETRIES_EXHAUSTED" : "VIDEO_HTTP_ERROR")
+    }
+    if (error as NSError?)?.domain == NSURLErrorDomain &&
+      (error as NSError?)?.code == NSURLErrorTimedOut {
+      return failureCode(kind,
+        exhausted ? "AUDIO_TIMEOUT_RETRIES_EXHAUSTED" : "AUDIO_TIMEOUT",
+        exhausted ? "VIDEO_TIMEOUT_RETRIES_EXHAUSTED" : "VIDEO_TIMEOUT")
+    }
+    return failureCode(kind,
+      exhausted ? "AUDIO_CONNECTION_RETRIES_EXHAUSTED" : "AUDIO_DOWNLOAD_FAILED",
+      exhausted ? "VIDEO_CONNECTION_RETRIES_EXHAUSTED" : "VIDEO_DOWNLOAD_FAILED")
   }
 
   private func currentJobID(for candidate: URLSessionTask) -> String? {
@@ -788,9 +1198,9 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     return true
   }
 
-  private func setForcedFailure(_ code: String) {
+  private func setForcedFailure(_ code: String, forJobID jobID: String? = nil) {
     lock.lock()
-    forcedFailureCode = code
+    if jobID == nil || activeJobID == jobID { forcedFailureCode = code }
     lock.unlock()
   }
 
@@ -820,6 +1230,9 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       .appendingPathComponent("normalized.m4a", isDirectory: false)
     let normalizer = MDAVAudioNormalizer()
     let activeSession = session
+    deadlineWorkItem?.cancel()
+    deadlineWorkItem = nil
+    retryGeneration += 1
     task = nil
     session = nil
     audioNormalizer = normalizer
@@ -975,6 +1388,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   }
 
   private func resetLocked() {
+    retryWorkItem?.cancel()
+    deadlineWorkItem?.cancel()
+    retryWorkItem = nil
+    deadlineWorkItem = nil
+    retryGeneration += 1
     task = nil
     session = nil
     descriptor = nil
@@ -997,6 +1415,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     expectedAudioDurationSeconds = nil
     audioNormalizer = nil
     rangeRequestIndex = 0
+    rangeRetryCount = 0
+    retryBudget = MDRangeRetryBudget()
+    resourceETag = nil
+    lastResponseStatus = nil
+    lastRetryAfter = nil
     httpDiagnostics = MDHTTPTransferDiagnostics()
   }
 
@@ -1023,6 +1446,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     fileSize: Int64? = nil,
     localUri: String? = nil,
     errorCode: String? = nil,
+    retryCategory: String? = nil,
     httpDiagnostics: [String: Any]? = nil
   ) {
     var event: [String: Any?] = [
@@ -1041,6 +1465,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     event["fileSize"] = fileSize
     event["localUri"] = localUri
     event["errorCode"] = errorCode
+    event["retryCategory"] = retryCategory
     event["httpDiagnostics"] = httpDiagnostics
     DispatchQueue.main.async { [emitEvent] in emitEvent(event) }
   }

@@ -1,16 +1,16 @@
 import ExpoModulesCore
 
 public class OnDeviceYouTubeModule: Module {
-  private lazy var audioDownload = MDAudioDownloadManager { [weak self] event in
+  private lazy var audioDownload = MDAudioDownloadManager(emitEvent: { [weak self] event in
     let mediaType = event["mediaType"] as? String
     self?.sendEvent(
       mediaType == "video" ? "onVideoDownloadState" : "onAudioDownloadState",
       event
     )
-  }
-  private lazy var combinedDownload = MDCombinedDownloadManager { [weak self] event in
+  })
+  private lazy var combinedDownload = MDCombinedDownloadManager(emitEvent: { [weak self] event in
     self?.sendEvent("onCombinedDownloadState", event)
-  }
+  })
 
   public func definition() -> ModuleDefinition {
     Name("OnDeviceYouTube")

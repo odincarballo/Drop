@@ -15,6 +15,20 @@ function httpLines(value: LocalHttpTransferDiagnostics | null): string[] {
     `Primer Content-Range: ${value.contentRange ?? 'ausente'}`,
     `Primer Content-Length: ${value.contentLength ?? 'ausente'}`,
     `Host final: ${value.finalHost ?? 'no disponible'}`,
+    ...(value.failurePhase
+      ? [
+          `Fallo: ${value.failurePhase} · ${value.failureCategory ?? 'other'}`,
+          `Código transporte: ${value.failureTransportCode ?? 'no disponible'}`,
+          `Status fallo: ${value.failureStatusCode ?? 'no disponible'}`,
+          `Range fallo: ${value.failureRequestedRange ?? 'no disponible'}`,
+          `Índice: ${value.failureRangeIndex ?? 'no disponible'} · intento: ${value.failureRangeAttempt ?? 'no disponible'}`,
+          `Offset verificado: ${value.failureBytesPersisted ?? 'no disponible'} · retries globales: ${value.retriesUsed ?? 'no disponible'}`,
+          `Presupuesto restante: ${value.recoverySecondsRemaining ?? 'no disponible'} s`,
+          `Host fallo: ${value.failureHost ?? 'no disponible'}`,
+          `Content-Range validado: ${value.failureContentRange ?? 'no disponible'}`,
+          `Content-Length validado: ${value.failureContentLength ?? 'no disponible'}`,
+        ]
+      : []),
   ];
 }
 
@@ -90,6 +104,8 @@ export function LocalYoutubeDiagnosticsCard({ spike }: { spike: Spike }) {
       `Content-Range: ${audioHttp.failureContentRange}`,
     audioHttp?.failureContentLength &&
       `Content-Length: ${audioHttp.failureContentLength}`,
+    audioHttp && 'HTTP audio:',
+    ...httpLines(audioHttp),
     combinedHttp && 'HTTP video + audio:',
     ...httpLines(combinedHttp),
     videoHttp && 'HTTP video directo:',

@@ -52,6 +52,8 @@ export type LocalAudioState =
       bytesDownloaded: number;
       totalBytes: number | null;
       progress: number | null;
+      retrying: boolean;
+      retryCategory: 'connection' | 'timeout' | 'server' | null;
     }
   | {
       status: 'completed';
@@ -85,6 +87,8 @@ export type LocalVideoState =
       bytesDownloaded: number;
       totalBytes: number | null;
       progress: number | null;
+      retrying: boolean;
+      retryCategory: 'connection' | 'timeout' | 'server' | null;
     }
   | {
       status: 'completed';
@@ -116,6 +120,8 @@ export type LocalCombinedState =
       bytesDownloaded: number;
       totalBytes: number | null;
       progress: number | null;
+      retrying: boolean;
+      retryCategory: 'connection' | 'timeout' | 'server' | null;
     }
   | { status: 'muxing'; jobId: string; progress: number | null }
   | {
@@ -170,7 +176,7 @@ export function useLocalYoutubeSpike() {
         jobId: event.jobId,
         formatId: event.formatId ?? '',
       });
-    } else if (event.status === 'DOWNLOADING') {
+    } else if (event.status === 'DOWNLOADING' || event.status === 'RETRYING') {
       setAudioState({
         status: 'downloading',
         jobId: event.jobId,
@@ -180,6 +186,9 @@ export function useLocalYoutubeSpike() {
         bytesDownloaded: event.bytesDownloaded ?? 0,
         totalBytes: event.totalBytes ?? null,
         progress: event.progress ?? null,
+        retrying: event.status === 'RETRYING',
+        retryCategory:
+          event.status === 'RETRYING' ? (event.retryCategory ?? null) : null,
       });
     } else if (
       event.status === 'COMPLETED' &&
@@ -223,7 +232,7 @@ export function useLocalYoutubeSpike() {
         jobId: event.jobId,
         formatId: event.formatId ?? '',
       });
-    } else if (event.status === 'DOWNLOADING') {
+    } else if (event.status === 'DOWNLOADING' || event.status === 'RETRYING') {
       setVideoState({
         status: 'downloading',
         jobId: event.jobId,
@@ -234,6 +243,9 @@ export function useLocalYoutubeSpike() {
         bytesDownloaded: event.bytesDownloaded ?? 0,
         totalBytes: event.totalBytes ?? null,
         progress: event.progress ?? null,
+        retrying: event.status === 'RETRYING',
+        retryCategory:
+          event.status === 'RETRYING' ? (event.retryCategory ?? null) : null,
       });
     } else if (
       event.status === 'COMPLETED' &&
@@ -278,17 +290,24 @@ export function useLocalYoutubeSpike() {
         setCombinedState({ status: 'preparing', jobId: event.jobId });
       } else if (
         event.status === 'DOWNLOADING_VIDEO' ||
-        event.status === 'DOWNLOADING_AUDIO'
+        event.status === 'DOWNLOADING_AUDIO' ||
+        event.status === 'RETRYING_VIDEO' ||
+        event.status === 'RETRYING_AUDIO'
       ) {
         setCombinedState({
           status:
-            event.status === 'DOWNLOADING_VIDEO'
+            event.status === 'DOWNLOADING_VIDEO' ||
+            event.status === 'RETRYING_VIDEO'
               ? 'downloading-video'
               : 'downloading-audio',
           jobId: event.jobId,
           bytesDownloaded: event.bytesDownloaded ?? 0,
           totalBytes: event.totalBytes ?? null,
           progress: event.progress ?? null,
+          retrying: event.status.startsWith('RETRYING'),
+          retryCategory: event.status.startsWith('RETRYING')
+            ? (event.retryCategory ?? null)
+            : null,
         });
       } else if (event.status === 'MUXING') {
         setCombinedState({

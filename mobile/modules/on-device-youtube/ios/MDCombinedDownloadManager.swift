@@ -12,9 +12,13 @@ final class MDCombinedDownloadManager {
   private let lock = NSLock()
   private let stateQueue = DispatchQueue(label: "MediaDrop.CombinedFileLifecycle")
   private let emitEvent: EventSink
-  private lazy var transfer = MDAudioDownloadManager { [weak self] event in
-    self?.handleTransferEvent(event)
-  }
+  private let makeSessionConfiguration: () -> URLSessionConfiguration
+  private let validateTransferURL: (URL, MDLocalDownloadKind) throws -> Void
+  private lazy var transfer = MDAudioDownloadManager(
+    emitEvent: { [weak self] event in self?.handleTransferEvent(event) },
+    makeSessionConfiguration: makeSessionConfiguration,
+    validateTransferURL: validateTransferURL
+  )
   private var activeJobID: String?
   private var activeTransferJobID: String?
   private var phase: Phase?
@@ -32,9 +36,20 @@ final class MDCombinedDownloadManager {
   private var videoHTTPDiagnostics: [String: Any]?
   private var muxer: MDAVMuxer?
   private var cancellationRequested = false
+  private var retryBudget = MDRangeRetryBudget()
 
-  init(emitEvent: @escaping EventSink) {
+  init(
+    emitEvent: @escaping EventSink,
+    makeSessionConfiguration: @escaping () -> URLSessionConfiguration = {
+      URLSessionConfiguration.ephemeral
+    },
+    validateTransferURL: @escaping (URL, MDLocalDownloadKind) throws -> Void = {
+      try MDAudioDownloadPolicy.validateURL($0, kind: $1)
+    }
+  ) {
     self.emitEvent = emitEvent
+    self.makeSessionConfiguration = makeSessionConfiguration
+    self.validateTransferURL = validateTransferURL
   }
 
   var isActive: Bool {
@@ -66,11 +81,12 @@ final class MDCombinedDownloadManager {
       self.videoFormatID = videoFormatID
       self.audioFormatID = audioFormatID
       self.expectedDurationSeconds = expectedDurationSeconds
+      retryBudget = MDRangeRetryBudget()
       workspaceURL = workspace
       lock.unlock()
       emit(jobID: jobID, status: "PREPARING")
       guard let transferJobID = transfer.startVideo(
-        analysisID: analysisID, formatID: videoFormatID
+        analysisID: analysisID, formatID: videoFormatID, retryBudget: retryBudget
       ) else {
         fail(jobID: jobID, code: "COMBINED_DOWNLOAD_BUSY")
         return nil
@@ -166,6 +182,14 @@ final class MDCombinedDownloadManager {
       )
       return
     }
+    if status == "RETRYING" {
+      emit(jobID: jobID,
+        status: phase == .video ? "RETRYING_VIDEO" : "RETRYING_AUDIO",
+        bytesDownloaded: event["bytesDownloaded"] as? Int64,
+        totalBytes: event["totalBytes"] as? Int64,
+        retryCategory: event["retryCategory"] as? String)
+      return
+    }
     if status == "FAILED" {
       fail(
         jobID: jobID,
@@ -192,7 +216,7 @@ final class MDCombinedDownloadManager {
         let audioFormatID = self.audioFormatID
         lock.unlock()
         guard let transferJobID = transfer.startRangedAudio(
-          analysisID: analysisID, formatID: audioFormatID
+          analysisID: analysisID, formatID: audioFormatID, retryBudget: retryBudget
         ) else {
           fail(jobID: jobID, code: "COMBINED_DOWNLOAD_BUSY")
           return
@@ -390,6 +414,7 @@ final class MDCombinedDownloadManager {
     videoHTTPDiagnostics = nil
     muxer = nil
     cancellationRequested = false
+    retryBudget = MDRangeRetryBudget()
   }
 
   private func emit(
@@ -406,6 +431,7 @@ final class MDCombinedDownloadManager {
     videoCodec: String? = nil,
     audioCodec: String? = nil,
     errorCode: String? = nil,
+    retryCategory: String? = nil,
     videoHTTPDiagnostics: [String: Any]? = nil
   ) {
     var event: [String: Any?] = ["jobId": jobID, "status": status]
@@ -422,6 +448,7 @@ final class MDCombinedDownloadManager {
     event["videoCodec"] = videoCodec
     event["audioCodec"] = audioCodec
     event["errorCode"] = errorCode
+    event["retryCategory"] = retryCategory
     event["videoHttpDiagnostics"] = videoHTTPDiagnostics
     DispatchQueue.main.async { [emitEvent] in emitEvent(event) }
   }

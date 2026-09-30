@@ -65,6 +65,44 @@ enum HTTPTransferDiagnosticsTests {
           rejectedValue["failureContentLength"] == nil else {
       throw TestFailure.failed("Untrusted header or host was exposed")
     }
+    var transport = MDHTTPTransferDiagnostics()
+    transport.captureFailure(
+      phase: "audio", category: "connection",
+      transportCode: NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost),
+      status: nil, start: 262_144, end: 524_287,
+      index: 2, offset: 262_144, attempt: 2, globalRetries: 1,
+      remainingSeconds: 29, host: signedURL.host,
+      contentRange: nil, contentLength: nil
+    )
+    let facts = transport.eventValue()
+    guard facts["failureStatusCode"] == nil,
+          facts["failurePhase"] as? String == "audio",
+          facts["failureCategory"] as? String == "connection",
+          facts["failureTransportCode"] as? Int == NSURLErrorNetworkConnectionLost,
+          facts["retriesUsed"] as? Int == 1,
+          facts["failureBytesPersisted"] as? Int64 == 262_144,
+          !String(describing: facts).contains("SECRET") else {
+      throw TestFailure.failed("Transport diagnostics invented HTTP status or exposed secrets")
+    }
+    transport.captureFailure(
+      phase: "audio?token=SECRET", category: "server;PRIVATE",
+      transportCode: NSError(domain: "UntrustedDomain", code: 12345),
+      status: nil, start: 0, end: 99, index: 1, offset: 0,
+      attempt: 1, globalRetries: 0, remainingSeconds: nil,
+      host: "rr1.googlevideo.com?sig=SECRET",
+      contentRange: "bytes 0-99/100?token=SECRET",
+      contentLength: "100;token=PRIVATE"
+    )
+    let hostileFacts = transport.eventValue()
+    guard hostileFacts["failurePhase"] == nil,
+          hostileFacts["failureCategory"] == nil,
+          hostileFacts["failureTransportCode"] == nil,
+          hostileFacts["failureHost"] == nil,
+          hostileFacts["failureContentRange"] == nil,
+          hostileFacts["failureContentLength"] == nil,
+          !String(describing: hostileFacts).contains("SECRET") else {
+      throw TestFailure.failed("Untrusted retry diagnostics crossed the bridge")
+    }
     print("HTTPTransferDiagnosticsTests: passed")
   }
 }
