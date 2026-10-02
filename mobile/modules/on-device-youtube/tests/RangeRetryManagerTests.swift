@@ -12,17 +12,20 @@ private final class ScriptedProtocol: URLProtocol {
     let body: Data
     let error: URLError?
     var delay: TimeInterval = 0
+    var expectedSource: String? = nil
   }
 
   private static let lock = NSLock()
   private static var steps: [Step] = []
   private static var seen: [String] = []
+  private static var sources: [String] = []
   private static var mismatch: String?
 
   static func reset(_ value: [Step]) {
     lock.lock()
     steps = value
     seen = []
+    sources = []
     mismatch = nil
     lock.unlock()
   }
@@ -33,6 +36,12 @@ private final class ScriptedProtocol: URLProtocol {
     return (seen, mismatch)
   }
 
+  static func seenSources() -> [String] {
+    lock.lock()
+    defer { lock.unlock() }
+    return sources
+  }
+
   override class func canInit(with request: URLRequest) -> Bool {
     request.url?.host?.hasSuffix(".googlevideo.com") == true
   }
@@ -41,11 +50,17 @@ private final class ScriptedProtocol: URLProtocol {
 
   override func startLoading() {
     let range = request.value(forHTTPHeaderField: "Range") ?? ""
+    let source = request.url?.query == "sig=AUDIO-FRESH" ? "fresh-audio"
+      : request.url?.query == "sig=AUDIO-OLD" ? "old-audio" : "video"
     Self.lock.lock()
     Self.seen.append(range)
+    Self.sources.append(source)
     let step = Self.steps.isEmpty ? nil : Self.steps.removeFirst()
     if let step, step.range != range {
       Self.mismatch = "Expected \(step.range), got \(range)"
+    }
+    if let expected = step?.expectedSource, expected != source {
+      Self.mismatch = "Expected source \(expected), got \(source)"
     }
     Self.lock.unlock()
     guard let step else {
@@ -76,9 +91,56 @@ private final class ScriptedProtocol: URLProtocol {
 }
 
 enum MDPythonBridge {
+  private static let lock = NSLock()
+  private static var refreshResponses: [String] = []
+  private static var refreshDelay: TimeInterval = 0
+  private static var refreshCalls = 0
+  private static var refreshTimeouts: [TimeInterval] = []
+  private static var onRefresh: (() -> Void)?
+
+  static func configureRefresh(
+    responses: [String] = [], delay: TimeInterval = 0,
+    onRefresh: (() -> Void)? = nil
+  ) {
+    lock.lock()
+    refreshResponses = responses
+    refreshDelay = delay
+    refreshCalls = 0
+    refreshTimeouts = []
+    self.onRefresh = onRefresh
+    lock.unlock()
+  }
+
+  static func refreshResult() -> (Int, [TimeInterval]) {
+    lock.lock()
+    defer { lock.unlock() }
+    return (refreshCalls, refreshTimeouts)
+  }
+
   static func prepareAudioDownload(
     _ analysisID: String, formatId: String, completion: @escaping (String) -> Void
   ) { completion(descriptor(kind: "audio", formatId: formatId)) }
+
+  static func prepareAudioDownload(
+    _ analysisID: String, formatId: String, timeoutSeconds: TimeInterval,
+    completion: @escaping (String) -> Void
+  ) {
+    lock.lock()
+    refreshCalls += 1
+    refreshTimeouts.append(timeoutSeconds)
+    let response = refreshResponses.isEmpty
+      ? descriptor(kind: "audio", formatId: formatId, fresh: true)
+      : refreshResponses.removeFirst()
+    let delay = refreshDelay
+    let callback = onRefresh
+    lock.unlock()
+    callback?()
+    if delay > 0 {
+      DispatchQueue.global().asyncAfter(deadline: .now() + delay) { completion(response) }
+    } else {
+      completion(response)
+    }
+  }
 
   static func prepareVideoDownload(
     _ analysisID: String, formatId: String, completion: @escaping (String) -> Void
@@ -86,15 +148,22 @@ enum MDPythonBridge {
 
   static func cancel() {}
 
-  private static func descriptor(kind: String, formatId: String) -> String {
+  static func descriptor(
+    kind: String, formatId: String, fresh: Bool = false,
+    expectedBytes: Int = 6
+  ) -> String {
     let record: [String: Any] = ["descriptor": [
-      "url": "https://rr1.googlevideo.com/file?sig=SECRET",
+      "url": "https://rr1.googlevideo.com/file?sig=\(kind == "video" ? "VIDEO" : fresh ? "AUDIO-FRESH" : "AUDIO-OLD")",
       "headers": [:], "fileName": "sample.\(kind == "audio" ? "m4a" : "mp4")",
       "formatId": formatId, "container": kind == "audio" ? "m4a" : "mp4",
       "codec": kind == "audio" ? "mp4a.40.2" : "avc1.4d401e",
-      "expectedBytes": 6,
+      "expectedBytes": expectedBytes,
     ]]
     return String(data: try! JSONSerialization.data(withJSONObject: record), encoding: .utf8)!
+  }
+
+  static func error(_ code: String) -> String {
+    "{\"error\":{\"code\":\"\(code)\"}}"
   }
 }
 
@@ -130,11 +199,15 @@ enum MDAVMuxPolicy {
   static func validatedDuration(_ seconds: Double) throws -> Double { seconds }
 }
 final class MDAVMuxer {
+  static var lastVideoBytes: Data?
+  static var lastAudioBytes: Data?
   func start(videoURL: URL, audioURL: URL, outputURL: URL,
              expectedDurationSeconds: Double, progress: @escaping (Double) -> Void,
              completion: @escaping (Result<MDAVMuxResult, MDAVMuxFailure>) -> Void) {
     DispatchQueue.global().async {
       do {
+        Self.lastVideoBytes = try Data(contentsOf: videoURL)
+        Self.lastAudioBytes = try Data(contentsOf: audioURL)
         try FileManager.default.copyItem(at: videoURL, to: outputURL)
         completion(.success(MDAVMuxResult(fileSize: 6,
           durationSeconds: expectedDurationSeconds)))
@@ -169,6 +242,27 @@ enum RangeRetryManagerTests {
       body: Data("def".utf8), error: nil)
   }
 
+  private static func audioRange(
+    start: Int, end: Int, bytes: String, fresh: Bool = false,
+    mime: String = "audio/mp4", total: Int = 6
+  ) -> ScriptedProtocol.Step {
+    .init(
+      range: start == 0 ? firstRange : secondRange,
+      status: 206,
+      headers: ["Content-Range": "bytes \(start)-\(end)/\(total)",
+        "Content-Type": mime, "Content-Length": "\(bytes.utf8.count)"],
+      body: Data(bytes.utf8), error: nil,
+      expectedSource: fresh ? "fresh-audio" : "old-audio")
+  }
+
+  private static func audioForbidden(
+    range: String = secondRange, fresh: Bool = false
+  ) -> ScriptedProtocol.Step {
+    .init(range: range, status: 403, headers: ["Content-Type": "text/plain"],
+      body: Data(), error: nil,
+      expectedSource: fresh ? "fresh-audio" : "old-audio")
+  }
+
   private static func status(_ code: Int, retryAfter: String? = nil,
                              range: String = firstRange) -> ScriptedProtocol.Step {
     var headers = ["Content-Type": "text/plain"]
@@ -178,10 +272,14 @@ enum RangeRetryManagerTests {
   }
 
   private static func runCombined(
-    _ steps: [ScriptedProtocol.Step], cancelOnAudioRetry: Bool = false
+    _ steps: [ScriptedProtocol.Step], cancelOnAudioRetry: Bool = false,
+    refreshResponses: [String] = [], refreshDelay: TimeInterval = 0
   ) throws ->
     ([String: Any?], [String]) {
     ScriptedProtocol.reset(steps)
+    MDPythonBridge.configureRefresh(responses: refreshResponses, delay: refreshDelay)
+    MDAVMuxer.lastAudioBytes = nil
+    MDAVMuxer.lastVideoBytes = nil
     var terminal: [String: Any?]?
     var manager: MDCombinedDownloadManager!
     manager = MDCombinedDownloadManager(
@@ -214,6 +312,9 @@ enum RangeRetryManagerTests {
     try assertTerminalCleanup(terminal)
     let (seen, mismatch) = ScriptedProtocol.result()
     if let mismatch { throw TestFailure.failed(mismatch) }
+    if let uri = terminal["localUri"] as? String, let url = URL(string: uri) {
+      MDAudioDownloadPolicy.removeWorkspace(url.deletingLastPathComponent())
+    }
     return (terminal, seen)
   }
 
@@ -221,7 +322,11 @@ enum RangeRetryManagerTests {
     _ steps: [ScriptedProtocol.Step], audio: Bool = false,
     cancelOnRetry: Bool = false, cancelDuringRequest: Bool = false,
     budget: MDRangeRetryBudget? = nil,
-    onRetry: (() -> Void)? = nil, rejectDNS: Bool = false
+    onRetry: (() -> Void)? = nil, rejectDNS: Bool = false,
+    refreshResponses: [String] = [], refreshDelay: TimeInterval = 0,
+    cancelOnRefresh: Bool = false,
+    cancelDuringFreshRequest: Bool = false,
+    expectedOutput: Data = Data("abcdef".utf8)
   ) throws -> ([String: Any?], [String]) {
     ScriptedProtocol.reset(steps)
     var terminal: [String: Any?]?
@@ -247,14 +352,22 @@ enum RangeRetryManagerTests {
         try MDAudioDownloadPolicy.validateURL(url, kind: kind, resolveDNS: false)
       }
     )
+    MDPythonBridge.configureRefresh(
+      responses: refreshResponses, delay: refreshDelay,
+      onRefresh: cancelOnRefresh ? { manager.cancel() } : nil)
     let job = audio
-      ? manager.start(analysisID: "fixture", formatID: "140", durationSeconds: 1)
+      ? manager.start(analysisID: "fixture", formatID: "140", durationSeconds: 1,
+          retryBudget: budget)
       : manager.startVideo(analysisID: "fixture", formatID: "134", retryBudget: budget)
     guard job != nil else { throw TestFailure.failed("Could not start transfer") }
     let deadline = Date().addingTimeInterval(8)
     var cancelledRequest = false
     while terminal == nil && Date() < deadline {
       if cancelDuringRequest && !cancelledRequest && !ScriptedProtocol.result().0.isEmpty {
+        cancelledRequest = true
+        manager.cancel()
+      } else if cancelDuringFreshRequest && !cancelledRequest &&
+                  ScriptedProtocol.seenSources().contains("fresh-audio") {
         cancelledRequest = true
         manager.cancel()
       }
@@ -264,14 +377,14 @@ enum RangeRetryManagerTests {
     try assertTerminalCleanup(terminal)
     let (seen, mismatch) = ScriptedProtocol.result()
     if let mismatch { throw TestFailure.failed(mismatch) }
-    if cancelDuringRequest || budget != nil {
-      RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+    if cancelDuringRequest || cancelOnRefresh || cancelDuringFreshRequest || budget != nil {
+      RunLoop.current.run(until: Date().addingTimeInterval(max(0.4, refreshDelay + 0.2)))
       guard terminal["status"] as? String != "COMPLETED" else {
         throw TestFailure.failed("Late callback published a cancelled or expired job")
       }
     }
     if let uri = terminal["localUri"] as? String, let url = URL(string: uri) {
-      guard try Data(contentsOf: url) == Data("abcdef".utf8) else {
+      guard try Data(contentsOf: url) == expectedOutput else {
         throw TestFailure.failed("Verified output duplicated or lost bytes")
       }
       MDAudioDownloadPolicy.removeWorkspace(url.deletingLastPathComponent())
@@ -334,6 +447,135 @@ enum RangeRetryManagerTests {
     guard audioRecovered["status"] as? String == "COMPLETED",
           audioRetryRanges == [firstRange, firstRange, secondRange] else {
       throw TestFailure.failed("Standalone audio did not reuse range retry")
+    }
+    let (refreshedAudio, refreshRanges) = try run([
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+      audioRange(start: 0, end: 2, bytes: "UVW", fresh: true),
+      audioRange(start: 3, end: 5, bytes: "XYZ", fresh: true),
+    ], audio: true, expectedOutput: Data("UVWXYZ".utf8))
+    let refreshTrace = (refreshedAudio["httpDiagnostics"] as? [String: Any])?["forbiddenAudioRefreshStages"] as? [String]
+    guard refreshedAudio["status"] as? String == "COMPLETED",
+          refreshRanges == [firstRange, secondRange, firstRange, secondRange],
+          ScriptedProtocol.seenSources() == ["old-audio", "old-audio", "fresh-audio", "fresh-audio"],
+          MDPythonBridge.refreshResult().0 == 1,
+          refreshTrace?.contains("identity_confirmed") == true,
+          refreshTrace?.contains("restarted_at_zero") == true,
+          !(String(describing: refreshedAudio).contains("AUDIO-FRESH")) else {
+      throw TestFailure.failed("Audio 403 refresh mixed old and fresh bytes or leaked a URL")
+    }
+    let (secondForbidden, secondForbiddenRanges) = try run([
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+      audioRange(start: 0, end: 2, bytes: "UVW", fresh: true),
+      audioForbidden(fresh: true),
+    ], audio: true)
+    guard secondForbidden["errorCode"] as? String == "AUDIO_HTTP_FORBIDDEN",
+          secondForbiddenRanges.count == 4,
+          MDPythonBridge.refreshResult().0 == 1 else {
+      throw TestFailure.failed("A second 403 caused another URL refresh")
+    }
+    for code in ["AUDIO_TRACK_CHANGED", "AUDIO_TRACK_AMBIGUOUS"] {
+      let (rejected, requests) = try run([
+        audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+      ], audio: true, refreshResponses: [MDPythonBridge.error(code)])
+      guard rejected["errorCode"] as? String == code,
+            requests.count == 2, MDPythonBridge.refreshResult().0 == 1 else {
+        throw TestFailure.failed("Changed or ambiguous audio identity was accepted")
+      }
+    }
+    let (oversizedFresh, oversizedRequests) = try run([
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+    ], audio: true, refreshResponses: [MDPythonBridge.descriptor(
+      kind: "audio", formatId: "140", fresh: true, expectedBytes: 25 * 1024 * 1024 + 1)])
+    guard oversizedFresh["errorCode"] as? String == "AUDIO_FILE_TOO_LARGE",
+          oversizedRequests.count == 2 else {
+      throw TestFailure.failed("Fresh URL bypassed the audio size limit")
+    }
+    let badFreshResponses: [(ScriptedProtocol.Step, String)] = [
+      (audioRange(start: 0, end: 2, bytes: "UVW", fresh: true, mime: "text/plain"),
+        "AUDIO_MIME_NOT_ALLOWED"),
+      (.init(range: firstRange, status: 206,
+        headers: ["Content-Range": "bytes 1-2/6", "Content-Length": "2",
+          "Content-Type": "audio/mp4"], body: Data("VW".utf8), error: nil,
+        expectedSource: "fresh-audio"), "AUDIO_RANGE_INVALID"),
+    ]
+    for (badFresh, code) in badFreshResponses {
+      let (invalid, requests) = try run([
+        audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(), badFresh,
+      ], audio: true)
+      guard invalid["errorCode"] as? String == code, requests.count == 3 else {
+        throw TestFailure.failed("Fresh URL bypassed MIME or Content-Range validation")
+      }
+    }
+    let (changedTotal, changedTotalRequests) = try run([
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+      audioRange(start: 0, end: 2, bytes: "UVW", fresh: true),
+      audioRange(start: 3, end: 5, bytes: "XYZ", fresh: true, total: 7),
+    ], audio: true)
+    guard changedTotal["errorCode"] as? String == "AUDIO_RANGE_INVALID",
+          changedTotalRequests.count == 4 else {
+      throw TestFailure.failed("Contradictory fresh total was accepted")
+    }
+    let (cancelledRefresh, cancelledRefreshRanges) = try run([
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+    ], audio: true, refreshDelay: 0.15, cancelOnRefresh: true)
+    guard cancelledRefresh["status"] as? String == "CANCELLED",
+          cancelledRefreshRanges.count == 2 else {
+      throw TestFailure.failed("Cancellation during reextraction was ignored")
+    }
+    var delayedFresh = audioRange(start: 0, end: 2, bytes: "UVW", fresh: true)
+    delayedFresh.delay = 0.3
+    let (cancelledFresh, cancelledFreshRanges) = try run([
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(), delayedFresh,
+    ], audio: true, cancelDuringFreshRequest: true)
+    guard cancelledFresh["status"] as? String == "CANCELLED",
+          cancelledFreshRanges.count == 3 else {
+      throw TestFailure.failed("Cancellation during fresh transfer published a file")
+    }
+    let shortBudget = MDRangeRetryBudget(recoverySeconds: 0.15)
+    let (refreshTimedOut, timedOutRanges) = try run([
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+    ], audio: true, budget: shortBudget, refreshDelay: 0.4)
+    guard refreshTimedOut["errorCode"] as? String == "AUDIO_RECOVERY_BUDGET_EXHAUSTED",
+          timedOutRanges.count == 2,
+          MDPythonBridge.refreshResult().1.first.map({ $0 > 0 && $0 <= 0.15 }) == true else {
+      throw TestFailure.failed("Python refresh outlived the shared time budget")
+    }
+    let spentBudget = MDRangeRetryBudget()
+    for _ in 0..<4 {
+      guard spentBudget.reserve(perRangeRetries: 0, delay: 0) else {
+        throw TestFailure.failed("Could not construct exhausted shared budget")
+      }
+    }
+    let (refreshDenied, deniedRanges) = try run([
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+    ], audio: true, budget: spentBudget)
+    guard refreshDenied["status"] as? String == "FAILED",
+          deniedRanges.count == 2, MDPythonBridge.refreshResult().0 == 0 else {
+      throw TestFailure.failed("Refresh ignored the four-retry job budget")
+    }
+    let (combinedFresh, combinedFreshRanges) = try runCombined([
+      first(), second(),
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+      audioRange(start: 0, end: 2, bytes: "UVW", fresh: true),
+      audioRange(start: 3, end: 5, bytes: "XYZ", fresh: true),
+    ])
+    guard combinedFresh["status"] as? String == "COMPLETED",
+          combinedFreshRanges.count == 6,
+          ScriptedProtocol.seenSources() == ["video", "video", "old-audio", "old-audio", "fresh-audio", "fresh-audio"],
+          MDAVMuxer.lastVideoBytes == Data("abcdef".utf8),
+          MDAVMuxer.lastAudioBytes == Data("UVWXYZ".utf8),
+          MDPythonBridge.refreshResult().0 == 1 else {
+      throw TestFailure.failed("Combined recovery redownloaded video or mixed audio bytes")
+    }
+    let (combinedDenied, combinedDeniedRanges) = try runCombined([
+      status(500), status(500), first(),
+      status(500, range: secondRange), status(500, range: secondRange), second(),
+      audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
+    ])
+    guard combinedDenied["status"] as? String == "FAILED",
+          combinedDeniedRanges.count == 8,
+          MDPythonBridge.refreshResult().0 == 0 else {
+      throw TestFailure.failed("Audio refresh ignored retries already spent by video")
     }
     for code in [408, 500, 502, 503, 504] {
       let (event, seen) = try run([status(code), first(), second()])

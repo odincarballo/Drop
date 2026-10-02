@@ -121,3 +121,23 @@ En iPhone se validó manualmente
 MP4/H.264 a 24 fps: descarga de video y audio correcta, mux completado y
 MP4 final reproducido correctamente, con imagen y sonido sincronizados durante
 los 2:30 completos. También funcionó Guardar en Archivos.
+
+### En desarrollo: recuperación acotada de HTTP 403 en audio YouTube
+
+Un HTTP 403 durante un rango de audio puede iniciar, como máximo una vez por
+trabajo, una reextracción de la misma pista con su identidad única. Este
+refresh consume uno de los cuatro retries globales y respeta el presupuesto
+compartido de 30 segundos. El audio vuelve a comenzar desde byte cero: nunca
+se unen bytes de dos URLs. En Video + audio se conserva el video ya terminado
+mientras se recupera el audio; si la recuperación falla, se limpian ambos.
+El 403 sigue sin ser reintentable de forma general para video ni recursos
+directos. El origen de los 403 observados no está demostrado: se consideran
+potencialmente recuperables mediante una URL fresca, no necesariamente URLs
+expiradas.
+
+Tras instalar la build con esta corrección, se completaron físicamente dos
+descargas adicionales de `SkVqJ1SGeL0` en 1080p con video y audio, mux y
+reproducción correctos y sincronizados. En esas pruebas YouTube no volvió a
+responder HTTP 403. Por tanto, el flujo normal está validado físicamente;
+la recuperación automática específica del 403 está cubierta por pruebas
+deterministas, pero aún no se ha activado ni validado físicamente.

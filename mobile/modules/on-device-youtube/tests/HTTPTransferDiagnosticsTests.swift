@@ -28,6 +28,10 @@ enum HTTPTransferDiagnosticsTests {
       rangeIndex: 2,
       bytesPersisted: 262_144
     )
+    diagnostics.captureForbiddenAudioRefresh(.first403)
+    diagnostics.captureForbiddenAudioRefresh(.budgetReserved)
+    diagnostics.captureForbiddenAudioRefresh(.identityConfirmed)
+    diagnostics.captureForbiddenAudioRefresh(.restartedAtZero)
     let value = diagnostics.eventValue()
     guard value["requestedRange"] as? String == "bytes=0-262143",
           value["failureRequestedRange"] as? String == "bytes=262144-524287",
@@ -36,7 +40,10 @@ enum HTTPTransferDiagnosticsTests {
           value["failureBytesPersisted"] as? Int64 == 262_144,
           value["failureHost"] as? String == "rr1.googlevideo.com",
           value["failureContentRange"] as? String == "bytes */2000000",
-          value["failureContentLength"] as? String == "42" else {
+          value["failureContentLength"] as? String == "42",
+          value["forbiddenAudioRefreshStages"] as? [String] == [
+            "first_403", "budget_reserved", "identity_confirmed", "restarted_at_zero"
+          ] else {
       throw TestFailure.failed("Expected structured HTTP failure facts")
     }
     let rendered = String(describing: value)

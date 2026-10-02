@@ -73,6 +73,20 @@ final class MDRangeRetryBudget {
     used += 1
     return true
   }
+
+  // A fresh URL is not a retry of the old range, but it consumes the same
+  // job-wide retry and time budgets as the video/audio 206 recovery path.
+  func reserveAudioForbiddenRefresh() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    let instant = now()
+    let start = firstRetryAt ?? instant
+    let remaining = recoverySeconds - (instant - start)
+    firstRetryAt = start
+    guard used < Self.maximumPerJob, remaining > 0 else { return false }
+    used += 1
+    return true
+  }
 }
 
 enum MDAudioDownloadPolicy {

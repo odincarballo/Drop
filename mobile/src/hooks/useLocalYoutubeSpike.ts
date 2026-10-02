@@ -65,6 +65,7 @@ export type LocalAudioState =
       fileSize: number;
       localUri: string;
       actionError: string | null;
+      httpDiagnostics: LocalHttpTransferDiagnostics | null;
     }
   | { status: 'cancelled' }
   | {
@@ -136,6 +137,7 @@ export type LocalCombinedState =
       audioCodec: string | null;
       actionError: string | null;
       videoHttpDiagnostics: LocalHttpTransferDiagnostics | null;
+      audioHttpDiagnostics: LocalHttpTransferDiagnostics | null;
     }
   | { status: 'cancelled' }
   | {
@@ -143,6 +145,7 @@ export type LocalCombinedState =
       message: string;
       code: string;
       videoHttpDiagnostics: LocalHttpTransferDiagnostics | null;
+      audioHttpDiagnostics: LocalHttpTransferDiagnostics | null;
     };
 
 export function useLocalYoutubeSpike() {
@@ -207,6 +210,7 @@ export function useLocalYoutubeSpike() {
         fileSize: event.fileSize,
         localUri: event.localUri,
         actionError: null,
+        httpDiagnostics: event.httpDiagnostics ?? null,
       });
     } else if (event.status === 'CANCELLED') {
       audioJobId.current = null;
@@ -335,6 +339,7 @@ export function useLocalYoutubeSpike() {
           audioCodec: event.audioCodec ?? null,
           actionError: null,
           videoHttpDiagnostics: event.videoHttpDiagnostics ?? null,
+          audioHttpDiagnostics: event.audioHttpDiagnostics ?? null,
         });
       } else if (event.status === 'CANCELLED') {
         combinedJobId.current = null;
@@ -347,6 +352,7 @@ export function useLocalYoutubeSpike() {
           code,
           message: localCombinedError(code),
           videoHttpDiagnostics: event.videoHttpDiagnostics ?? null,
+          audioHttpDiagnostics: event.audioHttpDiagnostics ?? null,
         });
       }
     },
@@ -631,6 +637,7 @@ export function useLocalYoutubeSpike() {
         code: 'COMBINED_FORMAT_NOT_SUPPORTED',
         message: localCombinedError('COMBINED_FORMAT_NOT_SUPPORTED'),
         videoHttpDiagnostics: null,
+        audioHttpDiagnostics: null,
       });
       return;
     }
@@ -652,6 +659,7 @@ export function useLocalYoutubeSpike() {
             ? error.message
             : localCombinedError('COMBINED_DOWNLOAD_FAILED'),
         videoHttpDiagnostics: null,
+        audioHttpDiagnostics: null,
       });
     }
   }

@@ -272,13 +272,14 @@ static BOOL mdInitialize(void) {
 
 + (void)invokePythonMethod:(NSString *)method
                   argument:(NSString * _Nullable)argument
+            timeoutSeconds:(NSTimeInterval)timeoutSeconds
                 completion:(void (^)(NSString *))completion {
   if (atomic_exchange(&mdBusy, true)) {
     completion(@"{\"error\":{\"code\":\"LOCAL_BUSY\"}}");
     return;
   }
   atomic_store(&mdCancelled, false);
-  mdDeadline = mdNow() + 100;
+  mdDeadline = mdNow() + MIN(100.0, MAX(0.0, timeoutSeconds));
   NSThread *thread = [[NSThread alloc] initWithBlock:^{
     @autoreleasepool {
       NSString *json = @"{\"error\":{\"code\":\"LOCAL_RUNTIME_FAILED\"}}";
@@ -331,11 +332,11 @@ static BOOL mdInitialize(void) {
 }
 
 + (void)analyze:(NSString *)url completion:(void (^)(NSString *))completion {
-  [self invokePythonMethod:@"analyze" argument:url completion:completion];
+  [self invokePythonMethod:@"analyze" argument:url timeoutSeconds:100 completion:completion];
 }
 
 + (void)testEJS:(void (^)(NSString *))completion {
-  [self invokePythonMethod:@"run_ejs_fixture" argument:nil completion:completion];
+  [self invokePythonMethod:@"run_ejs_fixture" argument:nil timeoutSeconds:100 completion:completion];
 }
 
 + (void)prepareAudioDownload:(NSString *)analysisId
@@ -346,7 +347,20 @@ static BOOL mdInitialize(void) {
   NSString *argument = data
     ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
     : @"{}";
-  [self invokePythonMethod:@"prepare_audio_download" argument:argument completion:completion];
+  [self invokePythonMethod:@"prepare_audio_download" argument:argument timeoutSeconds:100 completion:completion];
+}
+
++ (void)prepareAudioDownload:(NSString *)analysisId
+                    formatId:(NSString *)formatId
+              timeoutSeconds:(NSTimeInterval)timeoutSeconds
+                  completion:(void (^)(NSString *))completion {
+  NSDictionary *request = @{ @"analysisId": analysisId, @"formatId": formatId };
+  NSData *data = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
+  NSString *argument = data
+    ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+    : @"{}";
+  [self invokePythonMethod:@"prepare_audio_download" argument:argument
+           timeoutSeconds:timeoutSeconds completion:completion];
 }
 
 + (void)prepareVideoDownload:(NSString *)analysisId
@@ -357,6 +371,6 @@ static BOOL mdInitialize(void) {
   NSString *argument = data
     ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
     : @"{}";
-  [self invokePythonMethod:@"prepare_video_download" argument:argument completion:completion];
+  [self invokePythonMethod:@"prepare_video_download" argument:argument timeoutSeconds:100 completion:completion];
 }
 @end

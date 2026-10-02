@@ -363,6 +363,28 @@ test('HTTP diagnostics reject signed URLs and arbitrary header strings', () => {
     signedUrl: 'https://rr1.googlevideo.com/path?sig=secret',
   });
   expect(JSON.stringify(parsed)).not.toContain('secret');
+  const refresh = localHttpTransferDiagnosticsSchema.parse({
+    failureStatusCode: 403,
+    forbiddenAudioRefreshStages: [
+      'first_403',
+      'budget_reserved',
+      'identity_confirmed',
+      'restarted_at_zero',
+    ],
+  });
+  expect(refresh.forbiddenAudioRefreshStages).toHaveLength(4);
+  expect(
+    localHttpTransferDiagnosticsSchema.safeParse({
+      forbiddenAudioRefreshStages: ['https://rr1.googlevideo.com/?sig=SECRET'],
+    }).success,
+  ).toBe(false);
+  expect(
+    localCombinedDownloadEventSchema.safeParse({
+      jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
+      status: 'COMPLETED',
+      audioHttpDiagnostics: refresh,
+    }).success,
+  ).toBe(true);
 });
 
 test('bounded retries are parsed for all YouTube modes without exposing URLs', () => {

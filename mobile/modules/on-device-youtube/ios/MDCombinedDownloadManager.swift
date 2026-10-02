@@ -34,6 +34,7 @@ final class MDCombinedDownloadManager {
   private var videoCodec: String?
   private var audioCodec: String?
   private var videoHTTPDiagnostics: [String: Any]?
+  private var audioHTTPDiagnostics: [String: Any]?
   private var muxer: MDAVMuxer?
   private var cancellationRequested = false
   private var retryBudget = MDRangeRetryBudget()
@@ -167,6 +168,11 @@ final class MDCombinedDownloadManager {
       lock.lock()
       videoHTTPDiagnostics = diagnostics
       lock.unlock()
+    } else if phase == .audio,
+              let diagnostics = event["httpDiagnostics"] as? [String: Any] {
+      lock.lock()
+      audioHTTPDiagnostics = diagnostics
+      lock.unlock()
     }
     if status == "PREPARING" {
       emit(jobID: jobID, status: "PREPARING")
@@ -193,8 +199,7 @@ final class MDCombinedDownloadManager {
     if status == "FAILED" {
       fail(
         jobID: jobID,
-        code: event["errorCode"] as? String ?? "COMBINED_DOWNLOAD_FAILED",
-        diagnostics: event["httpDiagnostics"] as? [String: Any]
+        code: event["errorCode"] as? String ?? "COMBINED_DOWNLOAD_FAILED"
       )
       return
     }
@@ -328,6 +333,7 @@ final class MDCombinedDownloadManager {
     let codec = videoCodec
     let finalAudioCodec = audioCodec
     let diagnostics = videoHTTPDiagnostics
+    let audioDiagnostics = audioHTTPDiagnostics
     resetLocked()
     lock.unlock()
     for input in [inputVideo, inputAudio].compactMap({ $0 }) {
@@ -348,14 +354,14 @@ final class MDCombinedDownloadManager {
       height: height,
       videoCodec: codec,
       audioCodec: finalAudioCodec,
-      videoHTTPDiagnostics: diagnostics
+      videoHTTPDiagnostics: diagnostics,
+      audioHTTPDiagnostics: audioDiagnostics
     )
   }
 
   private func fail(
     jobID: String,
-    code: String,
-    diagnostics: [String: Any]? = nil
+    code: String
   ) {
     lock.lock()
     guard activeJobID == jobID else {
@@ -369,7 +375,8 @@ final class MDCombinedDownloadManager {
     }
     let workspace = workspaceURL
     let activeMuxer = muxer
-    let finalDiagnostics = diagnostics ?? videoHTTPDiagnostics
+    let videoDiagnostics = videoHTTPDiagnostics
+    let audioDiagnostics = audioHTTPDiagnostics
     resetLocked()
     lock.unlock()
     transfer.cancel()
@@ -379,7 +386,8 @@ final class MDCombinedDownloadManager {
       jobID: jobID,
       status: "FAILED",
       errorCode: code,
-      videoHTTPDiagnostics: finalDiagnostics
+      videoHTTPDiagnostics: videoDiagnostics,
+      audioHTTPDiagnostics: audioDiagnostics
     )
   }
 
@@ -412,6 +420,7 @@ final class MDCombinedDownloadManager {
     videoCodec = nil
     audioCodec = nil
     videoHTTPDiagnostics = nil
+    audioHTTPDiagnostics = nil
     muxer = nil
     cancellationRequested = false
     retryBudget = MDRangeRetryBudget()
@@ -432,7 +441,8 @@ final class MDCombinedDownloadManager {
     audioCodec: String? = nil,
     errorCode: String? = nil,
     retryCategory: String? = nil,
-    videoHTTPDiagnostics: [String: Any]? = nil
+    videoHTTPDiagnostics: [String: Any]? = nil,
+    audioHTTPDiagnostics: [String: Any]? = nil
   ) {
     var event: [String: Any?] = ["jobId": jobID, "status": status]
     event["videoFormatId"] = videoFormatID
@@ -450,6 +460,7 @@ final class MDCombinedDownloadManager {
     event["errorCode"] = errorCode
     event["retryCategory"] = retryCategory
     event["videoHttpDiagnostics"] = videoHTTPDiagnostics
+    event["audioHttpDiagnostics"] = audioHTTPDiagnostics
     DispatchQueue.main.async { [emitEvent] in emitEvent(event) }
   }
 }

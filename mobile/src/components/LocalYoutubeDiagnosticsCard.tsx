@@ -16,6 +16,11 @@ function httpLines(value: LocalHttpTransferDiagnostics | null): string[] {
     `Primer Content-Range: ${value.contentRange ?? 'ausente'}`,
     `Primer Content-Length: ${value.contentLength ?? 'ausente'}`,
     `Host final: ${value.finalHost ?? 'no disponible'}`,
+    ...(value.forbiddenAudioRefreshStages?.length
+      ? [
+          `Recuperación HTTP 403 de audio: ${value.forbiddenAudioRefreshStages.join(' → ')}`,
+        ]
+      : []),
     ...(value.failurePhase
       ? [
           `Fallo: ${value.failurePhase} · ${value.failureCategory ?? 'other'}`,
@@ -49,13 +54,19 @@ export function LocalYoutubeDiagnosticsCard({ spike }: { spike: Spike }) {
       ? spike.videoState.httpDiagnostics
       : null;
   const audioHttp =
-    spike.audioState.status === 'error'
+    spike.audioState.status === 'error' ||
+    spike.audioState.status === 'completed'
       ? spike.audioState.httpDiagnostics
       : null;
   const combinedHttp =
     spike.combinedState.status === 'completed' ||
     spike.combinedState.status === 'error'
       ? spike.combinedState.videoHttpDiagnostics
+      : null;
+  const combinedAudioHttp =
+    spike.combinedState.status === 'completed' ||
+    spike.combinedState.status === 'error'
+      ? spike.combinedState.audioHttpDiagnostics
       : null;
 
   const lines = [
@@ -109,6 +120,8 @@ export function LocalYoutubeDiagnosticsCard({ spike }: { spike: Spike }) {
     ...httpLines(audioHttp),
     combinedHttp && 'HTTP video + audio:',
     ...httpLines(combinedHttp),
+    combinedAudioHttp && 'HTTP audio combinado:',
+    ...httpLines(combinedAudioHttp),
     videoHttp && 'HTTP video directo:',
     ...httpLines(videoHttp),
   ].filter(

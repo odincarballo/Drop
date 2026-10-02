@@ -62,6 +62,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   private var lastResponseStatus: Int?
   private var lastRetryAfter: String?
   private var httpDiagnostics = MDHTTPTransferDiagnostics()
+  private var analysisID = ""
+  private var selectedFormatID = ""
+  private var forbiddenAudioRefreshUsed = false
+  private var refreshingForbiddenAudio = false
+  private var audioRefreshGeneration = 0
 
   init(
     emitEvent: @escaping EventSink,
@@ -83,14 +88,18 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     return activeJobID != nil
   }
 
-  func start(analysisID: String, formatID: String, durationSeconds: Double) -> String? {
+  func start(
+    analysisID: String, formatID: String, durationSeconds: Double,
+    retryBudget: MDRangeRetryBudget? = nil
+  ) -> String? {
     start(
       kind: .audio,
       analysisID: analysisID,
       formatID: formatID,
       useRanges: MDAudioDownloadPolicy.standaloneAudioUsesRanges,
       standaloneAudio: true,
-      expectedAudioDurationSeconds: durationSeconds
+      expectedAudioDurationSeconds: durationSeconds,
+      retryBudget: retryBudget
     )
   }
 
@@ -129,10 +138,12 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     self.standaloneAudio = standaloneAudio
     self.expectedAudioDurationSeconds = expectedAudioDurationSeconds
     self.retryBudget = retryBudget ?? MDRangeRetryBudget()
+    self.analysisID = analysisID
+    selectedFormatID = formatID
     lock.unlock()
     emit(jobID: jobID, kind: kind, status: "PREPARING", formatID: formatID)
     let completion: (String) -> Void = { [weak self] raw in
-      self?.prepared(jobID: jobID, kind: kind, raw: raw)
+      self?.prepared(jobID: jobID, kind: kind, raw: raw, refreshGeneration: nil)
     }
     if kind == .audio {
       MDPythonBridge.prepareAudioDownload(
@@ -161,6 +172,10 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     let activeNormalizer = audioNormalizer
     let directory = workspaceURL
     let waitingForRetry = retryWorkItem != nil
+    if refreshingForbiddenAudio {
+      httpDiagnostics.captureForbiddenAudioRefresh(.cancelled)
+    }
+    let diagnostics = httpDiagnostics.eventValue()
     if activeNormalizer != nil || (activeTask != nil && !waitingForRetry) {
       cancellationRequested = true
     } else {
@@ -174,32 +189,73 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     activeSession?.invalidateAndCancel()
     if activeNormalizer == nil && (activeTask == nil || waitingForRetry) {
       MDAudioDownloadPolicy.removeWorkspace(directory)
-      emit(jobID: jobID, kind: kind, status: "CANCELLED")
+      emit(jobID: jobID, kind: kind, status: "CANCELLED", httpDiagnostics: diagnostics)
     }
   }
 
-  private func prepared(jobID: String, kind: MDLocalDownloadKind, raw: String) {
+  private func prepared(
+    jobID: String, kind: MDLocalDownloadKind, raw: String,
+    refreshGeneration: Int?
+  ) {
     lock.lock()
-    let stillActive = activeJobID == jobID
+    let isRefresh = refreshGeneration != nil
+    let stillActive = activeJobID == jobID && !cancellationRequested &&
+      (isRefresh
+        ? refreshingForbiddenAudio && audioRefreshGeneration == refreshGeneration
+        : !refreshingForbiddenAudio)
     lock.unlock()
     guard stillActive else { return }
+    if isRefresh && retryBudget.secondsRemaining.map({ $0 <= 0 }) == true {
+      failRecoveryBudget(jobID: jobID, kind: kind)
+      return
+    }
     guard
       raw.utf8.count <= 32 * 1024,
       let data = raw.data(using: .utf8),
       let envelope = try? JSONDecoder().decode(MDAudioPreparationEnvelope.self, from: data)
     else {
+      if isRefresh {
+        lock.lock()
+        httpDiagnostics.captureForbiddenAudioRefresh(.refreshFailed)
+        lock.unlock()
+      }
       fail(jobID: jobID, code: failureCode(kind, "AUDIO_PREPARATION_FAILED", "VIDEO_PREPARATION_FAILED"))
       return
     }
     if let code = envelope.error?.code {
+      if isRefresh {
+        lock.lock()
+        httpDiagnostics.captureForbiddenAudioRefresh(
+          ["AUDIO_TRACK_CHANGED", "AUDIO_TRACK_AMBIGUOUS", "FORMAT_NOT_AVAILABLE"]
+            .contains(code) ? .identityRejected : .refreshFailed)
+        lock.unlock()
+      }
       fail(jobID: jobID, code: code)
       return
     }
     guard let descriptor = envelope.descriptor else {
+      if isRefresh {
+        lock.lock()
+        httpDiagnostics.captureForbiddenAudioRefresh(.refreshFailed)
+        lock.unlock()
+      }
       fail(jobID: jobID, code: failureCode(kind, "AUDIO_PREPARATION_FAILED", "VIDEO_PREPARATION_FAILED"))
       return
     }
     do {
+      if isRefresh {
+        guard descriptor.formatId == selectedFormatID,
+              descriptor.codec.lowercased().hasPrefix("mp4a.") ||
+                descriptor.codec.lowercased() == "aac" else {
+          lock.lock()
+          httpDiagnostics.captureForbiddenAudioRefresh(.identityRejected)
+          lock.unlock()
+          throw MDAudioDownloadFailure.code("AUDIO_TRACK_CHANGED")
+        }
+        lock.lock()
+        httpDiagnostics.captureForbiddenAudioRefresh(.identityConfirmed)
+        lock.unlock()
+      }
       guard descriptor.container == kind.container, !descriptor.formatId.isEmpty else {
         throw MDAudioDownloadFailure.code(
           failureCode(kind, "AUDIO_FORMAT_NOT_SUPPORTED", "VIDEO_FORMAT_NOT_SUPPORTED")
@@ -249,8 +305,20 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       let task: URLSessionTask = usesRangeTransfer
         ? session.dataTask(with: request)
         : session.downloadTask(with: request)
+      let partialURL = directory.appendingPathComponent(
+        kind == .video ? "video.part" : "audio.part", isDirectory: false)
+      if usesRangeTransfer {
+        if isRefresh {
+          try MDAudioDownloadPolicy.truncateUnverifiedBytes(
+            at: partialURL, verifiedOffset: 0)
+        } else {
+          FileManager.default.createFile(atPath: partialURL.path, contents: nil)
+        }
+      }
       lock.lock()
-      guard activeJobID == jobID else {
+      guard activeJobID == jobID && !cancellationRequested &&
+            (!isRefresh ||
+              (refreshingForbiddenAudio && audioRefreshGeneration == refreshGeneration)) else {
         lock.unlock()
         session.invalidateAndCancel()
         MDAudioDownloadPolicy.removeWorkspace(directory)
@@ -261,11 +329,6 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       self.session = session
       self.task = task
       if usesRangeTransfer {
-        let partialURL = directory.appendingPathComponent(
-          kind == .video ? "video.part" : "audio.part",
-          isDirectory: false
-        )
-        FileManager.default.createFile(atPath: partialURL.path, contents: nil)
         videoPartialURL = partialURL
         videoBytesPersisted = 0
         videoRangeStart = 0
@@ -279,8 +342,12 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
         resourceETag = nil
         lastResponseStatus = nil
         lastRetryAfter = nil
-        httpDiagnostics = MDHTTPTransferDiagnostics()
+        if !isRefresh { httpDiagnostics = MDHTTPTransferDiagnostics() }
         httpDiagnostics.captureRequest(start: 0, end: videoChunkSize - 1)
+      }
+      if isRefresh {
+        refreshingForbiddenAudio = false
+        httpDiagnostics.captureForbiddenAudioRefresh(.restartedAtZero)
       }
       redirectCount = 0
       responseValidated = false
@@ -307,8 +374,20 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       )
       task.resume()
     } catch let failure as MDAudioDownloadFailure {
+      if isRefresh {
+        lock.lock()
+        if failure.code != "AUDIO_TRACK_CHANGED" {
+          httpDiagnostics.captureForbiddenAudioRefresh(.refreshFailed)
+        }
+        lock.unlock()
+      }
       fail(jobID: jobID, code: failure.code)
     } catch {
+      if isRefresh {
+        lock.lock()
+        httpDiagnostics.captureForbiddenAudioRefresh(.refreshFailed)
+        lock.unlock()
+      }
       fail(jobID: jobID, code: failureCode(kind, "AUDIO_STORAGE_UNAVAILABLE", "VIDEO_STORAGE_UNAVAILABLE"))
     }
   }
@@ -663,6 +742,14 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       failRecoveryBudget(jobID: jobID, kind: kind)
       return
     }
+    if kind == .audio, usesRangeTransfer,
+       (task.response as? HTTPURLResponse)?.statusCode == 403,
+       code == "AUDIO_HTTP_FORBIDDEN" {
+      if !handleForbiddenAudioResponse(jobID: jobID, task: task) {
+        fail(jobID: jobID, code: "AUDIO_HTTP_FORBIDDEN")
+      }
+      return
+    }
     if usesRangeTransfer {
       let response = task.response as? HTTPURLResponse
       lock.lock()
@@ -727,6 +814,71 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       code: retryFailureCode(for: kind, error: error, fallback: code)
     )
     _ = finishCancellationIfNeeded(for: task)
+  }
+
+  // Only a terminal 403 for a YouTube audio range may enter this path. The
+  // previous task has completed, and no byte from its URL survives the refresh.
+  private func handleForbiddenAudioResponse(jobID: String, task oldTask: URLSessionTask) -> Bool {
+    lock.lock()
+    guard activeJobID == jobID, oldTask === task, !cancellationRequested,
+          let response = oldTask.response as? HTTPURLResponse,
+          response.statusCode == 403 else {
+      lock.unlock()
+      return false
+    }
+    if forbiddenAudioRefreshUsed {
+      httpDiagnostics.captureForbiddenAudioRefresh(.second403)
+      lock.unlock()
+      return false
+    }
+    httpDiagnostics.captureForbiddenAudioRefresh(.first403)
+    httpDiagnostics.captureFailure(
+      phase: "audio", category: "forbidden", transportCode: nil,
+      status: 403, start: videoRangeStart ?? 0, end: videoRangeEnd ?? 0,
+      index: rangeRequestIndex, offset: videoBytesPersisted,
+      attempt: rangeRetryCount + 1, globalRetries: retryBudget.retriesUsed,
+      remainingSeconds: retryBudget.secondsRemaining,
+      host: response.url?.host,
+      contentRange: nil, contentLength: nil)
+    guard retryBudget.reserveAudioForbiddenRefresh(),
+          let remaining = retryBudget.secondsRemaining, remaining > 0 else {
+      httpDiagnostics.captureForbiddenAudioRefresh(.budgetUnavailable)
+      lock.unlock()
+      fail(jobID: jobID, code: "AUDIO_HTTP_FORBIDDEN")
+      return true
+    }
+    httpDiagnostics.captureForbiddenAudioRefresh(.budgetReserved)
+    httpDiagnostics.captureFailure(
+      phase: "audio", category: "forbidden", transportCode: nil,
+      status: 403, start: videoRangeStart ?? 0, end: videoRangeEnd ?? 0,
+      index: rangeRequestIndex, offset: videoBytesPersisted,
+      attempt: rangeRetryCount + 1, globalRetries: retryBudget.retriesUsed,
+      remainingSeconds: retryBudget.secondsRemaining,
+      host: response.url?.host,
+      contentRange: nil, contentLength: nil)
+    httpDiagnostics.captureForbiddenAudioRefresh(.started)
+    forbiddenAudioRefreshUsed = true
+    refreshingForbiddenAudio = true
+    audioRefreshGeneration += 1
+    let generation = audioRefreshGeneration
+    retryGeneration += 1
+    let oldSession = session
+    session = nil
+    task = nil
+    deadlineWorkItem?.cancel()
+    deadlineWorkItem = nil
+    let analysisID = self.analysisID
+    let formatID = selectedFormatID
+    lock.unlock()
+    oldSession?.finishTasksAndInvalidate()
+    armRecoveryDeadline(jobID: jobID)
+    MDPythonBridge.prepareAudioDownload(
+      analysisID, formatId: formatID, timeoutSeconds: remaining
+    ) { [weak self] raw in
+      self?.prepared(
+        jobID: jobID, kind: .audio, raw: raw, refreshGeneration: generation)
+    }
+    return true
   }
 
   private func finishFullBodyDataTask(jobID: String, kind: MDLocalDownloadKind) throws {
@@ -1051,10 +1203,14 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
         self.retryGeneration == generation
       let activeTask = self.task
       let waiting = self.retryWorkItem != nil
+      let refreshing = self.refreshingForbiddenAudio
       let kind = self.activeKind
       self.lock.unlock()
       guard valid, let kind else { return }
-      if waiting {
+      if refreshing {
+        MDPythonBridge.cancel()
+        self.failRecoveryBudget(jobID: jobID, kind: kind)
+      } else if waiting {
         self.failRecoveryBudget(jobID: jobID, kind: kind)
       } else {
         self.captureBudgetExhaustion(jobID: jobID, kind: kind)
@@ -1100,6 +1256,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   }
 
   private func failRecoveryBudget(jobID: String, kind: MDLocalDownloadKind) {
+    lock.lock()
+    if activeJobID == jobID && refreshingForbiddenAudio {
+      httpDiagnostics.captureForbiddenAudioRefresh(.timedOut)
+    }
+    lock.unlock()
     captureBudgetExhaustion(jobID: jobID, kind: kind)
     fail(jobID: jobID, code: failureCode(kind,
       "AUDIO_RECOVERY_BUDGET_EXHAUSTED", "VIDEO_RECOVERY_BUDGET_EXHAUSTED"))
@@ -1371,12 +1532,14 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     activeJobID = nil
     let activeTask = task
     let activeSession = session
+    let refreshing = refreshingForbiddenAudio
     let directory = workspaceURL
     let diagnostics = httpDiagnostics.eventValue()
     resetLocked()
     lock.unlock()
     activeTask?.cancel()
     activeSession?.invalidateAndCancel()
+    if refreshing { MDPythonBridge.cancel() }
     MDAudioDownloadPolicy.removeWorkspace(directory)
     emit(
       jobID: jobID,
@@ -1421,6 +1584,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     lastResponseStatus = nil
     lastRetryAfter = nil
     httpDiagnostics = MDHTTPTransferDiagnostics()
+    analysisID = ""
+    selectedFormatID = ""
+    forbiddenAudioRefreshUsed = false
+    refreshingForbiddenAudio = false
+    audioRefreshGeneration += 1
   }
 
   private func failureCode(

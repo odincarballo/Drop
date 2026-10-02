@@ -367,6 +367,22 @@ enum AudioDownloadPolicyTests {
     guard !temporalBudget.reserve(perRangeRetries: 0, delay: 0.5) else {
       throw TestFailure.failed("Expired backoff budget allowed a retry")
     }
+    instant = 200
+    let forbiddenBudget = MDRangeRetryBudget(now: { instant })
+    guard forbiddenBudget.reserveAudioForbiddenRefresh(),
+          forbiddenBudget.retriesUsed == 1,
+          forbiddenBudget.secondsRemaining == 30 else {
+      throw TestFailure.failed("Audio 403 refresh did not start the shared budget")
+    }
+    instant = 229
+    guard forbiddenBudget.reserve(perRangeRetries: 0, delay: 0.5),
+          forbiddenBudget.secondsRemaining == 1 else {
+      throw TestFailure.failed("Normal range retry did not share the refresh deadline")
+    }
+    instant = 230
+    guard !forbiddenBudget.reserveAudioForbiddenRefresh() else {
+      throw TestFailure.failed("Audio 403 refresh extended an expired deadline")
+    }
     let identityRange = MDVideoContentRange(start: 0, end: 99, total: 200)
     let sameETag = HTTPURLResponse(
       url: URL(string: "https://rr1.googlevideo.com/file")!, statusCode: 206,

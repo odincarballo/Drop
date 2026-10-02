@@ -127,6 +127,24 @@ export const localHttpTransferDiagnosticsSchema = z.object({
   failureRangeAttempt: z.number().int().min(1).max(3).optional(),
   retriesUsed: z.number().int().min(0).max(4).optional(),
   recoverySecondsRemaining: z.number().int().min(0).max(30).optional(),
+  forbiddenAudioRefreshStages: z
+    .array(
+      z.enum([
+        'first_403',
+        'budget_unavailable',
+        'budget_reserved',
+        'started',
+        'identity_confirmed',
+        'identity_rejected',
+        'refresh_failed',
+        'restarted_at_zero',
+        'second_403',
+        'timed_out',
+        'cancelled',
+      ]),
+    )
+    .max(12)
+    .optional(),
 });
 
 export type LocalHttpTransferDiagnostics = z.infer<
@@ -227,6 +245,7 @@ export const localCombinedDownloadEventSchema = z.object({
     .regex(/^[A-Z_]+$/)
     .optional(),
   videoHttpDiagnostics: localHttpTransferDiagnosticsSchema.optional(),
+  audioHttpDiagnostics: localHttpTransferDiagnosticsSchema.optional(),
 });
 
 export type LocalCombinedDownloadEvent = z.infer<

@@ -1,5 +1,19 @@
 import Foundation
 
+enum MDForbiddenAudioRefreshStage: String {
+  case first403 = "first_403"
+  case budgetUnavailable = "budget_unavailable"
+  case budgetReserved = "budget_reserved"
+  case started
+  case identityConfirmed = "identity_confirmed"
+  case identityRejected = "identity_rejected"
+  case refreshFailed = "refresh_failed"
+  case restartedAtZero = "restarted_at_zero"
+  case second403 = "second_403"
+  case timedOut = "timed_out"
+  case cancelled
+}
+
 // Only structured, allowlisted transfer facts cross the native/React Native bridge.
 // In particular, never forward a raw URL, query string, request header or response header.
 struct MDHTTPTransferDiagnostics {
@@ -21,6 +35,13 @@ struct MDHTTPTransferDiagnostics {
   private(set) var failureRangeAttempt: Int?
   private(set) var retriesUsed: Int?
   private(set) var recoverySecondsRemaining: Int?
+  private(set) var forbiddenAudioRefreshStages: [String] = []
+
+  mutating func captureForbiddenAudioRefresh(_ stage: MDForbiddenAudioRefreshStage) {
+    if forbiddenAudioRefreshStages.count < 12 {
+      forbiddenAudioRefreshStages.append(stage.rawValue)
+    }
+  }
 
   mutating func captureFailure(
     phase: String, category: String, transportCode: Error?, status: Int?,
@@ -107,6 +128,9 @@ struct MDHTTPTransferDiagnostics {
     value["failureRangeAttempt"] = failureRangeAttempt
     value["retriesUsed"] = retriesUsed
     value["recoverySecondsRemaining"] = recoverySecondsRemaining
+    if !forbiddenAudioRefreshStages.isEmpty {
+      value["forbiddenAudioRefreshStages"] = forbiddenAudioRefreshStages
+    }
     return value
   }
 
