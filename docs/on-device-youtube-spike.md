@@ -98,9 +98,9 @@ desarrollo `HK927RUDLZ`; SecureStore no cambia.
 
 ## En desarrollo en `feature/v1.1.0`: 1080p Fase 1
 
-Esta política todavía no forma parte de `v1.0.1` ni cuenta con validación
-física final. La opción 1080p solo es elegible para un stream directo MP4 con
-H.264/`avc1`, sin audio embebido, FPS conocido de hasta 30 y tamaño exacto
+Esta política todavía no forma parte de `v1.0.1`. La opción 1080p solo es
+elegible para un stream directo MP4 con H.264/`avc1`, sin audio embebido,
+FPS conocido de hasta 30 y tamaño exacto
 conocido de hasta 50 MiB por pista de video. La pista M4A/AAC mantiene su
 límite independiente de 25 MiB. HLS, VP9, AV1, FPS desconocido, 1080p60,
 tamaño desconocido y cualquier rango dinámico identificado como HDR siguen
@@ -111,5 +111,13 @@ ausente incluso en MP4/H.264 directos. Por ello se acepta tanto `SDR` explícito
 como valor ausente o `unknown`, siempre que se cumplan las demás restricciones.
 Un rango desconocido **no se presenta como SDR confirmado**: Detalles técnicos
 lo identifica como desconocido. Esta decisión no equivale a verificar la
-colorimetría del archivo; la compatibilidad final requiere la prueba física
-manual del resultado 1080p.
+colorimetría del archivo; el resultado 1080p se comprobó físicamente en el
+caso descrito a continuación.
+
+### Validación física de 1080p Fase 1
+
+En iPhone se validó manualmente
+[Caminandes 3](https://www.youtube.com/watch?v=SkVqJ1SGeL0) en 1080p
+MP4/H.264 a 24 fps: descarga de video y audio correcta, mux completado y
+MP4 final reproducido correctamente, con imagen y sonido sincronizados durante
+los 2:30 completos. También funcionó Guardar en Archivos.
