@@ -458,6 +458,32 @@ def is_direct_mp4_video(item):
     return urlsplit(url).path.rstrip("/").endswith("/videoplayback")
 
 
+def is_phase_one_1080_height(height):
+    return height is not None and abs(height - 1080) <= 16
+
+
+def is_sdr_or_unknown_dynamic_range(value):
+    return value is None or (
+        isinstance(value, str) and value.strip().upper() in {"", "SDR", "UNKNOWN"}
+    )
+
+
+def is_selectable_direct_video(item):
+    if not is_direct_mp4_video(item):
+        return False
+    height = positive_integer(item.get("height"))
+    if not is_phase_one_1080_height(height):
+        return True
+    fps = number(item.get("fps"))
+    dynamic_range = item.get("dynamic_range")
+    return (
+        str(item.get("vcodec") or "").lower().startswith("avc1")
+        and is_sdr_or_unknown_dynamic_range(dynamic_range)
+        and fps is not None
+        and 0 < fps <= 30
+    )
+
+
 def audio_track_identity(item):
     """Stable, non-URL fields that distinguish raw yt-dlp audio tracks."""
     preference = item.get("language_preference")
@@ -560,6 +586,56 @@ def preferred_video(formats):
     return max(candidates, key=rank)
 
 
+def bounded_video_catalog(video):
+    """Keep one downloadable choice per visible quality without growing the bridge."""
+    unique, seen = [], set()
+    for item in video:
+        if item["id"] not in seen:
+            unique.append(item)
+            seen.add(item["id"])
+
+    protected = set()
+    for target in (360, 720, 1080):
+        candidates, unavailable_1080 = [], []
+        for index, item in enumerate(unique):
+            height = item["height"]
+            if not item["directDownload"] or height is None or abs(height - target) > 16:
+                continue
+            size = item["estimatedSize"]
+            exact = item["exactSize"]
+            rank = (
+                abs(height - target),
+                size is None,
+                size if size is not None else float("inf"),
+                item["id"],
+                index,
+            )
+            if target == 1080:
+                if (
+                    exact is None or exact <= 0 or exact > MAX_VIDEO_BYTES
+                    or (size is not None and size > MAX_VIDEO_BYTES)
+                ):
+                    unavailable_1080.append(rank)
+                    continue
+            elif size is not None and size > MAX_VIDEO_BYTES:
+                continue
+            candidates.append(rank)
+        if candidates:
+            protected.add(min(candidates)[-1])
+        elif target == 1080 and unavailable_1080:
+            # Keep one non-downloadable direct option visible for a clear size reason.
+            protected.add(min(unavailable_1080)[-1])
+
+    included = set(range(min(100, len(unique))))
+    for index in sorted(protected):
+        if index in included:
+            continue
+        if len(included) == 100:
+            included.remove(max(item for item in included if item not in protected))
+        included.add(index)
+    return [item for index, item in enumerate(unique) if index in included]
+
+
 def clean_sessions(now=None):
     current = time.monotonic() if now is None else now
     expired = [
@@ -581,7 +657,7 @@ def create_session(url, payload):
     compatible_video = {
         str(item.get("format_id"))
         for item in payload.get("formats", [])
-        if is_direct_mp4_video(item)
+        if is_selectable_direct_video(item)
     }
     analysis_id = uuid.uuid4().hex
     analysis_sessions[analysis_id] = {
@@ -672,10 +748,12 @@ def build_video_descriptor(payload, format_id):
     )
     if item is None:
         raise ValueError("FORMAT_NOT_AVAILABLE")
-    if not is_direct_mp4_video(item):
+    if not is_selectable_direct_video(item):
         raise ValueError("VIDEO_FORMAT_NOT_SUPPORTED")
     expected = positive_integer(item.get("filesize"))
     estimated = positive_integer(item.get("filesize_approx"))
+    if is_phase_one_1080_height(positive_integer(item.get("height"))) and expected is None:
+        raise ValueError("VIDEO_FORMAT_NOT_SUPPORTED")
     if (expected and expected > MAX_VIDEO_BYTES) or (
         estimated and estimated > MAX_VIDEO_BYTES
     ):
@@ -736,9 +814,16 @@ def normalize(payload, analysis_id=None, selected_audio=None, selected_video=Non
             "estimatedSize": number(
                 item.get("filesize") or item.get("filesize_approx")
             ),
+            "exactSize": positive_integer(item.get("filesize")),
+            "dynamicRange": (
+                item.get("dynamic_range")
+                if isinstance(item.get("dynamic_range"), str)
+                and re.fullmatch(r"[A-Za-z0-9._-]{1,40}", item["dynamic_range"])
+                else None
+            ),
             "protocol": item.get("protocol"),
             "directDownload": (
-                is_direct_mp4_video(item)
+                is_selectable_direct_video(item)
                 if has_video
                 else is_direct_m4a_audio(item)
             ),
@@ -758,7 +843,7 @@ def normalize(payload, analysis_id=None, selected_audio=None, selected_video=Non
         "title": str(payload.get("title") or "YouTube")[:240],
         "duration": number(payload.get("duration")),
         "thumbnail": thumbnail,
-        "videoFormats": video[:100],
+        "videoFormats": bounded_video_catalog(video),
         "audioFormats": audio[:30],
         "resolutions": sorted({item["height"] for item in video if item["height"]}),
     }

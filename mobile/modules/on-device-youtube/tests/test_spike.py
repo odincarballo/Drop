@@ -275,6 +275,140 @@ class SpikeTests(unittest.TestCase):
 
         self.assertEqual(spike.preferred_video(payload["formats"])["format_id"], "134")
 
+    def test_phase_one_1080_accepts_sdr_or_unknown_avc_with_known_frame_rate(self):
+        valid = self.video_payload(
+            format_id="dynamic-1080", height=1080, fps=24,
+            dynamic_range="SDR", vcodec="avc1.640028",
+        )["formats"][0]
+        self.assertTrue(spike.is_selectable_direct_video(valid))
+        for dynamic_range in (None, "unknown", "UNKNOWN", ""):
+            with self.subTest(accepted_range=dynamic_range):
+                candidate = {**valid, "dynamic_range": dynamic_range}
+                self.assertTrue(spike.is_selectable_direct_video(candidate))
+                record = spike.normalize({"id": "AWGPaFraPN4", "formats": [candidate]})["videoFormats"][0]
+                self.assertTrue(record["directDownload"])
+                self.assertNotEqual(record["dynamicRange"], "SDR")
+        for changes in [
+            {"fps": None}, {"fps": 60}, {"dynamic_range": "HDR10"},
+            {"dynamic_range": "HLG"}, {"dynamic_range": "DV"},
+            {"vcodec": "h264"},
+            {"vcodec": "av01.0.08M.08"}, {"vcodec": "vp9", "ext": "webm"},
+            {"protocol": "m3u8_native"},
+        ]:
+            with self.subTest(changes=changes):
+                candidate = {**valid, **changes}
+                self.assertFalse(spike.is_selectable_direct_video(candidate))
+                self.assertFalse(spike.normalize({"id": "AWGPaFraPN4", "formats": [candidate]})["videoFormats"][0]["directDownload"])
+
+    def test_phase_one_1080_descriptor_rechecks_size_after_reextraction(self):
+        valid = self.video_payload(
+            format_id="dynamic-1080", height=1080, fps=30,
+            dynamic_range="SDR", vcodec="avc1.640028",
+            filesize=spike.MAX_VIDEO_BYTES,
+        )
+        self.assertEqual(
+            spike.build_video_descriptor(valid, "dynamic-1080")["height"], 1080
+        )
+        normalized = spike.normalize(valid)["videoFormats"][0]
+        self.assertEqual(normalized["exactSize"], spike.MAX_VIDEO_BYTES)
+        self.assertEqual(normalized["dynamicRange"], "SDR")
+        unknown = {**valid, "formats": [{**valid["formats"][0], "dynamic_range": None}]}
+        self.assertEqual(spike.build_video_descriptor(unknown, "dynamic-1080")["height"], 1080)
+        for changes, code in [
+            ({"filesize": None, "filesize_approx": 1_000_000}, "VIDEO_FORMAT_NOT_SUPPORTED"),
+            ({"filesize": spike.MAX_VIDEO_BYTES + 1}, "VIDEO_FILE_TOO_LARGE"),
+            ({"fps": 60}, "VIDEO_FORMAT_NOT_SUPPORTED"),
+            ({"dynamic_range": "HDR10"}, "VIDEO_FORMAT_NOT_SUPPORTED"),
+        ]:
+            with self.subTest(changes=changes):
+                changed = {**valid, "formats": [{**valid["formats"][0], **changes}]}
+                with self.assertRaisesRegex(ValueError, code):
+                    spike.build_video_descriptor(changed, "dynamic-1080")
+
+    def catalog_fixture(self):
+        base = self.video_payload()["formats"][0]
+        formats = [
+            {**base, "format_id": "preferred-360"},
+            {**base, "format_id": "preferred-720", "height": 720},
+        ]
+        formats.extend(
+            {**base, "format_id": f"filler-{index}", "height": 480}
+            for index in range(98)
+        )
+        high = self.video_payload(
+            format_id="preferred-1080", height=1080, fps=24,
+            dynamic_range="SDR", vcodec="avc1.640028",
+        )["formats"][0]
+        return formats, high
+
+    def test_catalog_protects_1080_after_position_100_without_losing_360_or_720(self):
+        formats, high = self.catalog_fixture()
+        records = spike.normalize({"id": "AWGPaFraPN4", "formats": formats + [high]})["videoFormats"]
+        ids = [item["id"] for item in records]
+        self.assertEqual(len(records), 100)
+        self.assertEqual(ids[:2], ["preferred-360", "preferred-720"])
+        self.assertEqual(ids[-1], "preferred-1080")
+        self.assertNotIn("filler-97", ids)
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_catalog_without_eligible_1080_preserves_original_order(self):
+        formats, high = self.catalog_fixture()
+        records = spike.normalize({"id": "AWGPaFraPN4", "formats": formats + [
+            {**high, "dynamic_range": "HDR10"}
+        ]})["videoFormats"]
+        self.assertEqual([item["id"] for item in records], [item["format_id"] for item in formats])
+
+    def test_catalog_multiple_1080_variants_protects_only_preferred(self):
+        formats, high = self.catalog_fixture()
+        larger = {**high, "format_id": "larger-1080", "filesize": 10_000_000}
+        smaller = {**high, "format_id": "smaller-1080", "filesize": 5_000_000}
+        records = spike.normalize({"id": "AWGPaFraPN4", "formats": formats + [larger, smaller]})["videoFormats"]
+        ids = [item["id"] for item in records]
+        self.assertEqual(len(ids), 100)
+        self.assertIn("smaller-1080", ids)
+        self.assertNotIn("larger-1080", ids)
+
+    def test_catalog_does_not_duplicate_protected_entries_already_inside_cap(self):
+        formats, high = self.catalog_fixture()
+        records = spike.normalize({"id": "AWGPaFraPN4", "formats": [high] + formats[:99]})["videoFormats"]
+        ids = [item["id"] for item in records]
+        self.assertEqual(len(ids), 100)
+        self.assertEqual(ids.count("preferred-1080"), 1)
+        self.assertEqual(ids[:3], ["preferred-1080", "preferred-360", "preferred-720"])
+
+    def test_catalog_rejects_incompatible_1080_after_cap(self):
+        formats, high = self.catalog_fixture()
+        extras = [
+            {**high, "format_id": "vp9-1080", "vcodec": "vp9", "ext": "webm"},
+            {**high, "format_id": "av1-1080", "vcodec": "av01.0.08M.08"},
+            {**high, "format_id": "hls-1080", "protocol": "m3u8_native"},
+        ]
+        records = spike.normalize({"id": "AWGPaFraPN4", "formats": formats + extras})["videoFormats"]
+        self.assertEqual([item["id"] for item in records], [item["format_id"] for item in formats])
+
+    def test_catalog_keeps_oversized_1080_only_as_disabled_display_option(self):
+        formats, high = self.catalog_fixture()
+        oversized = {**high, "format_id": "oversized-1080", "filesize": spike.MAX_VIDEO_BYTES + 1}
+        records = spike.normalize({"id": "AWGPaFraPN4", "formats": formats + [oversized]})["videoFormats"]
+        self.assertEqual(len(records), 100)
+        self.assertEqual(records[-1]["id"], "oversized-1080")
+        self.assertTrue(records[-1]["directDownload"])
+        self.assertGreater(records[-1]["exactSize"], spike.MAX_VIDEO_BYTES)
+        with self.assertRaisesRegex(ValueError, "VIDEO_FILE_TOO_LARGE"):
+            spike.build_video_descriptor({"formats": [oversized]}, "oversized-1080")
+
+    def test_catalog_can_protect_preferred_360_and_720_after_cap(self):
+        formats, _ = self.catalog_fixture()
+        later = [
+            {**formats[0], "format_id": "better-360", "filesize": 1_000_000},
+            {**formats[1], "format_id": "better-720", "filesize": 1_000_000},
+        ]
+        records = spike.normalize({"id": "AWGPaFraPN4", "formats": formats + later})["videoFormats"]
+        ids = [item["id"] for item in records]
+        self.assertEqual(len(ids), 100)
+        self.assertEqual(ids[:2], ["preferred-360", "preferred-720"])
+        self.assertEqual(ids[-2:], ["better-360", "better-720"])
+
     def test_video_selection_rejects_non_direct_or_muxed_formats(self):
         for changes in [
             {"ext": "webm"},

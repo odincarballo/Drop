@@ -284,6 +284,108 @@ test('normal YouTube flow uses real 364p and direct 720p, never HLS', async () =
   expect(analyzeMedia).not.toHaveBeenCalled();
 });
 
+test.each(['Video + audio', 'Solo video'] as const)(
+  'normal 1080p flow sends the selected direct stream to %s',
+  async (mode) => {
+    const native = localYoutubeNativeEngine();
+    native.analyze.mockResolvedValue(
+      JSON.stringify({
+        ...localYoutubeMetadata,
+        metadata: {
+          ...localYoutubeMetadata.metadata,
+          videoFormats: [
+            ...localYoutubeMetadata.metadata.videoFormats,
+            {
+              ...localYoutubeMetadata.metadata.videoFormats[0],
+              id: 'opaque-1080',
+              height: 1080,
+              width: 1920,
+              resolution: '1080p',
+              codec: 'avc1.640028',
+              fps: 24,
+              dynamicRange: 'SDR',
+              exactSize: 35 * 1024 * 1024,
+              estimatedSize: 35 * 1024 * 1024,
+            },
+          ],
+          resolutions: [360, 1080],
+        },
+      }),
+    );
+    native.startCombinedDownload.mockReturnValue(
+      '7D628D93-DC67-4729-83AD-B8EF70877A87',
+    );
+    native.startVideoDownload.mockReturnValue(
+      'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
+    );
+    jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+    await render(<HomeScreen />);
+    await analyzeYoutube();
+    expect(await screen.findByRole('radio', { name: /1080p/ })).toBeTruthy();
+    await fireEvent.press(screen.getByRole('radio', { name: /1080p/ }));
+    if (mode === 'Solo video') {
+      await fireEvent.press(screen.getByRole('radio', { name: mode }));
+    }
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    if (mode === 'Solo video') {
+      expect(native.startVideoDownload).toHaveBeenCalledWith(
+        'a'.repeat(32),
+        'opaque-1080',
+      );
+    } else {
+      expect(native.startCombinedDownload).toHaveBeenCalledWith(
+        'a'.repeat(32),
+        'opaque-1080',
+        '140',
+        121,
+      );
+      await act(() =>
+        native.emit('onCombinedDownloadState', {
+          jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
+          status: 'RETRYING_VIDEO',
+          retryCategory: 'connection',
+          bytesDownloaded: 262144,
+        }),
+      );
+      expect(
+        screen.getByText('Problema de conexión. Reintentando…'),
+      ).toBeTruthy();
+    }
+    expect(analyzeMedia).not.toHaveBeenCalled();
+  },
+);
+
+test('oversized 1080p is visible but cannot be selected', async () => {
+  const native = localYoutubeNativeEngine();
+  native.analyze.mockResolvedValue(
+    JSON.stringify({
+      ...localYoutubeMetadata,
+      metadata: {
+        ...localYoutubeMetadata.metadata,
+        videoFormats: [
+          ...localYoutubeMetadata.metadata.videoFormats,
+          {
+            ...localYoutubeMetadata.metadata.videoFormats[0],
+            id: 'large-1080',
+            height: 1080,
+            resolution: '1080p',
+            codec: 'avc1.640028',
+            dynamicRange: 'SDR',
+            exactSize: 51 * 1024 * 1024,
+            estimatedSize: 51 * 1024 * 1024,
+          },
+        ],
+      },
+    }),
+  );
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  expect(await screen.findByRole('radio', { name: /1080p/ })).toBeDisabled();
+  expect(screen.getByText('Supera el límite de 50 MiB')).toBeTruthy();
+  expect(screen.getByRole('radio', { name: /360p/ })).toBeChecked();
+});
+
 test('normal YouTube modes dispatch video-only and audio-only to the local engine', async () => {
   const native = localYoutubeNativeEngine();
   native.startVideoDownload.mockReturnValue(

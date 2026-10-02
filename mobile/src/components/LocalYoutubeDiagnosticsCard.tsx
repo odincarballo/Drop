@@ -4,6 +4,7 @@ import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
 import type { LocalHttpTransferDiagnostics } from '@/models/onDeviceYoutube';
 import { useTheme } from '@/theme';
 import { formatDuration, formatSize } from '@/utils/format';
+import { phaseOne1080UnavailabilityReason } from '@/utils/onDeviceYoutubeFormats';
 
 type Spike = ReturnType<typeof useLocalYoutubeSpike>;
 
@@ -66,7 +67,7 @@ export function LocalYoutubeDiagnosticsCard({ spike }: { spike: Spike }) {
     metadata && `Video (${metadata.videoFormats.length}):`,
     ...(metadata?.videoFormats.map(
       (format) =>
-        `${format.resolution ?? 'Original'} · ${format.container} · ${format.codec ?? 'codec desconocido'} · ${format.hasAudio ? 'con audio' : 'sin audio'} · ID ${format.id} · protocolo ${format.protocol ?? 'no informado'} · directo ${format.directDownload ? 'sí' : 'no'}`,
+        `${format.resolution ?? 'Original'} · ${format.container} · ${format.codec ?? 'codec desconocido'} · ${format.fps ?? 'fps desconocidos'} fps · rango ${format.dynamicRange ?? 'desconocido'} · tamaño exacto ${format.exactSize == null ? 'desconocido' : formatSize(format.exactSize)} · ${format.hasAudio ? 'con audio' : 'sin audio'} · ID ${format.id} · protocolo ${format.protocol ?? 'no informado'} · directo ${format.directDownload ? 'sí' : 'no'}${phaseOne1080UnavailabilityReason(format) ? ` · ${phaseOne1080UnavailabilityReason(format)}` : ''}`,
     ) ?? []),
     metadata && `Audio (${metadata.audioFormats.length}):`,
     ...(metadata?.audioFormats.map(
@@ -74,7 +75,7 @@ export function LocalYoutubeDiagnosticsCard({ spike }: { spike: Spike }) {
         `${format.container} · ${format.codec ?? 'codec desconocido'}${format.bitrateKbps ? ` · ${Math.round(format.bitrateKbps)} kbps` : ''} · ID ${format.id} · protocolo ${format.protocol ?? 'no informado'} · directo ${format.directDownload ? 'sí' : 'no'}`,
     ) ?? []),
     selectedVideo &&
-      `Video seleccionado: ID ${selectedVideo.id} · ${selectedVideo.resolution ?? 'Original'} · ${selectedVideo.codec ?? 'codec desconocido'} · protocolo ${selectedVideo.protocol ?? 'no informado'}`,
+      `Video seleccionado: ID ${selectedVideo.id} · ${selectedVideo.resolution ?? 'Original'} · ${selectedVideo.fps ?? 'fps desconocidos'} fps · ${selectedVideo.container} · ${selectedVideo.codec ?? 'codec desconocido'} · tamaño ${selectedVideo.exactSize == null ? 'desconocido' : formatSize(selectedVideo.exactSize)} · protocolo ${selectedVideo.protocol ?? 'no informado'}`,
     selectedAudio &&
       `Audio seleccionado: ID ${selectedAudio.id} · ${selectedAudio.codec ?? 'codec desconocido'}`,
     result?.engine,

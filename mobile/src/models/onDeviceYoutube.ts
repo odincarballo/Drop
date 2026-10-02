@@ -12,6 +12,12 @@ const formatSchema = z.object({
   hasAudio: z.boolean(),
   bitrateKbps: optionalNumber,
   estimatedSize: optionalNumber,
+  exactSize: optionalNumber.optional(),
+  dynamicRange: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]{1,40}$/)
+    .nullable()
+    .optional(),
   protocol: z.string().max(80).nullable(),
   directDownload: z.boolean(),
 });

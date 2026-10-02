@@ -6,8 +6,16 @@ import type {
 export const LOCAL_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
 export const LOCAL_AUDIO_MAX_BYTES = 25 * 1024 * 1024;
 
-const TARGET_HEIGHTS = [360, 720] as const;
+const TARGET_HEIGHTS = [360, 720, 1080] as const;
 const HEIGHT_TOLERANCE = 16;
+
+export function isPhaseOne1080Height(height: number | null) {
+  return height !== null && Math.abs(height - 1080) <= HEIGHT_TOLERANCE;
+}
+
+function isSdrOrUnknownDynamicRange(value: string | null | undefined) {
+  return value == null || ['SDR', 'UNKNOWN'].includes(value.toUpperCase());
+}
 
 function isDirectVideo(format: LocalYoutubeVideoFormat) {
   return (
@@ -16,15 +24,62 @@ function isDirectVideo(format: LocalYoutubeVideoFormat) {
     !format.hasAudio &&
     format.height !== null &&
     /^(avc1|h264)/i.test(format.codec ?? '') &&
-    (format.protocol === null || format.protocol.toLowerCase() === 'https')
+    (format.protocol === null || format.protocol.toLowerCase() === 'https') &&
+    (!isPhaseOne1080Height(format.height) ||
+      (/^avc1/i.test(format.codec ?? '') &&
+        isSdrOrUnknownDynamicRange(format.dynamicRange) &&
+        format.fps !== null &&
+        format.fps > 0 &&
+        format.fps <= 30))
   );
 }
 
 export function isVideoWithinLimit(format: LocalYoutubeVideoFormat) {
+  if (isPhaseOne1080Height(format.height)) {
+    return (
+      format.exactSize !== undefined &&
+      format.exactSize !== null &&
+      format.exactSize > 0 &&
+      format.exactSize <= LOCAL_VIDEO_MAX_BYTES &&
+      (format.estimatedSize === null ||
+        format.estimatedSize <= LOCAL_VIDEO_MAX_BYTES)
+    );
+  }
   return (
     format.estimatedSize === null ||
     format.estimatedSize <= LOCAL_VIDEO_MAX_BYTES
   );
+}
+
+export function phaseOne1080UnavailabilityReason(
+  format: LocalYoutubeVideoFormat,
+): string | null {
+  if (!isPhaseOne1080Height(format.height)) return null;
+  if (
+    format.container.toLowerCase() !== 'mp4' ||
+    !/^avc1/i.test(format.codec ?? '') ||
+    format.hasAudio ||
+    (format.protocol !== null && format.protocol.toLowerCase() !== 'https')
+  )
+    return 'No es MP4/H.264 directo compatible';
+  if (!isSdrOrUnknownDynamicRange(format.dynamicRange))
+    return 'Rango dinámico HDR u otro rango no compatible';
+  if (format.fps === null || format.fps <= 0 || format.fps > 30)
+    return 'FPS no confirmado o superior a 30';
+  if (!format.directDownload) return 'No es un stream directo compatible';
+  if (
+    format.exactSize === undefined ||
+    format.exactSize === null ||
+    format.exactSize <= 0
+  )
+    return 'Tamaño exacto no disponible';
+  if (
+    format.exactSize > LOCAL_VIDEO_MAX_BYTES ||
+    (format.estimatedSize !== null &&
+      format.estimatedSize > LOCAL_VIDEO_MAX_BYTES)
+  )
+    return 'Supera el límite de 50 MiB';
+  return null;
 }
 
 export function isDirectAudio(format: LocalYoutubeAudioFormat) {

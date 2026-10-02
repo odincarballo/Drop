@@ -12,7 +12,9 @@ import { formatDuration, formatSize } from '@/utils/format';
 import {
   isAudioWithinLimit,
   isDirectAudio,
+  isPhaseOne1080Height,
   localVideoQualityChoices,
+  phaseOne1080UnavailabilityReason,
 } from '@/utils/onDeviceYoutubeFormats';
 
 type Mode = 'VIDEO_AUDIO' | 'VIDEO_ONLY' | 'AUDIO_ONLY';
@@ -267,7 +269,10 @@ export function LocalYoutubeMainCard({
                             ? format.estimatedSize == null
                               ? undefined
                               : `~${formatSize(format.estimatedSize)}`
-                            : 'Supera 50 MiB'
+                            : isPhaseOne1080Height(format.height)
+                              ? (phaseOne1080UnavailabilityReason(format) ??
+                                'No disponible')
+                              : 'Supera 50 MiB'
                         }
                         selected={format.id === spike.selectedVideoFormatId}
                         onPress={() => spike.selectVideoFormat(format.id)}
@@ -306,7 +311,13 @@ export function LocalYoutubeMainCard({
               )}
               {!hasVideo && qualities.some((choice) => !choice.withinLimit) && (
                 <Text style={{ color: colors.secondary }}>
-                  Esta calidad supera el límite actual de video de 50 MiB.
+                  {qualities.some(
+                    ({ format }) =>
+                      isPhaseOne1080Height(format.height) &&
+                      format.exactSize == null,
+                  )
+                    ? 'El 1080p no tiene un tamaño verificable.'
+                    : 'Esta calidad supera el límite actual de video de 50 MiB.'}
                 </Text>
               )}
               {hasAudio && !metadata.duration && (
