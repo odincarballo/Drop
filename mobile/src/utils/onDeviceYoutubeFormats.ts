@@ -2,12 +2,18 @@ import type {
   LocalYoutubeAudioFormat,
   LocalYoutubeVideoFormat,
 } from '@/models/onDeviceYoutube';
+import {
+  LOCAL_1080_VIDEO_MAX_BYTES,
+  LOCAL_AUDIO_MAX_BYTES,
+  LOCAL_QUALITY_TOLERANCE,
+  localVideoMaximumBytes,
+} from '@/utils/downloadSizePolicy';
 
-export const LOCAL_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
-export const LOCAL_AUDIO_MAX_BYTES = 25 * 1024 * 1024;
+export const LOCAL_VIDEO_MAX_BYTES = LOCAL_1080_VIDEO_MAX_BYTES;
+export { LOCAL_AUDIO_MAX_BYTES };
 
 const TARGET_HEIGHTS = [360, 720, 1080] as const;
-const HEIGHT_TOLERANCE = 16;
+const HEIGHT_TOLERANCE = LOCAL_QUALITY_TOLERANCE;
 
 export function isPhaseOne1080Height(height: number | null) {
   return height !== null && Math.abs(height - 1080) <= HEIGHT_TOLERANCE;
@@ -40,14 +46,14 @@ export function isVideoWithinLimit(format: LocalYoutubeVideoFormat) {
       format.exactSize !== undefined &&
       format.exactSize !== null &&
       format.exactSize > 0 &&
-      format.exactSize <= LOCAL_VIDEO_MAX_BYTES &&
+      format.exactSize <= localVideoMaximumBytes(format.height) &&
       (format.estimatedSize === null ||
-        format.estimatedSize <= LOCAL_VIDEO_MAX_BYTES)
+        format.estimatedSize <= localVideoMaximumBytes(format.height))
     );
   }
   return (
     format.estimatedSize === null ||
-    format.estimatedSize <= LOCAL_VIDEO_MAX_BYTES
+    format.estimatedSize <= localVideoMaximumBytes(format.height)
   );
 }
 
@@ -74,9 +80,9 @@ export function phaseOne1080UnavailabilityReason(
   )
     return 'Tamaño exacto no disponible';
   if (
-    format.exactSize > LOCAL_VIDEO_MAX_BYTES ||
+    format.exactSize > localVideoMaximumBytes(format.height) ||
     (format.estimatedSize !== null &&
-      format.estimatedSize > LOCAL_VIDEO_MAX_BYTES)
+      format.estimatedSize > localVideoMaximumBytes(format.height))
   )
     return 'Supera el límite de 50 MiB';
   return null;

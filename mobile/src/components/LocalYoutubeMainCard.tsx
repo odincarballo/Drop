@@ -9,6 +9,7 @@ import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
 import { localYoutubeError } from '@/services/onDeviceYoutube';
 import { useTheme } from '@/theme';
 import { formatDuration, formatSize } from '@/utils/format';
+import { localVideoMaximumBytes } from '@/utils/downloadSizePolicy';
 import {
   isAudioWithinLimit,
   isDirectAudio,
@@ -123,6 +124,14 @@ export function LocalYoutubeMainCard({
         : selectedVideo?.estimatedSize != null &&
             selectedAudio?.estimatedSize != null
           ? selectedVideo.estimatedSize + selectedAudio.estimatedSize
+          : null;
+  const exactSize =
+    mode === 'AUDIO_ONLY'
+      ? (selectedAudio?.exactSize ?? null)
+      : mode === 'VIDEO_ONLY'
+        ? (selectedVideo?.exactSize ?? null)
+        : selectedVideo?.exactSize != null && selectedAudio?.exactSize != null
+          ? selectedVideo.exactSize + selectedAudio.exactSize
           : null;
   const activeState =
     mode === 'VIDEO_AUDIO'
@@ -266,13 +275,15 @@ export function LocalYoutubeMainCard({
                         label={format.resolution ?? `${format.height}p`}
                         detail={
                           withinLimit
-                            ? format.estimatedSize == null
-                              ? undefined
-                              : `~${formatSize(format.estimatedSize)}`
+                            ? format.exactSize != null
+                              ? formatSize(format.exactSize)
+                              : format.estimatedSize == null
+                                ? undefined
+                                : `~${formatSize(format.estimatedSize)}`
                             : isPhaseOne1080Height(format.height)
                               ? (phaseOne1080UnavailabilityReason(format) ??
                                 'No disponible')
-                              : 'Supera 50 MiB'
+                              : `Supera ${formatSize(localVideoMaximumBytes(format.height))}`
                         }
                         selected={format.id === spike.selectedVideoFormatId}
                         onPress={() => spike.selectVideoFormat(format.id)}
@@ -305,7 +316,7 @@ export function LocalYoutubeMainCard({
               {!hasAudio && (
                 <Text style={{ color: colors.secondary }}>
                   {audioOverLimit
-                    ? 'El audio supera el límite actual de 25 MiB.'
+                    ? 'El audio supera el límite actual de Drop (250 MiB).'
                     : 'No hay audio M4A/AAC directo compatible.'}
                 </Text>
               )}
@@ -317,7 +328,7 @@ export function LocalYoutubeMainCard({
                       format.exactSize == null,
                   )
                     ? 'El 1080p no tiene un tamaño verificable.'
-                    : 'Esta calidad supera el límite actual de video de 50 MiB.'}
+                    : 'Esta calidad supera el límite actual de Drop.'}
                 </Text>
               )}
               {hasAudio && !metadata.duration && (
@@ -327,12 +338,14 @@ export function LocalYoutubeMainCard({
               )}
               <View style={styles.sizeRow}>
                 <Text style={{ color: colors.secondary }}>
-                  Tamaño aproximado
+                  {exactSize == null ? 'Tamaño aproximado' : 'Tamaño'}
                 </Text>
                 <Text style={{ color: colors.text }}>
-                  {estimatedSize == null
-                    ? 'Tamaño no disponible'
-                    : `~${formatSize(estimatedSize)}`}
+                  {exactSize != null
+                    ? formatSize(exactSize)
+                    : estimatedSize == null
+                      ? 'Tamaño no disponible'
+                      : `~${formatSize(estimatedSize)}`}
                 </Text>
               </View>
               <ActionButton

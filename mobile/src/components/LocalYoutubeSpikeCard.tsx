@@ -202,7 +202,7 @@ export function LocalYoutubeSpikeCard({ spike, disabled }: Props) {
               (format) => Math.abs((format.height ?? 0) - 720) <= 16,
             ) && (
               <Text style={{ color: colors.secondary }}>
-                720p no está disponible o supera el límite actual de 50 MiB.
+                720p no está disponible o supera el límite actual de Drop.
               </Text>
             )}
             <Text style={{ color: colors.secondary }}>

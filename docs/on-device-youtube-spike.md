@@ -1,9 +1,10 @@
-# Drop on-device: estado de v1.0.1
+# Drop on-device: estado y evolución
 
 Este documento sustituye el plan histórico del spike. Describe el motor que
 está implementado en Drop y delimita qué se comprobó en el iPhone frente a lo
 que solo tiene pruebas automatizadas. El tag `v1.0.0` conserva el primer estado
-estable; esta rama prepara la Release Candidate `1.0.1` sin modificar ese tag.
+estable. `v1.0.1` permanece etiquetada y estable; la rama
+`feature/v1.1.0` documenta mejoras en desarrollo, aún sin release.
 
 ## Flujo implementado
 
@@ -21,8 +22,9 @@ estable; esta rama prepara la Release Candidate `1.0.1` sin modificar ese tag.
 - Audio M4A/AAC y video MP4/H.264 se descargan directamente al iPhone mediante
   URLSession. El video y Solo audio usan rangos de 256 KiB. La respuesta HTTP
   200 tiene un fallback de streaming a disco únicamente donde la política
-  existente lo permite. Los límites son **50 MiB por pista de video** y
-  **25 MiB por pista de audio**, comprobados durante la transferencia.
+  existente lo permite. La política actual limita el video compatible cercano
+  a 360p/720p a **1 GiB por pista**, 1080p Fase 1 a **50 MiB por pista** y el
+  audio a **250 MiB por pista**; el límite se comprueba durante la transferencia.
 - Video + audio utiliza AVFoundation passthrough para combinar las pistas en
   MP4. Solo audio normaliza con AVFoundation passthrough el timeline de un M4A
   DASH a la duración validada del análisis: no cambia códec ni bitrate de
@@ -91,8 +93,10 @@ desarrollo `HK927RUDLZ`; SecureStore no cambia.
 - HLS/m3u8 no pertenece a la ruta primaria de descarga. La disponibilidad de
   streams directos y sus metadatos depende de YouTube; no se promete cobertura
   universal ni funcionamiento con contenido privado, de pago o con DRM.
-- Los límites actuales son 50 MiB por pista de video y 25 MiB por pista de
-  audio. La caché de Drop es temporal, no almacenamiento permanente.
+- En `v1.0.1` los límites son 50 MiB por pista de video y 25 MiB por pista de
+  audio. La política ampliada en desarrollo se describe al final; no forma
+  parte de esa versión estable. La caché de Drop es temporal, no almacenamiento
+  permanente.
 - EJS/QuickJS está empaquetado, pero no se declara compatibilidad EJS completa.
   No se incluyen cookies, login, credenciales, proxies ni evasión de DRM.
 
@@ -102,7 +106,8 @@ Esta política todavía no forma parte de `v1.0.1`. La opción 1080p solo es
 elegible para un stream directo MP4 con H.264/`avc1`, sin audio embebido,
 FPS conocido de hasta 30 y tamaño exacto
 conocido de hasta 50 MiB por pista de video. La pista M4A/AAC mantiene su
-límite independiente de 25 MiB. HLS, VP9, AV1, FPS desconocido, 1080p60,
+límite independiente, ampliado a 250 MiB en la política de tamaño en desarrollo
+descrita abajo. HLS, VP9, AV1, FPS desconocido, 1080p60,
 tamaño desconocido y cualquier rango dinámico identificado como HDR siguen
 excluidos; no hay transcodificación.
 
@@ -141,3 +146,40 @@ reproducción correctos y sincronizados. En esas pruebas YouTube no volvió a
 responder HTTP 403. Por tanto, el flujo normal está validado físicamente;
 la recuperación automática específica del 403 está cubierta por pruebas
 deterministas, pero aún no se ha activado ni validado físicamente.
+
+### En desarrollo: tamaños mayores con presupuesto de almacenamiento
+
+La política versionada en `mobile/modules/on-device-youtube/download-size-policy.json`
+fija 1 GiB por pista de video compatible cercana a 360p/720p, 50 MiB para
+1080p Fase 1 y 250 MiB por pista de audio. Un generador produce las constantes
+de Python, TypeScript y Swift; la build limpia comprueba su coincidencia.
+Estos límites siguen verificándose con Content-Length, Content-Range y los bytes
+efectivamente recibidos, no solo en la interfaz.
+
+Antes de la transferencia se consulta en iOS el espacio disponible para uso
+importante en el volumen de Caches. Si `V` y `A` son tamaños previstos,
+`salida(x) = x + max(64 MiB, 10 % de x)` y
+`reserva = max(1 GiB, 10 % de la capacidad disponible)`, se exige:
+
+- Solo video: `V + reserva`.
+- Solo audio: `A + salida(A) + reserva`.
+- Video + audio: `V + A + salida(V + A) + reserva`.
+
+El tamaño aproximado de yt-dlp recibe un margen del 25 %; si falta tamaño se
+presupuesta el máximo de la pista. El primer total HTTP validado corrige esa
+previsión antes de escribir el cuerpo. Antes del mux se vuelve a medir el espacio
+con los tamaños reales y se exige `salida(V + A) + reserva`. Si iOS no informa
+capacidad, únicamente se permite la ruta pequeña previa; no se presume espacio
+ilimitado para una descarga grande. Las comprobaciones no reservan espacio:
+otros procesos pueden consumirlo, por lo que siguen siendo necesarios el manejo
+de errores de escritura y la limpieza de parciales. No cambia los límites de
+recursos directos/Render.
+
+**Validación física manual:** con *The Wild Project #385 - Expediente Vallecas*
+(aproximadamente 2 h 25 min), Drop habilitó 360p y Solo audio, bloqueó 720p
+por superar 1 GiB y mostró aproximadamente 457,3 MB para Video + audio 360p.
+La descarga combinada tardó unos 5–6 minutos, completó el mux y produjo un MP4
+de duración completa. Se comprobó la reproducción al inicio, mitad y cerca del
+final, con audio y video sincronizados y sin errores de tamaño o almacenamiento.
+Esta prueba no demuestra por sí sola el comportamiento de todos los tamaños ni
+los casos de poco espacio, cubiertos por pruebas automatizadas.

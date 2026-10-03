@@ -17,7 +17,7 @@ enum MDLocalDownloadKind: String {
 
   var container: String { self == .audio ? "m4a" : "mp4" }
   var maximumBytes: Int64 {
-    self == .audio ? 25 * 1024 * 1024 : 50 * 1024 * 1024
+    self == .audio ? MDDownloadSizePolicy.audioBytes : MDDownloadSizePolicy.phaseOne1080VideoBytes
   }
 }
 
@@ -157,8 +157,9 @@ enum MDAudioDownloadPolicy {
     }
     try writer.truncate(atOffset: UInt64(verifiedOffset))
   }
-  static let maximumBytes: Int64 = 25 * 1024 * 1024
-  static let maximumVideoBytes: Int64 = 50 * 1024 * 1024
+  static let maximumBytes: Int64 = MDDownloadSizePolicy.audioBytes
+  static let maximumVideoBytes: Int64 = MDDownloadSizePolicy.phaseOne1080VideoBytes
+  static let maximumStandardVideoBytes: Int64 = MDDownloadSizePolicy.standardVideoBytes
   static let maximumRedirects = 3
   // URLSession applies this as an inactivity timeout, not only to connection setup.
   static let requestTimeoutSeconds: TimeInterval = 60
@@ -230,7 +231,8 @@ enum MDAudioDownloadPolicy {
 
   static func validateResponse(
     _ response: HTTPURLResponse,
-    kind: MDLocalDownloadKind = .audio
+    kind: MDLocalDownloadKind = .audio,
+    maximumBytes: Int64? = nil
   ) throws {
     guard response.statusCode == 200 || response.statusCode == 206 else {
       throw MDAudioDownloadFailure.code(
@@ -248,14 +250,16 @@ enum MDAudioDownloadPolicy {
         kind == .audio ? "AUDIO_MIME_NOT_ALLOWED" : "VIDEO_MIME_NOT_ALLOWED"
       )
     }
-    try validateExpectedLength(response.expectedContentLength, maximumBytes: kind.maximumBytes)
+    try validateExpectedLength(response.expectedContentLength,
+      maximumBytes: maximumBytes ?? kind.maximumBytes)
   }
 
   static func validateRangeResponse(
     _ response: HTTPURLResponse,
     requestedStart: Int64,
     requestedEnd: Int64,
-    kind: MDLocalDownloadKind
+    kind: MDLocalDownloadKind,
+    maximumBytes: Int64? = nil
   ) throws -> MDVideoContentRange {
     guard response.statusCode == 206 else {
       throw MDAudioDownloadFailure.code(rangeFailureCode(response.statusCode, kind: kind))
@@ -278,7 +282,7 @@ enum MDAudioDownloadPolicy {
         kind == .audio ? "AUDIO_RANGE_INVALID" : "VIDEO_RANGE_INVALID"
       )
     }
-    try validateExpectedLength(range.total, maximumBytes: kind.maximumBytes)
+    try validateExpectedLength(range.total, maximumBytes: maximumBytes ?? kind.maximumBytes)
     return range
   }
 
@@ -286,12 +290,13 @@ enum MDAudioDownloadPolicy {
     _ response: HTTPURLResponse,
     requestedStart: Int64,
     bytesAlreadyPersisted: Int64,
-    kind: MDLocalDownloadKind
+    kind: MDLocalDownloadKind,
+    maximumBytes: Int64? = nil
   ) throws -> Int64? {
     guard response.statusCode == 200, requestedStart == 0, bytesAlreadyPersisted == 0 else {
       throw MDAudioDownloadFailure.code(rangeFailureCode(response.statusCode, kind: kind))
     }
-    try validateResponse(response, kind: kind)
+    try validateResponse(response, kind: kind, maximumBytes: maximumBytes)
     return response.expectedContentLength > 0 ? response.expectedContentLength : nil
   }
 
@@ -353,7 +358,7 @@ enum MDAudioDownloadPolicy {
   ) throws {
     if length > maximumBytes {
       throw MDAudioDownloadFailure.code(
-        maximumBytes == maximumVideoBytes ? "VIDEO_FILE_TOO_LARGE" : "AUDIO_FILE_TOO_LARGE"
+        maximumBytes == MDAudioDownloadPolicy.maximumBytes ? "AUDIO_FILE_TOO_LARGE" : "VIDEO_FILE_TOO_LARGE"
       )
     }
   }
@@ -364,7 +369,7 @@ enum MDAudioDownloadPolicy {
   ) throws {
     if bytes > maximumBytes {
       throw MDAudioDownloadFailure.code(
-        maximumBytes == maximumVideoBytes ? "VIDEO_FILE_TOO_LARGE" : "AUDIO_FILE_TOO_LARGE"
+        maximumBytes == MDAudioDownloadPolicy.maximumBytes ? "AUDIO_FILE_TOO_LARGE" : "VIDEO_FILE_TOO_LARGE"
       )
     }
   }

@@ -25,6 +25,12 @@ from yt_dlp.extractor.youtube.jsc.provider import (
 from yt_dlp.utils import DownloadError
 from yt_dlp.version import __version__
 from yt_dlp_ejs import version as ejs_version
+from download_size_policy import (
+    MAX_AUDIO_BYTES,
+    PHASE_ONE_1080_MAX_BYTES,
+    QUALITY_TOLERANCE,
+    video_max_bytes,
+)
 
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 EJS_FIXTURE_PLAYER_ID = "74edf1a3"
@@ -45,8 +51,8 @@ native_js_calls = 0
 process_attempts = 0
 ejs_diagnostics = {}
 ANALYSIS_TTL_SECONDS = 10 * 60
-MAX_AUDIO_BYTES = 25 * 1024 * 1024
-MAX_VIDEO_BYTES = 50 * 1024 * 1024
+# Kept for existing 1080p policy tests; other qualities use video_max_bytes.
+MAX_VIDEO_BYTES = PHASE_ONE_1080_MAX_BYTES
 ALLOWED_AUDIO_HEADERS = {
     "accept",
     "accept-language",
@@ -459,7 +465,7 @@ def is_direct_mp4_video(item):
 
 
 def is_phase_one_1080_height(height):
-    return height is not None and abs(height - 1080) <= 16
+    return height is not None and abs(height - 1080) <= QUALITY_TOLERANCE
 
 
 def is_sdr_or_unknown_dynamic_range(value):
@@ -567,7 +573,7 @@ def preferred_video(formats):
             (positive_integer(item.get("filesize") or item.get("filesize_approx")))
             or 0
         )
-        <= MAX_VIDEO_BYTES
+        <= video_max_bytes(positive_integer(item.get("height")))
     ]
     if not candidates:
         return None
@@ -599,7 +605,7 @@ def bounded_video_catalog(video):
         candidates, unavailable_1080 = [], []
         for index, item in enumerate(unique):
             height = item["height"]
-            if not item["directDownload"] or height is None or abs(height - target) > 16:
+            if not item["directDownload"] or height is None or abs(height - target) > QUALITY_TOLERANCE:
                 continue
             size = item["estimatedSize"]
             exact = item["exactSize"]
@@ -612,18 +618,19 @@ def bounded_video_catalog(video):
             )
             if target == 1080:
                 if (
-                    exact is None or exact <= 0 or exact > MAX_VIDEO_BYTES
-                    or (size is not None and size > MAX_VIDEO_BYTES)
+                    exact is None or exact <= 0 or exact > video_max_bytes(height)
+                    or (size is not None and size > video_max_bytes(height))
                 ):
                     unavailable_1080.append(rank)
                     continue
-            elif size is not None and size > MAX_VIDEO_BYTES:
+            elif size is not None and size > video_max_bytes(height):
+                unavailable_1080.append(rank)
                 continue
             candidates.append(rank)
         if candidates:
             protected.add(min(candidates)[-1])
-        elif target == 1080 and unavailable_1080:
-            # Keep one non-downloadable direct option visible for a clear size reason.
+        elif unavailable_1080:
+            # Keep one oversized direct option visible for a clear size reason.
             protected.add(min(unavailable_1080)[-1])
 
     included = set(range(min(100, len(unique))))
@@ -721,7 +728,7 @@ def build_audio_descriptor(payload, format_id, identity=None):
     expected = positive_integer(item.get("filesize"))
     estimated = positive_integer(item.get("filesize_approx"))
     if (expected and expected > MAX_AUDIO_BYTES) or (
-        estimated and estimated > MAX_AUDIO_BYTES
+        expected is None and estimated and estimated > MAX_AUDIO_BYTES
     ):
         raise ValueError("AUDIO_FILE_TOO_LARGE")
     return {
@@ -754,8 +761,9 @@ def build_video_descriptor(payload, format_id):
     estimated = positive_integer(item.get("filesize_approx"))
     if is_phase_one_1080_height(positive_integer(item.get("height"))) and expected is None:
         raise ValueError("VIDEO_FORMAT_NOT_SUPPORTED")
-    if (expected and expected > MAX_VIDEO_BYTES) or (
-        estimated and estimated > MAX_VIDEO_BYTES
+    maximum = video_max_bytes(positive_integer(item.get("height")))
+    if (expected and expected > maximum) or (
+        expected is None and estimated and estimated > maximum
     ):
         raise ValueError("VIDEO_FILE_TOO_LARGE")
     return {

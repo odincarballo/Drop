@@ -71,6 +71,14 @@ enum AudioDownloadPolicyTests {
         maximumBytes: MDAudioDownloadPolicy.maximumVideoBytes
       )
     }
+    try MDAudioDownloadPolicy.validateExpectedLength(
+      MDAudioDownloadPolicy.maximumStandardVideoBytes,
+      maximumBytes: MDAudioDownloadPolicy.maximumStandardVideoBytes)
+    try expectFailure("VIDEO_FILE_TOO_LARGE") {
+      try MDAudioDownloadPolicy.validateExpectedLength(
+        MDAudioDownloadPolicy.maximumStandardVideoBytes + 1,
+        maximumBytes: MDAudioDownloadPolicy.maximumStandardVideoBytes)
+    }
     let videoResponse = HTTPURLResponse(
       url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
       statusCode: 200,
@@ -103,6 +111,22 @@ enum AudioDownloadPolicyTests {
     )
     guard range.total == 586796 else {
       throw TestFailure.failed("Video total length was not recovered")
+    }
+    let oversizedRange = HTTPURLResponse(
+      url: URL(string: "https://rr1.googlevideo.com/videoplayback")!,
+      statusCode: 206,
+      httpVersion: "HTTP/1.1",
+      headerFields: [
+        "Content-Type": "video/mp4",
+        "Content-Length": "262144",
+        "Content-Range": "bytes 0-262143/\(MDAudioDownloadPolicy.maximumStandardVideoBytes + 1)",
+      ]
+    )!
+    try expectFailure("VIDEO_FILE_TOO_LARGE") {
+      _ = try MDAudioDownloadPolicy.validateRangeResponse(
+        oversizedRange, requestedStart: 0, requestedEnd: 262143,
+        kind: .video,
+        maximumBytes: MDAudioDownloadPolicy.maximumStandardVideoBytes)
     }
     try expectFailure("VIDEO_RANGE_NOT_SUPPORTED") {
       _ = try MDAudioDownloadPolicy.validateVideoRangeResponse(

@@ -503,6 +503,8 @@ test.each(['audio', 'combined'] as const)(
         '134',
         selectedTrack,
         754,
+        null,
+        2_000_000,
       );
     }
     expect(JSON.stringify(native.startAudioDownload.mock.calls)).not.toContain(
@@ -620,6 +622,8 @@ test('combined download reports both transfers, muxes, completes, and shares', a
     '134',
     '140',
     754,
+    null,
+    2_000_000,
   );
   expect(JSON.stringify(native.startCombinedDownload.mock.calls)).not.toContain(
     'googlevideo',
@@ -728,6 +732,8 @@ test('720p selection is dynamic and remains opaque to React Native', async () =>
     '136',
     '140',
     754,
+    null,
+    2_000_000,
   );
   expect(JSON.stringify(native.startCombinedDownload.mock.calls)).not.toContain(
     'googlevideo',

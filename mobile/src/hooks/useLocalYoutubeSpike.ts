@@ -647,6 +647,12 @@ export function useLocalYoutubeSpike() {
         selectedVideoFormatId,
         metadata.preferredAudioFormatId,
         metadata.duration,
+        metadata.audioFormats.find(
+          (format) => format.id === metadata.preferredAudioFormatId,
+        )?.exactSize ?? null,
+        metadata.audioFormats.find(
+          (format) => format.id === metadata.preferredAudioFormatId,
+        )?.estimatedSize ?? null,
       );
       combinedJobId.current = jobId;
       setCombinedState({ status: 'preparing', jobId });

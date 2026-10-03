@@ -28,6 +28,8 @@ type LocalEngine = {
     videoFormatId: string,
     audioFormatId: string,
     durationSeconds: number,
+    audioExactBytes: number | null,
+    audioApproximateBytes: number | null,
   ) => string | null;
   cancelCombinedDownload: () => void;
   cancel: () => void;
@@ -142,7 +144,13 @@ export function localAudioError(code: string): string {
       'No se puede identificar con seguridad la pista de audio. Analiza nuevamente el video.',
     AUDIO_FORMAT_NOT_SUPPORTED:
       'Este formato no es un audio M4A directo compatible.',
-    AUDIO_FILE_TOO_LARGE: 'El audio supera el límite de 25 MB de esta prueba.',
+    AUDIO_FILE_TOO_LARGE: 'El audio supera el límite de Drop de 250 MiB.',
+    LOCAL_STORAGE_INSUFFICIENT:
+      'No hay suficiente espacio disponible para completar la descarga.',
+    LOCAL_STORAGE_CAPACITY_UNAVAILABLE:
+      'No se pudo comprobar el espacio disponible para esta descarga grande.',
+    LOCAL_STORAGE_SIZE_UNKNOWN:
+      'Tamaño no disponible; no se puede garantizar esta descarga grande.',
     AUDIO_URL_EXPIRED: 'El enlace de descarga caducó. Analiza nuevamente.',
     AUDIO_URL_INVALID: 'YouTube devolvió un enlace de audio no permitido.',
     AUDIO_DNS_INVALID: 'El host del audio no pasó la validación de seguridad.',
@@ -228,7 +236,14 @@ export function localVideoError(code: string): string {
     FORMAT_NOT_AVAILABLE: 'El formato seleccionado ya no está disponible.',
     VIDEO_FORMAT_NOT_SUPPORTED:
       'Este formato no es un video MP4 directo compatible.',
-    VIDEO_FILE_TOO_LARGE: 'El video supera el límite de 50 MB de esta prueba.',
+    VIDEO_FILE_TOO_LARGE:
+      'El video supera el límite de Drop para esta calidad.',
+    LOCAL_STORAGE_INSUFFICIENT:
+      'No hay suficiente espacio disponible para completar la descarga.',
+    LOCAL_STORAGE_CAPACITY_UNAVAILABLE:
+      'No se pudo comprobar el espacio disponible para esta descarga grande.',
+    LOCAL_STORAGE_SIZE_UNKNOWN:
+      'Tamaño no disponible; no se puede garantizar esta descarga grande.',
     VIDEO_URL_EXPIRED: 'El enlace de descarga caducó. Analiza nuevamente.',
     VIDEO_URL_INVALID: 'YouTube devolvió un enlace de video no permitido.',
     VIDEO_DNS_INVALID: 'El host del video no pasó la validación de seguridad.',
@@ -275,6 +290,8 @@ export function startLocalCombinedDownload(
   videoFormatId: string,
   audioFormatId: string,
   durationSeconds: number,
+  audioExactBytes: number | null,
+  audioApproximateBytes: number | null,
 ): string {
   const native = engine();
   if (!native)
@@ -284,6 +301,8 @@ export function startLocalCombinedDownload(
     videoFormatId,
     audioFormatId,
     durationSeconds,
+    audioExactBytes,
+    audioApproximateBytes,
   );
   if (!jobId) throw new Error('Ya hay una descarga local activa.');
   return jobId;
@@ -327,6 +346,12 @@ export function localCombinedError(code: string): string {
     MUX_OUTPUT_INVALID: 'El archivo combinado no superó la validación final.',
     COMBINED_STORAGE_UNAVAILABLE:
       'No se pudieron guardar los archivos temporales en el iPhone.',
+    LOCAL_STORAGE_INSUFFICIENT:
+      'No hay suficiente espacio disponible para descargar y combinar este archivo.',
+    LOCAL_STORAGE_CAPACITY_UNAVAILABLE:
+      'No se pudo comprobar el espacio disponible para esta descarga grande.',
+    LOCAL_STORAGE_SIZE_UNKNOWN:
+      'Tamaño no disponible; no se puede garantizar esta descarga grande.',
     LOCAL_CANCELLED: 'Descarga cancelada.',
   };
   if (messages[code]) return messages[code];

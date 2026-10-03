@@ -1,0 +1,11 @@
+{
+  "standardVideoMiB": 1024,
+  "phaseOne1080VideoMiB": 50,
+  "audioMiB": 250,
+  "qualityTolerance": 16,
+  "reserveFloorMiB": 1024,
+  "reservePercent": 10,
+  "outputFloorMiB": 64,
+  "outputOverheadPercent": 10,
+  "approximateMarginPercent": 25
+}

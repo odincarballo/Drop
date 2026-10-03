@@ -97,6 +97,13 @@ enum MDPythonBridge {
   private static var refreshCalls = 0
   private static var refreshTimeouts: [TimeInterval] = []
   private static var onRefresh: (() -> Void)?
+  private static var nextVideoDescriptor: String?
+
+  static func useNextVideoDescriptor(_ value: String) {
+    lock.lock()
+    nextVideoDescriptor = value
+    lock.unlock()
+  }
 
   static func configureRefresh(
     responses: [String] = [], delay: TimeInterval = 0,
@@ -144,21 +151,30 @@ enum MDPythonBridge {
 
   static func prepareVideoDownload(
     _ analysisID: String, formatId: String, completion: @escaping (String) -> Void
-  ) { completion(descriptor(kind: "video", formatId: formatId)) }
+  ) {
+    lock.lock()
+    let response = nextVideoDescriptor
+    nextVideoDescriptor = nil
+    lock.unlock()
+    completion(response ?? descriptor(kind: "video", formatId: formatId))
+  }
 
   static func cancel() {}
 
   static func descriptor(
     kind: String, formatId: String, fresh: Bool = false,
-    expectedBytes: Int = 6
+    expectedBytes: Int? = 6, estimatedBytes: Int? = nil, height: Int = 360
   ) -> String {
-    let record: [String: Any] = ["descriptor": [
+    var fields: [String: Any] = [
       "url": "https://rr1.googlevideo.com/file?sig=\(kind == "video" ? "VIDEO" : fresh ? "AUDIO-FRESH" : "AUDIO-OLD")",
       "headers": [:], "fileName": "sample.\(kind == "audio" ? "m4a" : "mp4")",
       "formatId": formatId, "container": kind == "audio" ? "m4a" : "mp4",
       "codec": kind == "audio" ? "mp4a.40.2" : "avc1.4d401e",
-      "expectedBytes": expectedBytes,
-    ]]
+      "height": kind == "video" ? height : NSNull(),
+    ]
+    if let expectedBytes { fields["expectedBytes"] = expectedBytes }
+    if let estimatedBytes { fields["estimatedBytes"] = estimatedBytes }
+    let record: [String: Any] = ["descriptor": fields]
     return String(data: try! JSONSerialization.data(withJSONObject: record), encoding: .utf8)!
   }
 
@@ -273,7 +289,8 @@ enum RangeRetryManagerTests {
 
   private static func runCombined(
     _ steps: [ScriptedProtocol.Step], cancelOnAudioRetry: Bool = false,
-    refreshResponses: [String] = [], refreshDelay: TimeInterval = 0
+    refreshResponses: [String] = [], refreshDelay: TimeInterval = 0,
+    availableStorage: @escaping () -> Int64? = { 10 * 1024 * 1024 * 1024 }
   ) throws ->
     ([String: Any?], [String]) {
     ScriptedProtocol.reset(steps)
@@ -296,6 +313,7 @@ enum RangeRetryManagerTests {
         value.protocolClasses = [ScriptedProtocol.self]
         return value
       },
+      availableStorage: availableStorage,
       validateTransferURL: { url, kind in
         try MDAudioDownloadPolicy.validateURL(url, kind: kind, resolveDNS: false)
       }
@@ -326,7 +344,8 @@ enum RangeRetryManagerTests {
     refreshResponses: [String] = [], refreshDelay: TimeInterval = 0,
     cancelOnRefresh: Bool = false,
     cancelDuringFreshRequest: Bool = false,
-    expectedOutput: Data = Data("abcdef".utf8)
+    expectedOutput: Data = Data("abcdef".utf8),
+    availableStorage: @escaping () -> Int64? = { 10 * 1024 * 1024 * 1024 }
   ) throws -> ([String: Any?], [String]) {
     ScriptedProtocol.reset(steps)
     var terminal: [String: Any?]?
@@ -347,6 +366,7 @@ enum RangeRetryManagerTests {
         }
       },
       makeSessionConfiguration: configuration,
+      availableStorage: availableStorage,
       validateTransferURL: { url, kind in
         if rejectDNS { throw MDAudioDownloadFailure.code("VIDEO_DNS_INVALID") }
         try MDAudioDownloadPolicy.validateURL(url, kind: kind, resolveDNS: false)
@@ -409,6 +429,44 @@ enum RangeRetryManagerTests {
   }
 
   static func main() throws {
+    let (noSpace, noSpaceRequests) = try run([], availableStorage: { 0 })
+    guard noSpace["errorCode"] as? String == "LOCAL_STORAGE_INSUFFICIENT",
+          noSpaceRequests.isEmpty else {
+      throw TestFailure.failed("Preflight allowed a network request without space")
+    }
+    let oversizedTotal = ScriptedProtocol.Step(range: firstRange, status: 206,
+      headers: ["Content-Range": "bytes 0-2/\(MDDownloadSizePolicy.standardVideoBytes + 1)",
+        "Content-Type": "video/mp4", "Content-Length": "3"],
+      body: Data(), error: nil)
+    let (oversizedByHTTP, oversizedHTTPRequests) = try run([oversizedTotal])
+    guard oversizedByHTTP["errorCode"] as? String == "VIDEO_FILE_TOO_LARGE",
+          oversizedHTTPRequests.count == 1 else {
+      throw TestFailure.failed("Validated HTTP total bypassed video cap")
+    }
+    MDPythonBridge.useNextVideoDescriptor(MDPythonBridge.descriptor(
+      kind: "video", formatId: "137", expectedBytes: 40 * 1024 * 1024,
+      height: 1080))
+    let phaseOneOversized = ScriptedProtocol.Step(range: firstRange, status: 206,
+      headers: ["Content-Range": "bytes 0-2/\(MDDownloadSizePolicy.phaseOne1080VideoBytes + 1)",
+        "Content-Type": "video/mp4", "Content-Length": "3"],
+      body: Data(), error: nil)
+    let (oversized1080, oversized1080Requests) = try run([phaseOneOversized])
+    guard oversized1080["errorCode"] as? String == "VIDEO_FILE_TOO_LARGE",
+          oversized1080Requests.count == 1 else {
+      throw TestFailure.failed("1080p escaped its original native 50 MiB cap")
+    }
+    let correctedTotal = ScriptedProtocol.Step(range: firstRange, status: 206,
+      headers: ["Content-Range": "bytes 0-2/\(MDDownloadSizePolicy.standardVideoBytes)",
+        "Content-Type": "video/mp4", "Content-Length": "3"],
+      body: Data(), error: nil)
+    MDPythonBridge.useNextVideoDescriptor(MDPythonBridge.descriptor(
+      kind: "video", formatId: "134", expectedBytes: nil, estimatedBytes: 6))
+    let (underestimated, underestimatedRequests) = try run([correctedTotal],
+      availableStorage: { 1536 * 1024 * 1024 })
+    guard underestimated["errorCode"] as? String == "LOCAL_STORAGE_INSUFFICIENT",
+          underestimatedRequests.count == 1 else {
+      throw TestFailure.failed("Actual Content-Range total did not refresh storage budget")
+    }
     let (recovered, ranges) = try run([
       partial(URLError(.networkConnectionLost)), first(), second(),
     ])
@@ -485,7 +543,8 @@ enum RangeRetryManagerTests {
     let (oversizedFresh, oversizedRequests) = try run([
       audioRange(start: 0, end: 2, bytes: "abc"), audioForbidden(),
     ], audio: true, refreshResponses: [MDPythonBridge.descriptor(
-      kind: "audio", formatId: "140", fresh: true, expectedBytes: 25 * 1024 * 1024 + 1)])
+      kind: "audio", formatId: "140", fresh: true,
+      expectedBytes: Int(MDDownloadSizePolicy.audioBytes + 1))])
     guard oversizedFresh["errorCode"] as? String == "AUDIO_FILE_TOO_LARGE",
           oversizedRequests.count == 2 else {
       throw TestFailure.failed("Fresh URL bypassed the audio size limit")
@@ -661,6 +720,16 @@ enum RangeRetryManagerTests {
     let (noETag, noETagRanges) = try run([noETagFirst, noETagSecond])
     guard noETag["status"] as? String == "COMPLETED", noETagRanges.count == 2 else {
       throw TestFailure.failed("Server without ETag was rejected")
+    }
+    let (noMuxSpace, noMuxSpaceRanges) = try runCombined([
+      first(), second(), first("audio/mp4"), second("audio/mp4"),
+    ], availableStorage: {
+      ScriptedProtocol.result().0.count >= 4 ? 100 * 1024 * 1024 : 10 * 1024 * 1024 * 1024
+    })
+    guard noMuxSpace["errorCode"] as? String == "LOCAL_STORAGE_INSUFFICIENT",
+          noMuxSpaceRanges.count == 4,
+          MDAVMuxer.lastVideoBytes == nil else {
+      throw TestFailure.failed("Insufficient space still started mux or retained inputs")
     }
     let (combined, combinedRanges) = try runCombined([
       status(500), status(500), first(),

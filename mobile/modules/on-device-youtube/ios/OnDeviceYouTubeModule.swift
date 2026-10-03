@@ -46,14 +46,18 @@ public class OnDeviceYouTubeModule: Module {
         analysisId: String,
         videoFormatId: String,
         audioFormatId: String,
-        durationSeconds: Double
+        durationSeconds: Double,
+        audioExactBytes: Int64?,
+        audioApproximateBytes: Int64?
       ) -> String? in
       guard !audioDownload.isActive else { return nil }
       return combinedDownload.start(
         analysisID: analysisId,
         videoFormatID: videoFormatId,
         audioFormatID: audioFormatId,
-        expectedDurationSeconds: durationSeconds
+        expectedDurationSeconds: durationSeconds,
+        audioExactBytes: audioExactBytes,
+        audioApproximateBytes: audioApproximateBytes
       )
     }
 

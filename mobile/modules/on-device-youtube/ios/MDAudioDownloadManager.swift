@@ -29,6 +29,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   private let emitEvent: EventSink
   private let makeSessionConfiguration: () -> URLSessionConfiguration
   private let validateTransferURL: (URL, MDLocalDownloadKind) throws -> Void
+  private let availableStorage: () -> Int64?
   private var activeJobID: String?
   private var activeKind: MDLocalDownloadKind?
   private var workspaceURL: URL?
@@ -67,18 +68,69 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   private var forbiddenAudioRefreshUsed = false
   private var refreshingForbiddenAudio = false
   private var audioRefreshGeneration = 0
+  private var plannedCombinedAudioExact: Int64?
+  private var plannedCombinedAudioApproximate: Int64?
+  private var completedCombinedVideoBytes: Int64?
+  private var isCombinedVideo = false
+
+  private func maximumBytes(for kind: MDLocalDownloadKind) -> Int64 {
+    kind == .audio ? MDDownloadSizePolicy.audioBytes :
+      MDDownloadSizePolicy.videoMaximumBytes(height: descriptor?.height)
+  }
+
+  private func validateStorage(
+    kind: MDLocalDownloadKind,
+    height: Int?,
+    exact: Int64?,
+    approximate: Int64?
+  ) throws {
+    let sizeUnknown = (exact == nil && approximate == nil) ||
+      (isCombinedVideo && plannedCombinedAudioExact == nil &&
+        plannedCombinedAudioApproximate == nil)
+    let planned = MDStorageBudget.plannedBytes(
+      exact: exact, approximate: approximate,
+      cap: kind == .audio ? MDDownloadSizePolicy.audioBytes :
+        MDDownloadSizePolicy.videoMaximumBytes(height: height))
+    do {
+      if kind == .video, isCombinedVideo {
+        let audio = MDStorageBudget.plannedBytes(
+          exact: plannedCombinedAudioExact,
+          approximate: plannedCombinedAudioApproximate,
+          cap: MDDownloadSizePolicy.audioBytes)
+        try MDStorageBudget.validate(mode: .combined, video: planned, audio: audio,
+          available: availableStorage())
+      } else if kind == .audio, let video = completedCombinedVideoBytes {
+        try MDStorageBudget.validate(mode: .combinedAudio, video: video, audio: planned,
+          available: availableStorage())
+      } else {
+        try MDStorageBudget.validate(
+          mode: kind == .video ? .video : .audio,
+          video: kind == .video ? planned : 0,
+          audio: kind == .audio ? planned : 0,
+          available: availableStorage())
+      }
+    } catch let failure as MDAudioDownloadFailure {
+      if sizeUnknown && (failure.code == "LOCAL_STORAGE_INSUFFICIENT" ||
+        failure.code == "LOCAL_STORAGE_CAPACITY_UNAVAILABLE") {
+        throw MDAudioDownloadFailure.code("LOCAL_STORAGE_SIZE_UNKNOWN")
+      }
+      throw failure
+    }
+  }
 
   init(
     emitEvent: @escaping EventSink,
     makeSessionConfiguration: @escaping () -> URLSessionConfiguration = {
       URLSessionConfiguration.ephemeral
     },
+    availableStorage: @escaping () -> Int64? = { MDStorageBudget.availableCapacity() },
     validateTransferURL: @escaping (URL, MDLocalDownloadKind) throws -> Void = {
       try MDAudioDownloadPolicy.validateURL($0, kind: $1)
     }
   ) {
     self.emitEvent = emitEvent
     self.makeSessionConfiguration = makeSessionConfiguration
+    self.availableStorage = availableStorage
     self.validateTransferURL = validateTransferURL
   }
 
@@ -104,17 +156,24 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
   }
 
   func startRangedAudio(
-    analysisID: String, formatID: String, retryBudget: MDRangeRetryBudget? = nil
+    analysisID: String, formatID: String, retryBudget: MDRangeRetryBudget? = nil,
+    completedVideoBytes: Int64? = nil
   ) -> String? {
     start(kind: .audio, analysisID: analysisID, formatID: formatID, useRanges: true,
-      standaloneAudio: false, expectedAudioDurationSeconds: nil, retryBudget: retryBudget)
+      standaloneAudio: false, expectedAudioDurationSeconds: nil, retryBudget: retryBudget,
+      completedVideoBytes: completedVideoBytes)
   }
 
   func startVideo(
-    analysisID: String, formatID: String, retryBudget: MDRangeRetryBudget? = nil
+    analysisID: String, formatID: String, retryBudget: MDRangeRetryBudget? = nil,
+    combinedAudioExact: Int64? = nil, combinedAudioApproximate: Int64? = nil,
+    isCombinedVideo: Bool = false
   ) -> String? {
     start(kind: .video, analysisID: analysisID, formatID: formatID, useRanges: true,
-      standaloneAudio: false, expectedAudioDurationSeconds: nil, retryBudget: retryBudget)
+      standaloneAudio: false, expectedAudioDurationSeconds: nil, retryBudget: retryBudget,
+      combinedAudioExact: combinedAudioExact,
+      combinedAudioApproximate: combinedAudioApproximate,
+      isCombinedVideo: isCombinedVideo)
   }
 
   private func start(
@@ -124,7 +183,11 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     useRanges: Bool,
     standaloneAudio: Bool,
     expectedAudioDurationSeconds: Double?,
-    retryBudget: MDRangeRetryBudget? = nil
+    retryBudget: MDRangeRetryBudget? = nil,
+    combinedAudioExact: Int64? = nil,
+    combinedAudioApproximate: Int64? = nil,
+    completedVideoBytes: Int64? = nil,
+    isCombinedVideo: Bool = false
   ) -> String? {
     lock.lock()
     guard activeJobID == nil else {
@@ -137,6 +200,10 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     usesRangeTransfer = useRanges
     self.standaloneAudio = standaloneAudio
     self.expectedAudioDurationSeconds = expectedAudioDurationSeconds
+    plannedCombinedAudioExact = combinedAudioExact
+    plannedCombinedAudioApproximate = combinedAudioApproximate
+    completedCombinedVideoBytes = completedVideoBytes
+    self.isCombinedVideo = isCombinedVideo
     self.retryBudget = retryBudget ?? MDRangeRetryBudget()
     self.analysisID = analysisID
     selectedFormatID = formatID
@@ -272,9 +339,12 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       if let expected = descriptor.expectedBytes {
         try MDAudioDownloadPolicy.validateExpectedLength(
           expected,
-          maximumBytes: kind.maximumBytes
+          maximumBytes: kind == .audio ? MDDownloadSizePolicy.audioBytes :
+            MDDownloadSizePolicy.videoMaximumBytes(height: descriptor.height)
         )
       }
+      try validateStorage(kind: kind, height: descriptor.height,
+        exact: descriptor.expectedBytes, approximate: descriptor.estimatedBytes)
       let directory = try MDAudioDownloadPolicy.workspace(for: jobID)
       var request = URLRequest(url: url)
       request.httpMethod = "GET"
@@ -487,8 +557,13 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
           response,
           requestedStart: start,
           bytesAlreadyPersisted: persisted,
-          kind: kind
+          kind: kind,
+          maximumBytes: maximumBytes(for: kind)
         )
+        if videoTotalBytes == nil {
+          try validateStorage(kind: kind, height: descriptor?.height,
+            exact: expectedLength, approximate: descriptor?.estimatedBytes)
+        }
         lock.lock()
         videoTotalBytes = expectedLength
         videoContentRange = nil
@@ -500,8 +575,13 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
           response,
           requestedStart: start,
           requestedEnd: end,
-          kind: kind
+          kind: kind,
+          maximumBytes: maximumBytes(for: kind)
         )
+        if videoTotalBytes == nil {
+          try validateStorage(kind: kind, height: descriptor?.height,
+            exact: range.total, approximate: nil)
+        }
         lock.lock()
         let previousTotal = videoTotalBytes
         let previousETag = resourceETag
@@ -572,7 +652,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       }
       try MDAudioDownloadPolicy.validateTransferredBytes(
         cumulative,
-        maximumBytes: kind.maximumBytes
+        maximumBytes: maximumBytes(for: kind)
       )
       let writer = try FileHandle(forWritingTo: partialURL)
       defer { try? writer.close() }
@@ -640,7 +720,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       let cumulativeBytes = persisted + totalBytesWritten
       try MDAudioDownloadPolicy.validateTransferredBytes(
         cumulativeBytes,
-        maximumBytes: kind.maximumBytes
+        maximumBytes: maximumBytes(for: kind)
       )
       let total = kind == .video
         ? knownVideoTotal
@@ -697,7 +777,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       }
       try MDAudioDownloadPolicy.validateTransferredBytes(
         size,
-        maximumBytes: kind.maximumBytes
+        maximumBytes: maximumBytes(for: kind)
       )
       let fileName = MDAudioDownloadPolicy.safeFileName(
         descriptor.fileName,
@@ -895,7 +975,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     let received = videoBytesPersisted + videoChunkBytesReceived
     try MDAudioDownloadPolicy.validateTransferredBytes(
       received,
-      maximumBytes: kind.maximumBytes
+      maximumBytes: maximumBytes(for: kind)
     )
     if let expected = videoTotalBytes, received != expected {
       throw MDAudioDownloadFailure.code(
@@ -940,7 +1020,7 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     let persisted = videoBytesPersisted + videoChunkBytesReceived
     try MDAudioDownloadPolicy.validateTransferredBytes(
       persisted,
-      maximumBytes: kind.maximumBytes
+      maximumBytes: maximumBytes(for: kind)
     )
     lock.lock()
     videoBytesPersisted = persisted
@@ -1387,6 +1467,18 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
       fail(jobID: jobID, code: "AUDIO_DURATION_INVALID")
       return
     }
+    do {
+      try MDStorageBudget.validate(mode: .audioNormalization, audio: size,
+        available: availableStorage())
+    } catch let failure as MDAudioDownloadFailure {
+      lock.unlock()
+      fail(jobID: jobID, code: failure.code)
+      return
+    } catch {
+      lock.unlock()
+      fail(jobID: jobID, code: "LOCAL_STORAGE_CAPACITY_UNAVAILABLE")
+      return
+    }
     let outputURL = fileURL.deletingLastPathComponent()
       .appendingPathComponent("normalized.m4a", isDirectory: false)
     let normalizer = MDAVAudioNormalizer()
@@ -1589,6 +1681,10 @@ final class MDAudioDownloadManager: NSObject, URLSessionDownloadDelegate, URLSes
     forbiddenAudioRefreshUsed = false
     refreshingForbiddenAudio = false
     audioRefreshGeneration += 1
+    plannedCombinedAudioExact = nil
+    plannedCombinedAudioApproximate = nil
+    completedCombinedVideoBytes = nil
+    isCombinedVideo = false
   }
 
   private func failureCode(

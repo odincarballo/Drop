@@ -280,6 +280,8 @@ test('normal YouTube flow uses real 364p and direct 720p, never HLS', async () =
     'direct-720',
     '140',
     121,
+    null,
+    2_000_000,
   );
   expect(analyzeMedia).not.toHaveBeenCalled();
 });
@@ -338,6 +340,8 @@ test.each(['Video + audio', 'Solo video'] as const)(
         'opaque-1080',
         '140',
         121,
+        null,
+        2_000_000,
       );
       await act(() =>
         native.emit('onCombinedDownloadState', {
@@ -515,13 +519,13 @@ test('known oversized tracks are blocked, while unknown sizes are allowed', asyn
         videoFormats: [
           {
             ...localYoutubeMetadata.metadata.videoFormats[0],
-            estimatedSize: 50 * 1024 * 1024 + 1,
+            estimatedSize: 1024 * 1024 * 1024 + 1,
           },
         ],
         audioFormats: [
           {
             ...localYoutubeMetadata.metadata.audioFormats[0],
-            estimatedSize: 25 * 1024 * 1024 + 1,
+            estimatedSize: 250 * 1024 * 1024 + 1,
           },
         ],
       },
@@ -532,10 +536,10 @@ test('known oversized tracks are blocked, while unknown sizes are allowed', asyn
   await analyzeYoutube();
   expect(await screen.findByRole('radio', { name: /360p/ })).toBeDisabled();
   expect(
-    screen.getByText(/Esta calidad supera el límite actual de video de 50 MiB/),
+    screen.getByText(/Esta calidad supera el límite actual de Drop/),
   ).toBeTruthy();
   expect(
-    screen.getByText(/El audio supera el límite actual de 25 MiB/),
+    screen.getByText(/El audio supera el límite actual de Drop/),
   ).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Descargar' })).toBeDisabled();
 });

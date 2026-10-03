@@ -11,6 +11,7 @@ import {
   LOCAL_VIDEO_MAX_BYTES,
   selectLocalVideoOptions,
 } from '@/utils/onDeviceYoutubeFormats';
+import { LOCAL_STANDARD_VIDEO_MAX_BYTES } from '@/utils/downloadSizePolicy';
 
 const video: LocalYoutubeVideoFormat = {
   id: 'dynamic-video',
@@ -65,15 +66,55 @@ test('keeps real 364p and dynamically selects direct 720p over HLS', () => {
   ).toEqual(['dynamic-video', 'dynamic-720']);
 });
 
-test('known video above 50 MiB stays visible but cannot be selected', () => {
+test('known 360p above 1 GiB stays visible but cannot be selected', () => {
   const oversized = {
     ...video,
-    estimatedSize: LOCAL_VIDEO_MAX_BYTES + 1,
+    estimatedSize: LOCAL_STANDARD_VIDEO_MAX_BYTES + 1,
   };
   expect(localVideoQualityChoices([oversized])).toEqual([
     { format: oversized, withinLimit: false },
   ]);
   expect(selectLocalVideoOptions([oversized])).toEqual([]);
+});
+
+test.each([360, 720])(
+  '%ip accepts exactly 1 GiB and rejects one byte more',
+  (height) => {
+    const atLimit = {
+      ...video,
+      height,
+      resolution: `${height}p`,
+      estimatedSize: LOCAL_STANDARD_VIDEO_MAX_BYTES,
+    };
+    expect(selectLocalVideoOptions([atLimit])).toEqual([atLimit]);
+    const overLimit = {
+      ...atLimit,
+      estimatedSize: LOCAL_STANDARD_VIDEO_MAX_BYTES + 1,
+    };
+    expect(selectLocalVideoOptions([overLimit])).toEqual([]);
+  },
+);
+
+test('1080p retains its exact 50 MiB ceiling', () => {
+  const atLimit = {
+    ...video,
+    height: 1080,
+    resolution: '1080p',
+    fps: 30,
+    codec: 'avc1.640028',
+    exactSize: LOCAL_VIDEO_MAX_BYTES,
+    estimatedSize: LOCAL_VIDEO_MAX_BYTES,
+  };
+  expect(selectLocalVideoOptions([atLimit])).toEqual([atLimit]);
+  expect(
+    selectLocalVideoOptions([
+      {
+        ...atLimit,
+        exactSize: LOCAL_VIDEO_MAX_BYTES + 1,
+        estimatedSize: LOCAL_VIDEO_MAX_BYTES + 1,
+      },
+    ]),
+  ).toEqual([]);
 });
 
 test('unknown sizes remain eligible and audio limit is per track', () => {

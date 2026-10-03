@@ -519,10 +519,33 @@ class SpikeTests(unittest.TestCase):
         self.assertNotIn(descriptor["url"], json.dumps(spike.normalize(payload)))
 
     def test_oversize_video_is_not_preselected_and_is_rejected(self):
-        payload = self.video_payload(filesize=spike.MAX_VIDEO_BYTES + 1)
+        payload = self.video_payload(
+            filesize=spike.video_max_bytes(360) + 1
+        )
         self.assertIsNone(spike.preferred_video(payload["formats"]))
         with self.assertRaisesRegex(ValueError, "VIDEO_FILE_TOO_LARGE"):
             spike.build_video_descriptor(payload, "134")
+
+    def test_long_video_policy_is_height_specific(self):
+        for height in (360, 720):
+            with self.subTest(height=height):
+                limit = spike.video_max_bytes(height)
+                self.assertEqual(limit, 1024 * 1024 * 1024)
+                payload = self.video_payload(height=height, filesize=limit)
+                self.assertEqual(spike.build_video_descriptor(payload, "134")["expectedBytes"], limit)
+                payload = self.video_payload(height=height, filesize=limit + 1)
+                with self.assertRaisesRegex(ValueError, "VIDEO_FILE_TOO_LARGE"):
+                    spike.build_video_descriptor(payload, "134")
+        self.assertEqual(spike.video_max_bytes(1080), 50 * 1024 * 1024)
+
+    def test_audio_250_mib_and_exact_size_outranks_approximation(self):
+        limit = 250 * 1024 * 1024
+        payload = self.audio_payload(filesize=limit)
+        self.assertEqual(spike.build_audio_descriptor(payload, "140")["expectedBytes"], limit)
+        with self.assertRaisesRegex(ValueError, "AUDIO_FILE_TOO_LARGE"):
+            spike.build_audio_descriptor(self.audio_payload(filesize=limit + 1), "140")
+        payload = self.audio_payload(filesize=limit - 1, filesize_approx=limit + 1)
+        self.assertEqual(spike.build_audio_descriptor(payload, "140")["expectedBytes"], limit - 1)
 
     def test_video_descriptor_rejects_forbidden_headers(self):
         payload = self.video_payload(http_headers={"Cookie": "secret"})

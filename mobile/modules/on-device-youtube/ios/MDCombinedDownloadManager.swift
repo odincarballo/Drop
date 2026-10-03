@@ -14,9 +14,11 @@ final class MDCombinedDownloadManager {
   private let emitEvent: EventSink
   private let makeSessionConfiguration: () -> URLSessionConfiguration
   private let validateTransferURL: (URL, MDLocalDownloadKind) throws -> Void
+  private let availableStorage: () -> Int64?
   private lazy var transfer = MDAudioDownloadManager(
     emitEvent: { [weak self] event in self?.handleTransferEvent(event) },
     makeSessionConfiguration: makeSessionConfiguration,
+    availableStorage: availableStorage,
     validateTransferURL: validateTransferURL
   )
   private var activeJobID: String?
@@ -44,12 +46,14 @@ final class MDCombinedDownloadManager {
     makeSessionConfiguration: @escaping () -> URLSessionConfiguration = {
       URLSessionConfiguration.ephemeral
     },
+    availableStorage: @escaping () -> Int64? = { MDStorageBudget.availableCapacity() },
     validateTransferURL: @escaping (URL, MDLocalDownloadKind) throws -> Void = {
       try MDAudioDownloadPolicy.validateURL($0, kind: $1)
     }
   ) {
     self.emitEvent = emitEvent
     self.makeSessionConfiguration = makeSessionConfiguration
+    self.availableStorage = availableStorage
     self.validateTransferURL = validateTransferURL
   }
 
@@ -63,7 +67,9 @@ final class MDCombinedDownloadManager {
     analysisID: String,
     videoFormatID: String,
     audioFormatID: String,
-    expectedDurationSeconds: Double
+    expectedDurationSeconds: Double,
+    audioExactBytes: Int64? = nil,
+    audioApproximateBytes: Int64? = nil
   ) -> String? {
     lock.lock()
     guard activeJobID == nil else {
@@ -87,7 +93,10 @@ final class MDCombinedDownloadManager {
       lock.unlock()
       emit(jobID: jobID, status: "PREPARING")
       guard let transferJobID = transfer.startVideo(
-        analysisID: analysisID, formatID: videoFormatID, retryBudget: retryBudget
+        analysisID: analysisID, formatID: videoFormatID, retryBudget: retryBudget,
+        combinedAudioExact: audioExactBytes,
+        combinedAudioApproximate: audioApproximateBytes,
+        isCombinedVideo: true
       ) else {
         fail(jobID: jobID, code: "COMBINED_DOWNLOAD_BUSY")
         return nil
@@ -220,8 +229,14 @@ final class MDCombinedDownloadManager {
         let analysisID = self.analysisID
         let audioFormatID = self.audioFormatID
         lock.unlock()
+        let videoBytes = ((try FileManager.default.attributesOfItem(atPath: stored.path))[.size]
+          as? NSNumber)?.int64Value
+        guard let videoBytes, videoBytes > 0 else {
+          throw MDAudioDownloadFailure.code("COMBINED_STORAGE_UNAVAILABLE")
+        }
         guard let transferJobID = transfer.startRangedAudio(
-          analysisID: analysisID, formatID: audioFormatID, retryBudget: retryBudget
+          analysisID: analysisID, formatID: audioFormatID, retryBudget: retryBudget,
+          completedVideoBytes: videoBytes
         ) else {
           fail(jobID: jobID, code: "COMBINED_DOWNLOAD_BUSY")
           return
@@ -284,6 +299,22 @@ final class MDCombinedDownloadManager {
     let outputName = MDAudioDownloadPolicy.safeFileName(videoFileName, extension: "mp4")
     let outputURL = workspaceURL.appendingPathComponent(outputName, isDirectory: false)
     let duration = expectedDurationSeconds
+    do {
+      let videoBytes = ((try FileManager.default.attributesOfItem(atPath: videoURL.path))[.size]
+        as? NSNumber)?.int64Value ?? -1
+      let audioBytes = ((try FileManager.default.attributesOfItem(atPath: audioURL.path))[.size]
+        as? NSNumber)?.int64Value ?? -1
+      try MDStorageBudget.validate(mode: .mux, video: videoBytes, audio: audioBytes,
+        available: availableStorage())
+    } catch let failure as MDAudioDownloadFailure {
+      lock.unlock()
+      fail(jobID: jobID, code: failure.code)
+      return
+    } catch {
+      lock.unlock()
+      fail(jobID: jobID, code: "COMBINED_STORAGE_UNAVAILABLE")
+      return
+    }
     let muxer = MDAVMuxer()
     self.muxer = muxer
     lock.unlock()

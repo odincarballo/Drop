@@ -22,6 +22,7 @@ source ./.env.production.example
 set +a
 
 npm ci --no-audit --no-fund
+node scripts/generate_download_size_policy.mjs --check
 node scripts/prepare_on_device_youtube.mjs
 
 if ! gem list --local --installed bundler --version 2.4.22 >/dev/null; then
