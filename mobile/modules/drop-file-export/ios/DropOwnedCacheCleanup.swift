@@ -26,8 +26,6 @@ enum DropOwnedCacheCleanup {
   ) -> DropCacheCleanupResult {
     var removed = 0
     var failures = 0
-    let youtubeRoot = cacheDirectory.appendingPathComponent("MediaDrop", isDirectory: true)
-
     func remove(_ url: URL) {
       do {
         try fileManager.removeItem(at: url)
@@ -39,26 +37,29 @@ enum DropOwnedCacheCleanup {
       }
     }
 
-    if let rootValues = try? youtubeRoot.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
-       rootValues.isDirectory == true,
-       rootValues.isSymbolicLink != true {
-      do {
-        for item in try fileManager.contentsOfDirectory(
-          at: youtubeRoot,
-          includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
-        ) {
-          guard UUID(uuidString: item.lastPathComponent) != nil else { continue }
-          let values = try item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-          guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
-          remove(item)
+    for rootName in ["MediaDrop", "DropExport"] {
+      let ownedRoot = cacheDirectory.appendingPathComponent(rootName, isDirectory: true)
+      if let rootValues = try? ownedRoot.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+         rootValues.isDirectory == true,
+         rootValues.isSymbolicLink != true {
+        do {
+          for item in try fileManager.contentsOfDirectory(
+            at: ownedRoot,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+          ) {
+            guard UUID(uuidString: item.lastPathComponent) != nil else { continue }
+            let values = try item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
+            remove(item)
+          }
+          if (try? fileManager.contentsOfDirectory(atPath: ownedRoot.path).isEmpty) == true {
+            remove(ownedRoot)
+          }
+        } catch {
+          failures += 1
+          let failure = error as NSError
+          NSLog("[Drop files] Startup workspace scan failed (%@:%ld)", failure.domain, failure.code)
         }
-        if (try? fileManager.contentsOfDirectory(atPath: youtubeRoot.path).isEmpty) == true {
-          remove(youtubeRoot)
-        }
-      } catch {
-        failures += 1
-        let failure = error as NSError
-        NSLog("[Drop files] Startup workspace scan failed (%@:%ld)", failure.domain, failure.code)
       }
     }
 

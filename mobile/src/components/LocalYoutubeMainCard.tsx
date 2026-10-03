@@ -58,6 +58,7 @@ function downloadFeedback(spike: Spike, mode: Mode) {
         : `Descargando audio… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
     if (state.status === 'muxing')
       return `Combinando…${state.progress === null ? '' : ` ${Math.round(state.progress * 100)} %`}`;
+    if (state.status === 'saving') return 'Guardando en Biblioteca…';
     if (state.status === 'error') return state.message;
     if (state.status === 'cancelled') return 'Descarga cancelada.';
   } else {
@@ -67,6 +68,7 @@ function downloadFeedback(spike: Spike, mode: Mode) {
       return state.retrying
         ? retryFeedback(state.retryCategory)
         : `Descargando ${mode === 'VIDEO_ONLY' ? 'video' : 'audio'}… ${transferProgress(state.bytesDownloaded, state.totalBytes, state.progress)}`;
+    if (state.status === 'saving') return 'Guardando en Biblioteca…';
     if (state.status === 'error') return state.message;
     if (state.status === 'cancelled') return 'Descarga cancelada.';
   }
@@ -253,6 +255,7 @@ export function LocalYoutubeMainCard({
               <CompletedFileActions
                 key={completion.localUri}
                 uri={completion.localUri}
+                libraryId={completion.libraryId}
                 onMoreOptions={shareDownload}
                 onNewDownload={onNewDownload}
               />

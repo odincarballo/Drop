@@ -49,6 +49,7 @@ test('shows completed filename and actions', async () => {
         },
         localUri: 'file:///cache/clip.mp4',
         localSize: 60_000_000,
+        libraryId: '00000000-0000-0000-0000-000000000001',
         actionError: null,
       }}
       onCancel={jest.fn()}

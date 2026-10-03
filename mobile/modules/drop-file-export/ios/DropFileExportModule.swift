@@ -54,6 +54,15 @@ public final class DropFileExportModule: Module {
       return ["removed": result.removed, "failures": result.failures]
     }
 
+    AsyncFunction("createNamedExport") { (uri: String, name: String) throws -> [String: String] in
+      let alias = try DropExportAlias.live().create(sourceURI: uri, name: name)
+      return ["uri": alias.absoluteString]
+    }
+
+    AsyncFunction("removeNamedExport") { (uri: String) throws in
+      try DropExportAlias.live().remove(aliasURI: uri)
+    }
+
     AsyncFunction("saveToFiles") { (uri: String, promise: Promise) in
       guard let url = URL(string: uri), url.isFileURL else {
         promise.reject(InvalidExportFileException())

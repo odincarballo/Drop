@@ -11,6 +11,7 @@ import * as Clipboard from 'expo-clipboard';
 import HomeScreen from '@/app/index';
 import type { MediaAnalysis } from '@/models/media';
 import { ApiError } from '@/services/errors';
+import { promoteToLibrary } from '@/services/library';
 import { analyzeMedia } from '@/services/media';
 import {
   createDownloadJob,
@@ -22,6 +23,18 @@ import {
 import { demoMedia, youtubeMedia } from './fixtures/media';
 
 jest.mock('@/services/media', () => ({ analyzeMedia: jest.fn() }));
+jest.mock('@/services/fileExport', () => ({
+  saveLocalFileToFiles: jest.fn(),
+  withNamedLibraryFile: jest.fn((_item, operation) =>
+    operation('file:///library/clip.mp4'),
+  ),
+}));
+jest.mock('@/services/library', () => ({
+  promoteToLibrary: jest.fn(),
+  withLibraryLease: jest.fn((_id, operation) =>
+    operation({ uri: 'file:///library/clip.mp4' }),
+  ),
+}));
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/jobs', () => ({
@@ -48,6 +61,11 @@ jest.mock(
 );
 
 beforeEach(() => {
+  jest.mocked(promoteToLibrary).mockResolvedValue({
+    id: '00000000-0000-0000-0000-000000000001',
+    uri: 'file:///library/clip.mp4',
+    sizeBytes: 1_000_000,
+  } as never);
   jest.mocked(requireOptionalNativeModule).mockReset().mockReturnValue(null);
   jest.mocked(analyzeMedia).mockReset().mockResolvedValue(demoMedia);
   jest
@@ -458,13 +476,13 @@ test('normal YouTube progress, cancellation, audio-only and sharing stay on-devi
   );
   expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
   await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
-  expect(shareLocalFile).toHaveBeenCalledWith('file:///cache/audio.m4a');
+  expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4');
   expect(createDownloadJob).not.toHaveBeenCalled();
   await fireEvent.changeText(
     screen.getByLabelText('URL del recurso multimedia'),
     'https://example.com/video.mp4',
   );
-  expect(deleteLocalFile).toHaveBeenCalledWith('file:///cache/audio.m4a');
+  expect(deleteLocalFile).not.toHaveBeenCalledWith('file:///library/clip.mp4');
   expect(screen.queryByText('✓ Descarga completada')).toBeNull();
 });
 
@@ -644,7 +662,7 @@ test('direct file downloads to iPhone storage and can be shared', async () => {
     expect.any(AbortSignal),
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
-  expect(shareLocalFile).toHaveBeenCalledWith('file:///cache/clip.mp4');
+  expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4');
 });
 
 test('a direct transfer finishing after cancellation cannot become a completed result', async () => {

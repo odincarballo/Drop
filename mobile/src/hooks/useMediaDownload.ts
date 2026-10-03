@@ -7,6 +7,8 @@ import {
   type DownloadSelection,
 } from '@/models/selection';
 import { ApiError, jobError } from '@/services/errors';
+import { withNamedLibraryFile } from '@/services/fileExport';
+import { promoteToLibrary, withLibraryLease } from '@/services/library';
 import {
   createDownloadJob,
   deleteDownloadJob,
@@ -20,6 +22,7 @@ export type DownloadState =
   | { status: 'idle' }
   | { status: 'creating' }
   | { status: 'downloading'; job: DownloadJob }
+  | { status: 'saving'; job: DownloadJob }
   | {
       status: 'transferring';
       job: DownloadJob;
@@ -31,6 +34,7 @@ export type DownloadState =
       job: DownloadJob;
       localUri: string;
       localSize: number;
+      libraryId: string;
       actionError: string | null;
     }
   | { status: 'cancelled' }
@@ -140,15 +144,40 @@ export function useMediaDownload() {
         deleteLocalFile(file.uri);
         return;
       }
-      localUri.current = file.uri;
+      if (mounted.current && operation.current === currentOperation)
+        setState({ status: 'saving', job });
+      const video =
+        'videoIndex' in selection && selection.videoIndex !== null
+          ? media.videoFormats[selection.videoIndex]
+          : null;
+      const audio =
+        'audioIndex' in selection && selection.audioIndex !== null
+          ? media.audioFormats[selection.audioIndex]
+          : null;
+      const saved = await promoteToLibrary(file.uri, {
+        sourceKind: 'direct',
+        title: media.title ?? job.fileName ?? 'Archivo de Drop',
+        mediaType: selection.type === 'AUDIO_ONLY' ? 'audio' : 'video',
+        durationSeconds: media.duration,
+        resolution: video?.resolution,
+        height: video?.height,
+        fps: video?.fps,
+        videoCodec: video?.codec,
+        audioCodec: audio?.codec,
+        container:
+          selection.type === 'AUDIO_ONLY' ? audio?.container : video?.container,
+      });
+      // The source was moved. A visual reset must never delete Library media.
+      localUri.current = null;
       jobId.current = null;
       void deleteDownloadJob(job.id).catch(() => undefined);
       if (mounted.current && operation.current === currentOperation) {
         setState({
           status: 'completed',
           job,
-          localUri: file.uri,
-          localSize: file.size,
+          localUri: saved.uri,
+          localSize: saved.sizeBytes,
+          libraryId: saved.id,
           actionError: null,
         });
       }
@@ -167,7 +196,9 @@ export function useMediaDownload() {
           message:
             error instanceof ApiError
               ? error.message
-              : 'No se pudo completar la descarga. Inténtalo de nuevo.',
+              : error instanceof Error
+                ? `No se pudo guardar en Biblioteca: ${error.message}`
+                : 'No se pudo guardar en Biblioteca. Inténtalo de nuevo.',
         });
       }
     } finally {
@@ -194,7 +225,9 @@ export function useMediaDownload() {
   async function share() {
     if (state.status !== 'completed') return;
     try {
-      await shareLocalFile(state.localUri);
+      await withLibraryLease(state.libraryId, (item) =>
+        withNamedLibraryFile(item, shareLocalFile),
+      );
     } catch (error) {
       if (mounted.current) {
         setState({
@@ -221,8 +254,11 @@ export function useMediaDownload() {
     setState({ status: 'idle' });
   }
 
-  const isActive = ['creating', 'downloading', 'transferring'].includes(
-    state.status,
-  );
+  const isActive = [
+    'creating',
+    'downloading',
+    'transferring',
+    'saving',
+  ].includes(state.status);
   return { state, isActive, start, cancel, share, reset };
 }

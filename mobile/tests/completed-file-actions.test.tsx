@@ -1,9 +1,23 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
 import { CompletedFileActions } from '@/components/CompletedFileActions';
-import { saveLocalFileToFiles } from '@/services/fileExport';
+import {
+  saveLocalFileToFiles,
+  withNamedLibraryFile,
+} from '@/services/fileExport';
+import { withLibraryLease } from '@/services/library';
 
-jest.mock('@/services/fileExport', () => ({ saveLocalFileToFiles: jest.fn() }));
+jest.mock('@/services/fileExport', () => ({
+  saveLocalFileToFiles: jest.fn(),
+  withNamedLibraryFile: jest.fn((_item, operation) =>
+    operation('file:///cache/DropExport/Friendly.mp4'),
+  ),
+}));
+jest.mock('@/services/library', () => ({
+  withLibraryLease: jest.fn((_id, operation) =>
+    operation({ uri: 'file:///library/uuid.mp4' }),
+  ),
+}));
 
 const uri = 'file:///cache/test.mp4';
 
@@ -72,4 +86,25 @@ test('native export errors remain actionable', async () => {
     screen.getByRole('button', { name: 'Guardar en Archivos' }),
   );
   expect(await screen.findByRole('alert')).toHaveTextContent('No disponible');
+});
+
+test('completed Library result exports a friendly alias while retaining its lease', async () => {
+  jest.mocked(saveLocalFileToFiles).mockResolvedValue('saved');
+  await render(
+    <CompletedFileActions
+      uri="file:///library/uuid.mp4"
+      libraryId="item-1"
+      onMoreOptions={jest.fn()}
+      onNewDownload={jest.fn()}
+    />,
+  );
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Guardar en Archivos' }),
+  );
+  expect(withLibraryLease).toHaveBeenCalledWith('item-1', expect.any(Function));
+  expect(withNamedLibraryFile).toHaveBeenCalled();
+  expect(saveLocalFileToFiles).toHaveBeenCalledWith(
+    'file:///cache/DropExport/Friendly.mp4',
+  );
+  expect(await screen.findByText('Guardado en Archivos.')).toBeTruthy();
 });

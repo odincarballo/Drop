@@ -2,17 +2,23 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ActionButton } from '@/components/ActionButton';
-import { saveLocalFileToFiles } from '@/services/fileExport';
+import {
+  saveLocalFileToFiles,
+  withNamedLibraryFile,
+} from '@/services/fileExport';
+import { withLibraryLease } from '@/services/library';
 import { useTheme } from '@/theme';
 
 type ExportState = 'idle' | 'saving' | 'saved' | 'cancelled' | 'error';
 
 export function CompletedFileActions({
   uri,
+  libraryId,
   onMoreOptions,
   onNewDownload,
 }: {
   uri: string;
+  libraryId?: string;
   onMoreOptions: () => void;
   onNewDownload: () => void;
 }) {
@@ -33,7 +39,11 @@ export function CompletedFileActions({
     setState('saving');
     setMessage(null);
     try {
-      const result = await saveLocalFileToFiles(uri);
+      const result = libraryId
+        ? await withLibraryLease(libraryId, (item) =>
+            withNamedLibraryFile(item, saveLocalFileToFiles),
+          )
+        : await saveLocalFileToFiles(uri);
       if (!mounted.current) return;
       setState(result);
       setMessage(

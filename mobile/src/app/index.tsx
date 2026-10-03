@@ -109,6 +109,28 @@ export default function HomeScreen() {
               Descarga archivos multimedia
             </Text>
           </View>
+          <View style={styles.navigation}>
+            <Text
+              accessibilityRole="tab"
+              accessibilityState={{ selected: true }}
+              style={[styles.navigationLabel, { color: colors.text }]}
+            >
+              Descargar
+            </Text>
+            <Pressable
+              accessibilityRole="tab"
+              accessibilityLabel="Biblioteca"
+              accessibilityState={{ selected: false }}
+              onPress={() => router.push('/library' as Href)}
+              style={styles.navigationButton}
+            >
+              <Text
+                style={[styles.navigationLabel, { color: colors.secondary }]}
+              >
+                Biblioteca
+              </Text>
+            </Pressable>
+          </View>
           <View style={styles.composer}>
             <Text style={[styles.label, { color: colors.text }]}>Enlace</Text>
             <View style={styles.inputRow}>
@@ -249,6 +271,9 @@ const styles = StyleSheet.create({
     gap: 22,
   },
   header: { gap: 3 },
+  navigation: { flexDirection: 'row', gap: 20, alignItems: 'center' },
+  navigationButton: { minHeight: 44, justifyContent: 'center' },
+  navigationLabel: { fontSize: 16, fontWeight: '600' },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

@@ -1,11 +1,15 @@
 import { requireOptionalNativeModule } from 'expo';
 
+import type { LibraryItem } from '@/models/library';
 import { withLocalFileLease } from '@/services/jobs';
+import { libraryExportName } from '@/utils/libraryExportName';
 
 type ExportResult = { status: 'saved' | 'cancelled' };
 type DropFileExportNative = {
   saveToFiles(uri: string): Promise<ExportResult>;
   cleanupAbandonedFiles(): { removed: number; failures: number };
+  createNamedExport(uri: string, name: string): Promise<{ uri: string }>;
+  removeNamedExport(uri: string): Promise<void>;
 };
 
 let startupCleanupDone = false;
@@ -48,4 +52,33 @@ export async function saveLocalFileToFiles(
     }
     return result.status;
   });
+}
+
+export async function withNamedLibraryFile<T>(
+  item: LibraryItem,
+  operation: (uri: string) => Promise<T>,
+): Promise<T> {
+  const exporter =
+    requireOptionalNativeModule<DropFileExportNative>('DropFileExport');
+  if (!exporter?.createNamedExport || !exporter.removeNamedExport) {
+    throw new Error(
+      'Esta versión de Drop no puede preparar el nombre de exportación.',
+    );
+  }
+  const alias = await exporter.createNamedExport(
+    item.uri,
+    libraryExportName(item),
+  );
+  if (!alias?.uri)
+    throw new Error('No se pudo preparar el archivo para compartir.');
+  try {
+    return await operation(alias.uri);
+  } finally {
+    try {
+      await exporter.removeNamedExport(alias.uri);
+    } catch (error) {
+      // A cold-start sweep removes abandoned DropExport aliases after a crash.
+      console.warn('[Drop files] Could not clean named export alias', error);
+    }
+  }
 }

@@ -55,6 +55,7 @@ export function DownloadStatusCard({
         <CompletedFileActions
           key={state.localUri}
           uri={state.localUri}
+          libraryId={state.libraryId}
           onMoreOptions={onShare}
           onNewDownload={onReset}
         />
@@ -89,14 +90,18 @@ export function DownloadStatusCard({
   const isTransferring = state.status === 'transferring';
   const downloaded = isCreating
     ? 0
-    : isTransferring
-      ? state.bytesDownloaded
-      : state.job.bytesDownloaded;
+    : state.status === 'saving'
+      ? state.job.bytesDownloaded
+      : isTransferring
+        ? state.bytesDownloaded
+        : state.job.bytesDownloaded;
   const total = isCreating
     ? null
-    : isTransferring
-      ? state.totalBytes
-      : state.job.totalBytes;
+    : state.status === 'saving'
+      ? state.job.totalBytes
+      : isTransferring
+        ? state.totalBytes
+        : state.job.totalBytes;
   const progress =
     state.status === 'downloading'
       ? state.job.progress
@@ -127,9 +132,11 @@ export function DownloadStatusCard({
       >
         {isCreating
           ? 'Preparando descarga…'
-          : isTransferring
-            ? 'Guardando en el iPhone…'
-            : (backendHeading ?? 'Descargando…')}
+          : state.status === 'saving'
+            ? 'Guardando en Biblioteca…'
+            : isTransferring
+              ? 'Guardando en el iPhone…'
+              : (backendHeading ?? 'Descargando…')}
       </Text>
       {percentage !== null && (
         <Text
@@ -162,7 +169,9 @@ export function DownloadStatusCard({
           {total !== null ? ` / ${formatSize(total)}` : ''}
         </Text>
       ) : null}
-      <ActionButton label="Cancelar" secondary onPress={onCancel} />
+      {state.status !== 'saving' && (
+        <ActionButton label="Cancelar" secondary onPress={onCancel} />
+      )}
     </View>
   );
 }

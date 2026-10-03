@@ -7,8 +7,11 @@ import type {
   LocalHttpTransferDiagnostics,
   LocalVideoDownloadEvent,
   LocalYoutubeResult,
+  LocalYoutubeMetadata,
 } from '@/models/onDeviceYoutube';
-import { deleteLocalFile, shareLocalFile } from '@/services/jobs';
+import { withNamedLibraryFile } from '@/services/fileExport';
+import { shareLocalFile } from '@/services/jobs';
+import { promoteToLibrary, withLibraryLease } from '@/services/library';
 import {
   analyzeYoutubeOnDevice,
   cancelLocalAudioDownload,
@@ -42,6 +45,7 @@ type EjsState =
 
 export type LocalAudioState =
   | { status: 'idle' }
+  | { status: 'saving'; jobId: string }
   | { status: 'preparing'; jobId: string; formatId: string }
   | {
       status: 'downloading';
@@ -64,6 +68,7 @@ export type LocalAudioState =
       fileName: string;
       fileSize: number;
       localUri: string;
+      libraryId: string;
       actionError: string | null;
       httpDiagnostics: LocalHttpTransferDiagnostics | null;
     }
@@ -77,6 +82,7 @@ export type LocalAudioState =
 
 export type LocalVideoState =
   | { status: 'idle' }
+  | { status: 'saving'; jobId: string }
   | { status: 'preparing'; jobId: string; formatId: string }
   | {
       status: 'downloading';
@@ -101,6 +107,7 @@ export type LocalVideoState =
       fileName: string;
       fileSize: number;
       localUri: string;
+      libraryId: string;
       actionError: string | null;
       httpDiagnostics: LocalHttpTransferDiagnostics | null;
     }
@@ -114,6 +121,7 @@ export type LocalVideoState =
 
 export type LocalCombinedState =
   | { status: 'idle' }
+  | { status: 'saving'; jobId: string }
   | { status: 'preparing'; jobId: string }
   | {
       status: 'downloading-video' | 'downloading-audio';
@@ -131,6 +139,7 @@ export type LocalCombinedState =
       fileName: string;
       fileSize: number;
       localUri: string;
+      libraryId: string;
       durationSeconds: number;
       height: number | null;
       videoCodec: string | null;
@@ -168,6 +177,7 @@ export function useLocalYoutubeSpike() {
   const videoJobId = useRef<string | null>(null);
   const combinedJobId = useRef<string | null>(null);
   const analysisGeneration = useRef(0);
+  const analyzedMetadata = useRef<LocalYoutubeMetadata | null>(null);
   const mounted = useRef(true);
 
   const handleAudioEvent = useCallback((event: LocalAudioDownloadEvent) => {
@@ -200,18 +210,48 @@ export function useLocalYoutubeSpike() {
       event.localUri
     ) {
       audioJobId.current = null;
-      setAudioState({
-        status: 'completed',
-        jobId: event.jobId,
-        formatId: event.formatId ?? '',
+      const metadata = analyzedMetadata.current;
+      const generation = analysisGeneration.current;
+      setAudioState({ status: 'saving', jobId: event.jobId });
+      void promoteToLibrary(event.localUri, {
+        sourceKind: 'youtube',
+        sourceVideoId: metadata?.id,
+        title: metadata?.title ?? event.fileName,
+        mediaType: 'audio',
+        durationSeconds: metadata?.duration,
+        audioCodec: event.codec,
         container: 'm4a',
-        codec: event.codec ?? null,
-        fileName: event.fileName,
-        fileSize: event.fileSize,
-        localUri: event.localUri,
-        actionError: null,
-        httpDiagnostics: event.httpDiagnostics ?? null,
-      });
+        thumbnailUrl: metadata?.thumbnail,
+      })
+        .then((saved) => {
+          if (!mounted.current || analysisGeneration.current !== generation)
+            return;
+          setAudioState({
+            status: 'completed',
+            jobId: event.jobId,
+            formatId: event.formatId ?? '',
+            container: 'm4a',
+            codec: event.codec ?? null,
+            fileName: event.fileName!,
+            fileSize: saved.sizeBytes,
+            localUri: saved.uri,
+            libraryId: saved.id,
+            actionError: null,
+            httpDiagnostics: event.httpDiagnostics ?? null,
+          });
+        })
+        .catch((error: unknown) => {
+          if (mounted.current && analysisGeneration.current === generation)
+            setAudioState({
+              status: 'error',
+              code: 'LIBRARY_SAVE_FAILED',
+              message:
+                error instanceof Error
+                  ? `No se pudo guardar en Biblioteca: ${error.message}`
+                  : 'No se pudo guardar en Biblioteca.',
+              httpDiagnostics: event.httpDiagnostics ?? null,
+            });
+        });
     } else if (event.status === 'CANCELLED') {
       audioJobId.current = null;
       setAudioState({ status: 'cancelled' });
@@ -258,19 +298,55 @@ export function useLocalYoutubeSpike() {
       event.localUri
     ) {
       videoJobId.current = null;
-      setVideoState({
-        status: 'completed',
-        jobId: event.jobId,
-        formatId: event.formatId ?? '',
+      const metadata = analyzedMetadata.current;
+      const generation = analysisGeneration.current;
+      const format = metadata?.videoFormats.find(
+        (entry) => entry.id === event.formatId,
+      );
+      setVideoState({ status: 'saving', jobId: event.jobId });
+      void promoteToLibrary(event.localUri, {
+        sourceKind: 'youtube',
+        sourceVideoId: metadata?.id,
+        title: metadata?.title ?? event.fileName,
+        mediaType: 'video',
+        durationSeconds: metadata?.duration,
+        resolution: format?.resolution,
+        height: event.height,
+        fps: format?.fps,
+        videoCodec: event.codec,
         container: 'mp4',
-        codec: event.codec ?? null,
-        height: event.height ?? null,
-        fileName: event.fileName,
-        fileSize: event.fileSize,
-        localUri: event.localUri,
-        actionError: null,
-        httpDiagnostics: event.httpDiagnostics ?? null,
-      });
+        thumbnailUrl: metadata?.thumbnail,
+      })
+        .then((saved) => {
+          if (!mounted.current || analysisGeneration.current !== generation)
+            return;
+          setVideoState({
+            status: 'completed',
+            jobId: event.jobId,
+            formatId: event.formatId ?? '',
+            container: 'mp4',
+            codec: event.codec ?? null,
+            height: event.height ?? null,
+            fileName: event.fileName!,
+            fileSize: saved.sizeBytes,
+            localUri: saved.uri,
+            libraryId: saved.id,
+            actionError: null,
+            httpDiagnostics: event.httpDiagnostics ?? null,
+          });
+        })
+        .catch((error: unknown) => {
+          if (mounted.current && analysisGeneration.current === generation)
+            setVideoState({
+              status: 'error',
+              code: 'LIBRARY_SAVE_FAILED',
+              message:
+                error instanceof Error
+                  ? `No se pudo guardar en Biblioteca: ${error.message}`
+                  : 'No se pudo guardar en Biblioteca.',
+              httpDiagnostics: event.httpDiagnostics ?? null,
+            });
+        });
     } else if (event.status === 'CANCELLED') {
       videoJobId.current = null;
       setVideoState({ status: 'cancelled' });
@@ -327,20 +403,58 @@ export function useLocalYoutubeSpike() {
         event.durationSeconds !== undefined
       ) {
         combinedJobId.current = null;
-        setCombinedState({
-          status: 'completed',
-          jobId: event.jobId,
-          fileName: event.fileName,
-          fileSize: event.fileSize,
-          localUri: event.localUri,
+        const metadata = analyzedMetadata.current;
+        const generation = analysisGeneration.current;
+        const format = metadata?.videoFormats.find(
+          (entry) => entry.id === selectedVideoFormatId,
+        );
+        setCombinedState({ status: 'saving', jobId: event.jobId });
+        void promoteToLibrary(event.localUri, {
+          sourceKind: 'youtube',
+          sourceVideoId: metadata?.id,
+          title: metadata?.title ?? event.fileName,
+          mediaType: 'video',
           durationSeconds: event.durationSeconds,
-          height: event.height ?? null,
-          videoCodec: event.videoCodec ?? null,
-          audioCodec: event.audioCodec ?? null,
-          actionError: null,
-          videoHttpDiagnostics: event.videoHttpDiagnostics ?? null,
-          audioHttpDiagnostics: event.audioHttpDiagnostics ?? null,
-        });
+          resolution: format?.resolution,
+          height: event.height,
+          fps: format?.fps,
+          videoCodec: event.videoCodec,
+          audioCodec: event.audioCodec,
+          container: 'mp4',
+          thumbnailUrl: metadata?.thumbnail,
+        })
+          .then((saved) => {
+            if (!mounted.current || analysisGeneration.current !== generation)
+              return;
+            setCombinedState({
+              status: 'completed',
+              jobId: event.jobId,
+              fileName: event.fileName!,
+              fileSize: saved.sizeBytes,
+              localUri: saved.uri,
+              libraryId: saved.id,
+              durationSeconds: event.durationSeconds!,
+              height: event.height ?? null,
+              videoCodec: event.videoCodec ?? null,
+              audioCodec: event.audioCodec ?? null,
+              actionError: null,
+              videoHttpDiagnostics: event.videoHttpDiagnostics ?? null,
+              audioHttpDiagnostics: event.audioHttpDiagnostics ?? null,
+            });
+          })
+          .catch((error: unknown) => {
+            if (mounted.current && analysisGeneration.current === generation)
+              setCombinedState({
+                status: 'error',
+                code: 'LIBRARY_SAVE_FAILED',
+                message:
+                  error instanceof Error
+                    ? `No se pudo guardar en Biblioteca: ${error.message}`
+                    : 'No se pudo guardar en Biblioteca.',
+                videoHttpDiagnostics: event.videoHttpDiagnostics ?? null,
+                audioHttpDiagnostics: event.audioHttpDiagnostics ?? null,
+              });
+          });
       } else if (event.status === 'CANCELLED') {
         combinedJobId.current = null;
         setCombinedState({ status: 'cancelled' });
@@ -356,7 +470,7 @@ export function useLocalYoutubeSpike() {
         });
       }
     },
-    [],
+    [selectedVideoFormatId],
   );
 
   useEffect(() => {
@@ -377,22 +491,11 @@ export function useLocalYoutubeSpike() {
     };
   }, [handleAudioEvent, handleCombinedEvent, handleVideoEvent]);
 
-  function clearCompletedFiles() {
-    for (const completed of [audioState, videoState, combinedState]) {
-      if (completed.status !== 'completed') continue;
-      try {
-        deleteLocalFile(completed.localUri);
-      } catch {
-        // The result must still be cleared if iOS already removed its cache file.
-      }
-    }
-  }
-
   async function analyze(url: string) {
     if (busy.current) return;
     busy.current = true;
     const generation = ++analysisGeneration.current;
-    clearCompletedFiles();
+    analyzedMetadata.current = null;
     setAudioState({ status: 'idle' });
     setVideoState({ status: 'idle' });
     setCombinedState({ status: 'idle' });
@@ -401,6 +504,7 @@ export function useLocalYoutubeSpike() {
     try {
       const result = await analyzeYoutubeOnDevice(url);
       if (mounted.current && analysisGeneration.current === generation) {
+        analyzedMetadata.current = result.metadata ?? null;
         setState({ status: 'result', result });
         const options = result.metadata
           ? selectLocalVideoOptions(result.metadata.videoFormats)
@@ -426,7 +530,7 @@ export function useLocalYoutubeSpike() {
 
   function reset() {
     ++analysisGeneration.current;
-    clearCompletedFiles();
+    analyzedMetadata.current = null;
     if (busy.current) cancelLocalYoutube();
     if (audioJobId.current) cancelLocalAudioDownload();
     if (videoJobId.current) cancelLocalVideoDownload();
@@ -541,7 +645,9 @@ export function useLocalYoutubeSpike() {
   async function shareAudio() {
     if (audioState.status !== 'completed') return;
     try {
-      await shareLocalFile(audioState.localUri);
+      await withLibraryLease(audioState.libraryId, (item) =>
+        withNamedLibraryFile(item, shareLocalFile),
+      );
     } catch {
       if (mounted.current && audioState.status === 'completed') {
         setAudioState({
@@ -605,7 +711,9 @@ export function useLocalYoutubeSpike() {
   async function shareVideo() {
     if (videoState.status !== 'completed') return;
     try {
-      await shareLocalFile(videoState.localUri);
+      await withLibraryLease(videoState.libraryId, (item) =>
+        withNamedLibraryFile(item, shareLocalFile),
+      );
     } catch {
       if (mounted.current && videoState.status === 'completed') {
         setVideoState({
@@ -680,7 +788,9 @@ export function useLocalYoutubeSpike() {
   async function shareCombined() {
     if (combinedState.status !== 'completed') return;
     try {
-      await shareLocalFile(combinedState.localUri);
+      await withLibraryLease(combinedState.libraryId, (item) =>
+        withNamedLibraryFile(item, shareLocalFile),
+      );
     } catch {
       if (mounted.current && combinedState.status === 'completed') {
         setCombinedState({
@@ -717,10 +827,13 @@ export function useLocalYoutubeSpike() {
       state.status === 'loading' ||
       ejsState.status === 'loading' ||
       audioState.status === 'preparing' ||
+      audioState.status === 'saving' ||
       audioState.status === 'downloading' ||
       videoState.status === 'preparing' ||
+      videoState.status === 'saving' ||
       videoState.status === 'downloading' ||
       combinedState.status === 'preparing' ||
+      combinedState.status === 'saving' ||
       combinedState.status === 'downloading-video' ||
       combinedState.status === 'downloading-audio' ||
       combinedState.status === 'muxing',

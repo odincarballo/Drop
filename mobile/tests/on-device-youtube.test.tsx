@@ -27,8 +27,21 @@ import {
   testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
 import { shareLocalFile } from '@/services/jobs';
+import { promoteToLibrary } from '@/services/library';
 
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
+jest.mock('@/services/fileExport', () => ({
+  saveLocalFileToFiles: jest.fn(),
+  withNamedLibraryFile: jest.fn((_item, operation) =>
+    operation('file:///library/clip.mp4'),
+  ),
+}));
+jest.mock('@/services/library', () => ({
+  promoteToLibrary: jest.fn(),
+  withLibraryLease: jest.fn((_id, operation) =>
+    operation({ uri: 'file:///library/clip.mp4' }),
+  ),
+}));
 jest.mock('@/services/jobs', () => ({
   shareLocalFile: jest.fn(),
   deleteLocalFile: jest.fn(),
@@ -147,6 +160,14 @@ const result = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(promoteToLibrary).mockImplementation(
+    async (_uri) =>
+      ({
+        id: '00000000-0000-0000-0000-000000000001',
+        uri: 'file:///library/clip.mp4',
+        sizeBytes: 1_000_000,
+      }) as never,
+  );
   jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
   audioListener = null;
   videoListener = null;
@@ -564,9 +585,7 @@ test('native video-only progress completes, shares, and never exposes its URL', 
     screen.getByRole('button', { name: 'Compartir video' }),
   );
   await waitFor(() =>
-    expect(shareLocalFile).toHaveBeenCalledWith(
-      'file:///cache/Own%20video.mp4',
-    ),
+    expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4'),
   );
 });
 
@@ -691,9 +710,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
     screen.getAllByRole('button', { name: 'Compartir video' })[0]!,
   );
   await waitFor(() =>
-    expect(shareLocalFile).toHaveBeenCalledWith(
-      'file:///cache/Own%20video.mp4',
-    ),
+    expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4'),
   );
 });
 
@@ -874,9 +891,7 @@ test('late audio completion after cancellation is ignored, then a retry can shar
     screen.getByRole('button', { name: 'Compartir audio' }),
   );
   await waitFor(() =>
-    expect(shareLocalFile).toHaveBeenCalledWith(
-      'file:///cache/Own%20audio.m4a',
-    ),
+    expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4'),
   );
 });
 
