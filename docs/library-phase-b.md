@@ -22,7 +22,7 @@ ignorar notificaciones tardías tras cambio, cierre o eliminación.
 
 ## Progreso y finalización
 
-La UI futura puede recibir estado aproximadamente cada segundo. Un repositorio
+La UI recibe estado aproximadamente cada segundo. Un repositorio
 nativo separado del AVPlayer actualiza los campos existentes
 `playbackPositionSeconds` y `completedAt` cada 12 segundos de reproducción y
 al pausar, seek, cerrar, cambiar de item o finalizar. Usa conexiones SQLite
@@ -42,18 +42,20 @@ duraciones desconocidas no generan finalización.
 Biblioteca abre una ruta por `libraryId`; nunca entrega la ruta del medio al
 reproductor. Una Expo View dibuja el `AVPlayer` único mediante `AVPlayerLayer`.
 La presentación fullscreen usa `AVPlayerViewController` con ese mismo player e
-item, sin reiniciar la reproducción; PiP está desactivado. El `app.json`
+item, sin reiniciar la reproducción. PiP se añadió posteriormente en C1. El `app.json`
 versionado declara orientaciones posibles y un AppDelegate subscriber limita
 las pantallas normales a portrait, permitiendo landscape solamente durante
 fullscreen. Al salir, incluso mediante Done/gesto o cierre de la ruta, restaura
-portrait. La confirmación visual final de estas transiciones requiere iPhone.
+portrait. Las transiciones y el dismiss interactivo se validaron físicamente
+en iPhone tras los ajustes de C1.
 
 La velocidad seleccionada se guarda en el servicio aparte de `AVPlayer.rate`:
 pausado, `AVPlayer.rate` es cero, pero la UI conserva 0.75–2× y Play reanuda
 con la selección. La barra muestra posición aproximadamente cada segundo;
 durante arrastre solo actualiza la vista y al soltar emite un único seek. Al
-abandonar realmente la ruta se llama `close()` una sola vez y se refresca
-Biblioteca al recuperar foco. Abrir no reproduce automáticamente. Un elemento
+abandonar realmente la ruta sin PiP se llama `close()` una sola vez; con PiP
+activo, C1 conserva player, item y lease hasta restauración o cierre. Biblioteca
+se refresca al recuperar foco. Abrir no reproduce automáticamente. Un elemento
 terminado se prepara en cero y ofrece “Reproducir de nuevo”.
 
 ## Paso 3: audio del sistema y segundo plano
@@ -89,9 +91,10 @@ la pantalla solicita el estado nativo actualizado, incluido progreso y
 velocidad seleccionada. La persistencia periódica (~12 s de reproducción
 efectiva) sigue siendo nativa y no depende de JavaScript activo.
 
-## Pendiente
+## Estado posterior a B
 
-Subfase C: Picture in Picture y temporizador de apagado. PiP permanece
-expresamente desactivado; este paso no agrega descargas en segundo plano.
-La reproducción con pantalla bloqueada, Bluetooth/AirPods y cambios reales de
-salida requiere validación física en iPhone, aparte de las pruebas automatizadas.
+El audio en segundo plano, Lock Screen, Bluetooth/AirPods y cambios de salida
+se validaron físicamente en iPhone. C1 añadió y validó PiP para video local;
+véase [la documentación de C1](library-phase-c.md). El temporizador de apagado
+queda fuera de v1.1.0 por decisión de producto. No se añadieron descargas en
+segundo plano.

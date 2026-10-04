@@ -1,8 +1,24 @@
-# MediaDrop
+# Drop
 
-Aplicación Expo para iPhone y backend FastAPI para analizar y descargar recursos multimedia autorizados. La fase 0.6 añade videos públicos individuales de YouTube mediante `yt-dlp`, FFmpeg y ffprobe, sin romper la entrega directa de MP4/MP3/M4A/AAC.
+Aplicación para iPhone que descarga contenido multimedia autorizado y conserva
+las nuevas descargas en una Biblioteca local persistente. La candidata v1.1.0
+añade reproducción offline de MP4/M4A, progreso y reanudación, audio en segundo
+plano, controles del sistema y Picture in Picture para video. YouTube se analiza
+y descarga en el dispositivo; los recursos directos conservan su arquitectura
+existente. No se usan cookies, cuentas de Google, proxies ni mecanismos para
+eludir DRM o controles de acceso. Esta versión todavía requiere validación
+física final antes del commit, tag o publicación.
 
-El backend público actual sigue ejecutando la fase 0.5 hasta que se apruebe manualmente el despliegue de este commit 0.6. No se usan cookies, cuentas de Google, proxies, playlists ni mecanismos para eludir DRM o controles de acceso.
+Véanse las [notas de la candidata v1.1.0](docs/release-notes-v1.1.0.md) y el
+[procedimiento de Release reproducible](docs/reproducible-ios-release.md).
+
+## Referencia histórica: fase 0.6
+
+El material siguiente documenta la arquitectura y los comandos de la fase
+0.6; no describe por completo el flujo móvil vigente de v1.1.0. La fase 0.6
+introdujo videos públicos individuales de YouTube en el backend mediante
+`yt-dlp`, FFmpeg y ffprobe, junto a recursos directos. En aquel momento el
+backend público aún ejecutaba la fase 0.5 hasta aprobar su despliegue.
 
 ## Estructura
 

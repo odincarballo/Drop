@@ -1,7 +1,8 @@
 # Biblioteca — Subfase C1: Picture in Picture
 
-C1 añade PiP solo al video MP4 local. C2 (temporizador de apagado) sigue
-pendiente y no forma parte de este cambio. Se conserva un único `AVPlayer`,
+C1 añade PiP solo al video MP4 local. C1 quedó validado físicamente en iPhone.
+El temporizador de apagado (C2) queda fuera de v1.1.0 por decisión de producto;
+no es un requisito pendiente para cerrar esta versión. Se conserva un único `AVPlayer`,
 un único `AVPlayerItem`, la identidad de Biblioteca y el player lease nativo.
 No hay segunda pista de audio ni copia del medio.
 
@@ -52,6 +53,9 @@ rate y seek. Interrupciones y cambios de ruta conservan la política de B3:
 
 Límites: disponibilidad y auto-PiP dependen del dispositivo, la preferencia
 del usuario y AVKit. El botón se deshabilita si el sistema no puede iniciarlo.
-La restauración y las transiciones fullscreen/PiP requieren validación física
-en iPhone; las pruebas automáticas no demuestran la UI del sistema. C2 queda
-reservado para el temporizador de 15/30/60 minutos y “Al terminar”.
+La restauración, auto-PiP, las transiciones fullscreen/PiP y Delete del item
+activo en PiP se validaron físicamente en iPhone. El fin natural dentro de PiP
+está cubierto por pruebas automatizadas, no por una prueba física específica.
+La disponibilidad y el inicio automático siguen sujetos a iOS y a las
+preferencias del usuario. El temporizador puede reconsiderarse en una versión
+futura, sin formar parte de v1.1.0.
