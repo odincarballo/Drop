@@ -33,6 +33,9 @@ jest.mock('@/services/playback', () => ({
     seek: jest.fn(),
     setRate: jest.fn(),
     enterFullscreen: jest.fn(),
+    startPiP: jest.fn(),
+    leavePlayerScreen: jest.fn(),
+    completePiPRestore: jest.fn(),
   },
 }));
 jest.mock('@/components/PlaybackVideoSurface', () => {
@@ -121,6 +124,9 @@ beforeEach(() => {
     playable: true,
     completed: false,
     fullscreen: false,
+    pipPresentation: 'inline',
+    pipSupported: true,
+    pipAvailable: true,
     errorCode: null,
   };
   mockEmit = null;
@@ -131,10 +137,25 @@ beforeEach(() => {
     return mockUnsubscribe;
   });
   jest.mocked(playback.open).mockImplementation(async () => mockState);
-  jest.mocked(playback.getState).mockImplementation(async () => mockState);
+  jest
+    .mocked(playback.getState)
+    .mockImplementation(async () =>
+      jest.mocked(playback.open).mock.calls.length === 0
+        ? { ...mockState, libraryId: null, status: 'idle' }
+        : mockState,
+    );
   jest
     .mocked(playback.close)
     .mockResolvedValue({ ...mockState, status: 'idle' });
+  jest.mocked(playback.leavePlayerScreen).mockResolvedValue({
+    ...mockState,
+    status: 'idle',
+  });
+  jest.mocked(playback.startPiP).mockResolvedValue({
+    ...mockState,
+    pipPresentation: 'pipStarting',
+  });
+  jest.mocked(playback.completePiPRestore).mockResolvedValue(mockState);
   jest.mocked(playback.play).mockImplementation(async () => {
     mockState = { ...mockState, status: 'playing', completed: false };
     return mockState;
@@ -329,7 +350,7 @@ test('rerender does not close; leaving route unsubscribes and closes once', asyn
   await rendered.rerender(<PlayerScreen />);
   expect(playback.close).not.toHaveBeenCalled();
   await rendered.unmount();
-  expect(playback.close).toHaveBeenCalledTimes(1);
+  expect(playback.leavePlayerScreen).toHaveBeenCalledTimes(1);
   expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
   expect(mockRemoveAppState).toHaveBeenCalledTimes(1);
 });
@@ -350,7 +371,7 @@ test('background keeps native item; foreground adopts actual position and select
   ).toBe(true);
   expect(playback.close).not.toHaveBeenCalled();
   await rendered.unmount();
-  expect(playback.close).toHaveBeenCalledTimes(1);
+  expect(playback.leavePlayerScreen).toHaveBeenCalledTimes(1);
 });
 
 test('missing media and fallback artwork are handled without exposing a path', async () => {
@@ -371,4 +392,63 @@ test('missing media and fallback artwork are handled without exposing a path', a
       screen.getByText('Este archivo ya no está disponible en Biblioteca.'),
     ).toBeTruthy(),
   );
+});
+
+test('PiP is offered only for available video and starts without a second open', async () => {
+  jest.mocked(getLibraryItem).mockResolvedValue(video as never);
+  await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByText('Video local')).toBeTruthy());
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Picture in Picture' }),
+  );
+  expect(playback.startPiP).toHaveBeenCalledTimes(1);
+  expect(playback.open).toHaveBeenCalledTimes(1);
+});
+
+test('PiP unavailable disables the video action; audio has no PiP action', async () => {
+  jest.mocked(getLibraryItem).mockResolvedValue(video as never);
+  mockState = { ...mockState, pipAvailable: false };
+  const rendered = await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByText('Video local')).toBeTruthy());
+  expect(
+    screen.getByRole('button', { name: 'Picture in Picture' }).props
+      .accessibilityState.disabled,
+  ).toBe(true);
+  await rendered.unmount();
+  jest.mocked(getLibraryItem).mockResolvedValue(audio as never);
+  await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast local')).toBeTruthy());
+  expect(
+    screen.queryByRole('button', { name: 'Picture in Picture' }),
+  ).toBeNull();
+});
+
+test('restoration adopts the existing item without a second open', async () => {
+  jest.mocked(getLibraryItem).mockResolvedValue(video as never);
+  mockState = { ...mockState, pipPresentation: 'restoringUI' };
+  jest.mocked(playback.getState).mockImplementation(async () => mockState);
+  jest.mocked(playback.completePiPRestore).mockImplementation(async () => {
+    expect(screen.getByTestId('video-surface')).toBeTruthy();
+    return mockState;
+  });
+  await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByText('Video local')).toBeTruthy());
+  await waitFor(() =>
+    expect(playback.completePiPRestore).toHaveBeenCalledWith(true),
+  );
+  expect(playback.open).not.toHaveBeenCalled();
+});
+
+test('a route containing an active PiP item adopts it and delegates exit to native', async () => {
+  jest.mocked(getLibraryItem).mockResolvedValue(video as never);
+  mockState = { ...mockState, status: 'playing', pipPresentation: 'pip' };
+  jest.mocked(playback.getState).mockImplementation(async () => mockState);
+  jest.mocked(playback.leavePlayerScreen).mockResolvedValue(mockState);
+  const rendered = await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByText('Video local')).toBeTruthy());
+  expect(screen.getByText('Video en Picture in Picture')).toBeTruthy();
+  expect(playback.open).not.toHaveBeenCalled();
+  await rendered.unmount();
+  expect(playback.leavePlayerScreen).toHaveBeenCalledWith(mockId);
+  expect(playback.close).not.toHaveBeenCalled();
 });

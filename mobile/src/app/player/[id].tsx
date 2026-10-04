@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AppState,
   Image,
@@ -66,6 +66,18 @@ export default function PlayerScreen() {
   const [scrubPosition, setScrubPosition] = useState<number | null>(null);
   const isScrubbing = useRef(false);
   const seekGeneration = useRef(0);
+  const restoreAcknowledged = useRef(false);
+
+  useEffect(() => {
+    if (state?.pipPresentation !== 'restoringUI') {
+      restoreAcknowledged.current = false;
+      return;
+    }
+    if (item?.id !== id || restoreAcknowledged.current) return;
+    // Effects run after the route's native video surface is committed.
+    restoreAcknowledged.current = true;
+    void playback.completePiPRestore(true).catch(() => undefined);
+  }, [id, item?.id, state?.pipPresentation]);
 
   useFocusEffect(
     useCallback(() => {
@@ -111,7 +123,13 @@ export default function PlayerScreen() {
             );
             return;
           }
-          await playback.open(id);
+          const current = await playback.getState();
+          if (
+            current.libraryId !== id ||
+            ['idle', 'failed'].includes(current.status)
+          ) {
+            await playback.open(id);
+          }
           const latest = await playback.getState();
           if (active) setState(latest);
         } catch {
@@ -127,7 +145,7 @@ export default function PlayerScreen() {
         appSubscription.remove();
         // Ordered after an in-flight open. The route's focus cleanup, not a
         // component rerender, owns this one close and its native progress flush.
-        void playback.close().catch(() => undefined);
+        void playback.leavePlayerScreen(id).catch(() => undefined);
       };
     }, [id]),
   );
@@ -180,9 +198,22 @@ export default function PlayerScreen() {
         >
           <Text style={{ color: colors.text }}>‹ Biblioteca</Text>
         </Pressable>
-        {item?.mediaType === 'video' && playable(item) ? (
+        {item?.mediaType === 'video' &&
+        playable(item) &&
+        !['pipStarting', 'pip', 'pipStopping'].includes(
+          state?.pipPresentation ?? '',
+        ) ? (
           <View style={styles.videoBox}>
             <PlaybackVideoSurface style={styles.video} />
+          </View>
+        ) : item?.mediaType === 'video' &&
+          ['pipStarting', 'pip', 'pipStopping'].includes(
+            state?.pipPresentation ?? '',
+          ) ? (
+          <View style={[styles.videoBox, styles.pipPlaceholder]}>
+            <Text style={{ color: colors.secondary }}>
+              Video en Picture in Picture
+            </Text>
           </View>
         ) : (
           <View style={[styles.artworkBox, { backgroundColor: colors.subtle }]}>
@@ -328,14 +359,34 @@ export default function PlayerScreen() {
               ))}
             </View>
             {item?.mediaType === 'video' ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Pantalla completa"
-                onPress={() => void command(() => playback.enterFullscreen())}
-                style={[styles.fullscreen, { borderColor: colors.border }]}
-              >
-                <Text style={{ color: colors.text }}>Pantalla completa</Text>
-              </Pressable>
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Pantalla completa"
+                  onPress={() => void command(() => playback.enterFullscreen())}
+                  style={[styles.fullscreen, { borderColor: colors.border }]}
+                >
+                  <Text style={{ color: colors.text }}>Pantalla completa</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Picture in Picture"
+                  accessibilityState={{ disabled: !state.pipAvailable }}
+                  disabled={!state.pipAvailable}
+                  onPress={() => void command(() => playback.startPiP())}
+                  style={[styles.fullscreen, { borderColor: colors.border }]}
+                >
+                  <Text
+                    style={{
+                      color: state.pipAvailable
+                        ? colors.text
+                        : colors.secondary,
+                    }}
+                  >
+                    Picture in Picture
+                  </Text>
+                </Pressable>
+              </>
             ) : null}
           </>
         ) : null}
@@ -356,6 +407,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   video: { width: '100%', height: '100%' },
+  pipPlaceholder: { alignItems: 'center', justifyContent: 'center' },
   artworkBox: {
     width: '85%',
     maxWidth: 340,

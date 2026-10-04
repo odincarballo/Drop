@@ -19,6 +19,7 @@ enum DropPlaybackError: Error {
   case invalidRate
   case audioSession
   case superseded
+  case pipUnavailable
 
   var code: String {
     switch self {
@@ -31,6 +32,7 @@ enum DropPlaybackError: Error {
     case .invalidRate: return "INVALID_RATE"
     case .audioSession: return "AUDIO_SESSION_FAILED"
     case .superseded: return "SUPERSEDED"
+    case .pipUnavailable: return "PIP_UNAVAILABLE"
     }
   }
 
@@ -45,6 +47,7 @@ enum DropPlaybackError: Error {
     case .invalidRate: return "Esta velocidad no está disponible."
     case .audioSession: return "No se pudo activar el audio del dispositivo."
     case .superseded: return "La operación fue sustituida por otra."
+    case .pipUnavailable: return "Picture in Picture no está disponible ahora."
     }
   }
 }
@@ -65,7 +68,77 @@ final class DropPlaybackService {
   private var activeID: String?
   private var activeMediaType: String?
   #if canImport(UIKit)
-  private var fullscreenController: DropPlaybackFullscreenController?
+  private struct PiPRestoreIntent {
+    let id: String
+    let generation: UInt64
+    let item: AVPlayerItem
+    let transportEpoch: UInt64
+    let selectedRate: Double
+  }
+  private struct FullscreenDismissIntent {
+    let id: String
+    let generation: UInt64
+    let item: AVPlayerItem
+    let transportEpoch: UInt64
+    let selectedRate: Double
+    let wasPlaying: Bool
+  }
+  private var transportEpoch: UInt64 = 0
+  private var pipRestoreIntent: PiPRestoreIntent?
+  private var fullscreenDismissIntent: FullscreenDismissIntent?
+  private var pendingPiPStopReason: DropPiPStopReason = .replacement
+  private var fullscreenController: AVPlayerViewController?
+  private lazy var pip: DropPlaybackPiPCoordinator = {
+    let coordinator = DropPlaybackPiPCoordinator()
+    coordinator.onChange = { [weak self, weak coordinator] in
+      guard let self, let coordinator else { return }
+      if coordinator.ownsFullscreenPiP { self.fullscreenDismissIntent = nil }
+      coordinator.updateAutomaticStart(playing: self.state == "playing",
+        inlineVisible: self.fullscreenController == nil && coordinator.sourceLayer != nil)
+      self.emit()
+    }
+    coordinator.onSystemStop = { [weak self] token, reason in
+      guard let self, token == self.generation else { return }
+      // A system stop without a completed UI restoration is never hidden audio.
+      Task { @MainActor [weak self] in
+        guard let self, token == self.generation else { return }
+        _ = try? await self.close()
+      }
+    }
+    coordinator.onRestore = { [weak self] token in
+      guard let self, token == self.generation, let id = self.activeID else { return }
+      // Snapshot effective playback before AVKit hands the PiP surface back.
+      // AVKit can set rate to zero while stopping PiP; that is not a user pause.
+      if let item = self.player.currentItem,
+         self.state == "playing", self.player.rate > 0,
+         self.player.timeControlStatus == .playing {
+        self.pipRestoreIntent = PiPRestoreIntent(id: id, generation: token,
+          item: item, transportEpoch: self.transportEpoch, selectedRate: self.rate)
+      } else {
+        self.pipRestoreIntent = nil
+      }
+      self.onRestore?(id)
+    }
+    coordinator.onRestoreStopped = { [weak self] token in
+      guard let self else { return }
+      // Wait until AVKit's didStop handoff and queued rate observation settle.
+      Task { @MainActor [weak self] in
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        self?.restoreEffectivePlayback(token: token)
+      }
+    }
+    coordinator.onFullscreenDismissWillBegin = { [weak self] in
+      self?.captureFullscreenDismissIntent()
+    }
+    coordinator.onFullscreenDismissCancelled = { [weak self] in
+      self?.finishFullscreenDismiss(completed: false)
+    }
+    coordinator.onFullscreenDismiss = { [weak self] in
+      self?.finishFullscreenDismiss(completed: true)
+    }
+    return coordinator
+  }()
+  var onRestore: ((String) -> Void)?
   #endif
   private var state = "idle"
   private var position: Double = 0
@@ -83,6 +156,7 @@ final class DropPlaybackService {
   private var timeObserver: Any?
   #if canImport(UIKit)
   private var rateObservation: NSKeyValueObservation?
+  private var defaultRateObservation: NSKeyValueObservation?
   private var timeJumpObservation: NSObjectProtocol?
   #endif
   private var pendingSave: Task<Void, Never>?
@@ -98,13 +172,31 @@ final class DropPlaybackService {
     player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
     #endif
     #if canImport(UIKit)
-    rateObservation = player.observe(\.rate, options: [.new]) { [weak self] player, _ in
+    defaultRateObservation = player.observe(\.defaultRate, options: [.new]) {
+      [weak self] player, _ in
+      let observedItem = player.currentItem
       Task { @MainActor [weak self] in
-        guard let self, self.fullscreenController != nil,
-              self.player.currentItem != nil else { return }
+        guard let self, let observedItem,
+              self.player.currentItem === observedItem else { return }
         let selected = Double(player.defaultRate)
-        if PlaybackPolicy.rates.contains(selected) { self.rate = selected }
+        guard PlaybackPolicy.rates.contains(selected), self.rate != selected else { return }
+        self.rate = selected
+        self.emit()
+        self.updateNowPlaying()
+      }
+    }
+    rateObservation = player.observe(\.rate, options: [.new]) { [weak self] player, _ in
+      let observedItem = player.currentItem
+      Task { @MainActor [weak self] in
+        guard let self,
+              let observedItem,
+              self.player.currentItem === observedItem else { return }
         if player.rate > 0 {
+          let selected = Double(player.rate)
+          if PlaybackPolicy.rates.contains(selected) {
+            self.rate = selected
+            self.player.defaultRate = Float(selected)
+          }
           do { try self.system.activate() }
           catch { await self.failCurrent(.audioSession, token: self.generation); return }
           self.position = self.safeCurrentPosition()
@@ -115,12 +207,15 @@ final class DropPlaybackService {
           }
           if self.state != "playing" { self.state = "playing"; self.emit() }
           self.updateNowPlaying()
+          self.pip.updateAutomaticStart(playing: true,
+            inlineVisible: self.fullscreenController == nil && self.pip.sourceLayer != nil)
         } else if self.state == "playing" {
           self.state = "paused"
           self.position = self.safeCurrentPosition()
           self.dirty = true
           self.emit()
           self.updateNowPlaying()
+          self.pip.updateAutomaticStart(playing: false, inlineVisible: false)
           do { try await self.persist() }
           catch { self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit() }
         }
@@ -130,12 +225,18 @@ final class DropPlaybackService {
   }
 
   func snapshot() -> [String: Any] {
-    ["libraryId": activeID as Any? ?? NSNull(), "status": state,
+    var result: [String: Any] = ["libraryId": activeID as Any? ?? NSNull(), "status": state,
      "position": position, "duration": duration as Any? ?? NSNull(),
      "rate": rate, "playable": ["ready", "paused", "playing", "ended"].contains(state),
      "fullscreen": fullscreenActive,
      "completed": completedAt != nil,
      "errorCode": errorCode as Any? ?? NSNull()]
+    #if canImport(UIKit)
+    result["pipPresentation"] = pip.presentation.rawValue
+    result["pipSupported"] = pip.isSupported
+    result["pipAvailable"] = pip.canStartInline
+    #endif
+    return result
   }
 
   private func emit() { onState?(snapshot()) }
@@ -167,6 +268,10 @@ final class DropPlaybackService {
     }
     guard !leases.isDeleting(id) else { throw DropPlaybackError.unavailable }
     generation &+= 1
+    #if canImport(UIKit)
+    pipRestoreIntent = nil
+    fullscreenDismissIntent = nil
+    #endif
     let token = generation
     try await retireCurrent()
     guard token == generation, !leases.isDeleting(id) else {
@@ -214,6 +319,9 @@ final class DropPlaybackService {
       try current(token, id: id)
       duration = seconds
       activeMediaType = record.mediaType
+      #if canImport(UIKit)
+      pip.configure(token: token, mediaType: record.mediaType, player: player)
+      #endif
       completedAt = record.completedAt
       position = PlaybackPolicy.restored(position: record.position, duration: seconds,
         wasCompleted: record.completedAt != nil)
@@ -281,6 +389,12 @@ final class DropPlaybackService {
         if let pendingSave = self.pendingSave { await pendingSave.value }
         guard token == self.generation else { return }
         try? await self.persist()
+        #if canImport(UIKit)
+        if self.activeMediaType == "video", self.pip.isActiveOrTransitioning {
+          self.pendingPiPStopReason = .itemEnded
+          _ = try? await self.close()
+        }
+        #endif
       }
     }
     failureObservation = NotificationCenter.default.addObserver(
@@ -297,7 +411,6 @@ final class DropPlaybackService {
     ) { [weak self] _ in
       Task { @MainActor [weak self] in
         guard let self, token == self.generation,
-              self.fullscreenController != nil,
               self.player.currentItem === item,
               ["ready", "paused", "playing", "ended"].contains(self.state)
         else { return }
@@ -390,12 +503,21 @@ final class DropPlaybackService {
     lastSave = Date()
     emit()
     updateNowPlaying()
+    #if canImport(UIKit)
+    pip.updateAutomaticStart(playing: true,
+      inlineVisible: fullscreenController == nil && pip.sourceLayer != nil)
+    #endif
     return snapshot()
   }
 
   func pause() async throws -> [String: Any] {
     guard player.currentItem != nil else { throw DropPlaybackError.notReady }
     let token = generation
+    #if canImport(UIKit)
+    transportEpoch &+= 1
+    pipRestoreIntent = nil
+    fullscreenDismissIntent = nil
+    #endif
     player.pause()
     if state == "playing" || state == "interrupted" { state = "paused" }
     wasPlayingBeforeInterruption = false
@@ -406,6 +528,9 @@ final class DropPlaybackService {
     try await persist()
     emit()
     updateNowPlaying()
+    #if canImport(UIKit)
+    pip.updateAutomaticStart(playing: false, inlineVisible: false)
+    #endif
     return snapshot()
   }
 
@@ -438,6 +563,12 @@ final class DropPlaybackService {
 
   func setRate(_ value: Double) throws -> [String: Any] {
     guard PlaybackPolicy.rates.contains(value) else { throw DropPlaybackError.invalidRate }
+    #if canImport(UIKit)
+    if fullscreenDismissIntent != nil {
+      transportEpoch &+= 1
+      fullscreenDismissIntent = nil
+    }
+    #endif
     rate = value
     player.defaultRate = Float(value)
     if state == "playing" { player.rate = Float(value) }
@@ -460,27 +591,22 @@ final class DropPlaybackService {
     else { throw DropPlaybackError.unavailable }
     var presenter = root
     while let presented = presenter.presentedViewController { presenter = presented }
-    let controller = DropPlaybackFullscreenController()
-    controller.player = player
+    let controller = AVPlayerViewController()
     controller.speeds = PlaybackPolicy.rates.map {
       AVPlaybackSpeed(rate: Float($0), localizedName: "\($0)×")
     }
-    controller.allowsPictureInPicturePlayback = false
-    controller.canStartPictureInPictureAutomaticallyFromInline = false
     controller.modalPresentationStyle = .fullScreen
-    controller.didDisappear = { [weak self, weak controller] in
-      Task { @MainActor [weak self, weak controller] in
-        guard let self, self.fullscreenController === controller else { return }
-        self.restoreInline()
-      }
-    }
+    try pip.enterFullscreen(controller)
+    controller.player = player
     fullscreenController = controller
+    pip.updateAutomaticStart(playing: state == "playing", inlineVisible: false)
     DropPlaybackOrientation.fullscreen = true
     root.setNeedsUpdateOfSupportedInterfaceOrientations()
     scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in }
     await withCheckedContinuation { continuation in
       presenter.present(controller, animated: true) { continuation.resume() }
     }
+    controller.presentationController?.delegate = pip
     emit()
     updateNowPlaying()
     return snapshot()
@@ -493,18 +619,70 @@ final class DropPlaybackService {
         controller.dismiss(animated: true) { continuation.resume() }
       }
     }
-    restoreInline()
+    finishFullscreenDismiss(completed: true)
     return snapshot()
   }
 
+  private func captureFullscreenDismissIntent() {
+    guard fullscreenController != nil, !pip.ownsFullscreenPiP,
+          fullscreenDismissIntent == nil, let id = activeID,
+          let item = player.currentItem else { return }
+    fullscreenDismissIntent = FullscreenDismissIntent(id: id, generation: generation,
+      item: item, transportEpoch: transportEpoch, selectedRate: rate,
+      wasPlaying: state == "playing" && player.rate > 0)
+  }
+
+  private func finishFullscreenDismiss(completed: Bool) {
+    let intent = fullscreenDismissIntent
+    fullscreenDismissIntent = nil
+    if completed { restoreInline() }
+    guard let intent, intent.wasPlaying else { return }
+    // AVKit's rate and our KVO callback may settle just after the visual
+    // handoff. Restore only the same effective playback, never autoplay.
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 100_000_000)
+      self?.restoreEffectiveFullscreenPlayback(intent, completed: completed)
+    }
+  }
+
+  private func restoreEffectiveFullscreenPlayback(_ intent: FullscreenDismissIntent,
+    completed: Bool) {
+    let settled = completed
+      ? fullscreenController == nil && pip.presentation == .inline
+      : fullscreenController != nil && pip.presentation == .fullscreen
+    guard DropPiPPolicy.shouldResumeAfterFullscreenDismiss(
+      sameGeneration: intent.generation == generation,
+      sameID: activeID == intent.id,
+      sameItem: player.currentItem === intent.item,
+      unchangedIntent: transportEpoch == intent.transportEpoch,
+      wasPlaying: intent.wasPlaying,
+      safeState: state == "playing" || state == "paused",
+      transitionSettled: settled
+    ) else { return }
+    player.defaultRate = Float(intent.selectedRate)
+    if player.rate <= 0 {
+      player.playImmediately(atRate: Float(intent.selectedRate))
+    } else if abs(Double(player.rate) - intent.selectedRate) > 0.01 {
+      player.rate = Float(intent.selectedRate)
+    }
+    rate = intent.selectedRate
+    state = "playing"
+    emit()
+    updateNowPlaying()
+  }
+
   private func restoreInline() {
+    if pip.ownsFullscreenPiP { return }
     guard fullscreenController != nil || DropPlaybackOrientation.fullscreen else { return }
-    let selected = Double(player.defaultRate)
-    if PlaybackPolicy.rates.contains(selected) { rate = selected }
-    fullscreenController?.didDisappear = nil
-    fullscreenController?.player = nil
+    // Detach fullscreen rendering before the PiP coordinator reconnects the
+    // inline AVPlayerLayer. Dismissal itself belongs to UIKit/exitFullscreen.
+    let controller = fullscreenController
+    controller?.player = nil
+    pip.leaveFullscreen()
     fullscreenController = nil
     DropPlaybackOrientation.fullscreen = false
+    pip.updateAutomaticStart(playing: state == "playing",
+      inlineVisible: pip.sourceLayer != nil)
     for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
       scene.windows.first(where: { $0.isKeyWindow })?.rootViewController?
         .setNeedsUpdateOfSupportedInterfaceOrientations()
@@ -516,8 +694,65 @@ final class DropPlaybackService {
   }
   #endif
 
+  #if canImport(UIKit)
+  func attachVideoLayer(_ layer: AVPlayerLayer) {
+    pip.attach(layer, player: player)
+    pip.updateAutomaticStart(playing: state == "playing", inlineVisible: true)
+  }
+
+  func detachVideoLayer(_ layer: AVPlayerLayer) { pip.detach(layer) }
+
+  func startPiP() throws -> [String: Any] {
+    guard activeMediaType == "video", player.currentItem != nil else {
+      throw DropPlaybackError.notReady
+    }
+    try pip.startInline()
+    return snapshot()
+  }
+
+  func completePiPRestore(_ restored: Bool) -> [String: Any] {
+    if !restored { pipRestoreIntent = nil }
+    pip.completeRestore(restored)
+    return snapshot()
+  }
+
+  private func restoreEffectivePlayback(token: UInt64) {
+    guard let intent = pipRestoreIntent else { return }
+    pipRestoreIntent = nil
+    guard DropPiPPolicy.shouldResumeAfterRestore(
+      sameGeneration: token == generation && intent.generation == generation,
+      sameID: activeID == intent.id,
+      sameItem: player.currentItem === intent.item,
+      unchangedIntent: transportEpoch == intent.transportEpoch,
+      safeState: state == "playing" || state == "paused",
+      restored: pip.presentation == .inline || pip.presentation == .fullscreen
+    ) else { return }
+    // AVKit may have paused the existing player when completing the PiP handoff.
+    // This resumes only the playback that was effectively running beforehand.
+    if player.rate <= 0 {
+      player.defaultRate = Float(intent.selectedRate)
+      player.playImmediately(atRate: Float(intent.selectedRate))
+    }
+    rate = intent.selectedRate
+    state = "playing"
+    emit()
+    updateNowPlaying()
+  }
+
+  func leavePlayerScreen(_ id: String) async throws -> [String: Any] {
+    guard activeID == id else { return snapshot() }
+    if pip.isActiveOrTransitioning { return snapshot() }
+    return try await close()
+  }
+  #endif
+
   func close() async throws -> [String: Any] {
     generation &+= 1
+    #if canImport(UIKit)
+    transportEpoch &+= 1
+    pipRestoreIntent = nil
+    fullscreenDismissIntent = nil
+    #endif
     try await retireCurrent()
     state = "idle"
     errorCode = nil
@@ -529,6 +764,11 @@ final class DropPlaybackService {
     guard UUID(uuidString: id) != nil else { throw DropPlaybackError.invalidID }
     if leases.beginDelete(id) {
       generation &+= 1
+      #if canImport(UIKit)
+      transportEpoch &+= 1
+      pipRestoreIntent = nil
+      fullscreenDismissIntent = nil
+      #endif
       do { try await retireCurrent() }
       catch { leases.endDelete(id); throw error }
       state = "idle"
@@ -574,6 +814,11 @@ final class DropPlaybackService {
     case .seek(let seconds):
       _ = try? await seek(seconds)
     case .interruptionBegan:
+      #if canImport(UIKit)
+      transportEpoch &+= 1
+      pipRestoreIntent = nil
+      fullscreenDismissIntent = nil
+      #endif
       wasPlayingBeforeInterruption = state == "playing"
       guard wasPlayingBeforeInterruption else { return }
       player.pause()
@@ -592,6 +837,11 @@ final class DropPlaybackService {
       if state == "interrupted" { state = "paused"; emit(); updateNowPlaying() }
       if resume { _ = try? await play() }
     case .oldDeviceUnavailable:
+      #if canImport(UIKit)
+      transportEpoch &+= 1
+      pipRestoreIntent = nil
+      fullscreenDismissIntent = nil
+      #endif
       wasPlayingBeforeInterruption = false
       if state == "playing" || state == "interrupted" { _ = try? await pause() }
     case .newDeviceAvailable:
@@ -601,7 +851,12 @@ final class DropPlaybackService {
 
   private func retireCurrent() async throws {
     #if canImport(UIKit)
-    await exitFullscreen()
+    let stopReason: DropPiPStopReason = leases.isDeleting(activeID ?? "")
+      ? .delete : pendingPiPStopReason
+    try await pip.stop(reason: stopReason)
+    pendingPiPStopReason = .replacement
+    _ = await exitFullscreen()
+    pip.reset()
     #endif
     let id = activeID
     let finalPosition = safeCurrentPosition()

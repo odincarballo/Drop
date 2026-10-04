@@ -10,6 +10,16 @@ export type PlaybackStatus =
   | 'ended'
   | 'failed';
 
+export type PiPPresentation =
+  | 'inline'
+  | 'fullscreen'
+  | 'pipStarting'
+  | 'pip'
+  | 'pipStopping'
+  | 'restoringUI'
+  | 'backgroundAudio'
+  | 'closed';
+
 export type PlaybackState = {
   libraryId: string | null;
   status: PlaybackStatus;
@@ -19,6 +29,9 @@ export type PlaybackState = {
   playable: boolean;
   completed: boolean;
   fullscreen: boolean;
+  pipPresentation: PiPPresentation;
+  pipSupported: boolean;
+  pipAvailable: boolean;
   errorCode: string | null;
 };
 
@@ -33,10 +46,13 @@ type NativePlayback = {
   getState(): Promise<unknown>;
   enterFullscreen(): Promise<unknown>;
   exitFullscreen(): Promise<unknown>;
+  startPiP(): Promise<unknown>;
+  leavePlayerScreen(id: string): Promise<unknown>;
+  completePiPRestore(restored: boolean): Promise<unknown>;
   beginDelete(id: string): Promise<unknown>;
   endDelete(id: string): Promise<unknown>;
   addListener(
-    event: 'onPlaybackState',
+    event: 'onPlaybackState' | 'onPiPRestore',
     listener: (value: unknown) => void,
   ): { remove(): void };
 };
@@ -50,6 +66,16 @@ const statuses = new Set<PlaybackStatus>([
   'interrupted',
   'ended',
   'failed',
+]);
+const presentations = new Set<PiPPresentation>([
+  'inline',
+  'fullscreen',
+  'pipStarting',
+  'pip',
+  'pipStopping',
+  'restoringUI',
+  'backgroundAudio',
+  'closed',
 ]);
 const libraryIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -94,6 +120,13 @@ function safeState(value: unknown): PlaybackState {
     playable: source.playable === true,
     completed: source.completed === true,
     fullscreen: source.fullscreen === true,
+    pipPresentation:
+      typeof source.pipPresentation === 'string' &&
+      presentations.has(source.pipPresentation as PiPPresentation)
+        ? (source.pipPresentation as PiPPresentation)
+        : 'closed',
+    pipSupported: source.pipSupported === true,
+    pipAvailable: source.pipAvailable === true,
     errorCode:
       typeof source.errorCode === 'string' &&
       safeErrorCode.test(source.errorCode)
@@ -135,6 +168,34 @@ export const playback = {
     ordered(async (module) => safeState(await module.enterFullscreen())),
   exitFullscreen: () =>
     ordered(async (module) => safeState(await module.exitFullscreen())),
+  startPiP: () => ordered(async (module) => safeState(await module.startPiP())),
+  leavePlayerScreen: (libraryId: string) => {
+    if (!libraryIdPattern.test(libraryId))
+      return Promise.reject(
+        new Error('El elemento de Biblioteca no es válido.'),
+      );
+    return ordered(async (module) =>
+      safeState(await module.leavePlayerScreen(libraryId)),
+    );
+  },
+  completePiPRestore: (restored: boolean) =>
+    ordered(async (module) =>
+      safeState(await module.completePiPRestore(restored)),
+    ),
+  subscribeRestore: (listener: (libraryId: string) => void) => {
+    const subscription = native().addListener('onPiPRestore', (value) => {
+      const source =
+        value && typeof value === 'object'
+          ? (value as Record<string, unknown>)
+          : {};
+      if (
+        typeof source.libraryId === 'string' &&
+        libraryIdPattern.test(source.libraryId)
+      )
+        listener(source.libraryId);
+    });
+    return () => subscription.remove();
+  },
   subscribe: (listener: (state: PlaybackState) => void) => {
     const subscription = native().addListener('onPlaybackState', (value) => {
       listener(safeState(value));

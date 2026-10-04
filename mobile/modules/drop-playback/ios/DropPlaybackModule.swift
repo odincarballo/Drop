@@ -10,7 +10,7 @@ private final class PlaybackOperationException: Exception, @unchecked Sendable {
 public final class DropPlaybackModule: Module {
   public func definition() -> ModuleDefinition {
     Name("DropPlayback")
-    Events("onPlaybackState")
+    Events("onPlaybackState", "onPiPRestore")
 
     View(DropPlaybackVideoView.self) {}
 
@@ -19,11 +19,17 @@ public final class DropPlaybackModule: Module {
         DropPlaybackService.shared.onState = { [weak self] state in
           self?.sendEvent("onPlaybackState", state)
         }
+        DropPlaybackService.shared.onRestore = { [weak self] id in
+          self?.sendEvent("onPiPRestore", ["libraryId": id])
+        }
       }
     }
 
     OnDestroy {
-      Task { @MainActor in DropPlaybackService.shared.onState = nil }
+      Task { @MainActor in
+        DropPlaybackService.shared.onState = nil
+        DropPlaybackService.shared.onRestore = nil
+      }
     }
 
     AsyncFunction("open") { (id: String, promise: Promise) in
@@ -55,6 +61,15 @@ public final class DropPlaybackModule: Module {
     }
     AsyncFunction("exitFullscreen") { (promise: Promise) in
       self.run(promise) { await DropPlaybackService.shared.exitFullscreen() }
+    }
+    AsyncFunction("startPiP") { (promise: Promise) in
+      self.run(promise) { try DropPlaybackService.shared.startPiP() }
+    }
+    AsyncFunction("completePiPRestore") { (restored: Bool, promise: Promise) in
+      self.run(promise) { DropPlaybackService.shared.completePiPRestore(restored) }
+    }
+    AsyncFunction("leavePlayerScreen") { (id: String, promise: Promise) in
+      self.run(promise) { try await DropPlaybackService.shared.leavePlayerScreen(id) }
     }
     AsyncFunction("beginDelete") { (id: String, promise: Promise) in
       self.run(promise) {

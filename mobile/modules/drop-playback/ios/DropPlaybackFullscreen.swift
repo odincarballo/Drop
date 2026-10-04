@@ -20,12 +20,3 @@ public final class DropPlaybackOrientationSubscriber: ExpoAppDelegateSubscriber 
     DropPlaybackOrientation.allowedMask
   }
 }
-
-final class DropPlaybackFullscreenController: AVPlayerViewController {
-  var didDisappear: (() -> Void)?
-
-  override func viewDidDisappear(_ animated: Bool) {
-    super.viewDidDisappear(animated)
-    if isBeingDismissed || presentingViewController == nil { didDisappear?() }
-  }
-}

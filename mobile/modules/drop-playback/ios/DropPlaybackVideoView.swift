@@ -11,12 +11,15 @@ final class DropPlaybackVideoView: ExpoView {
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     videoLayer.videoGravity = .resizeAspect
-    videoLayer.player = DropPlaybackService.shared.player
     backgroundColor = .black
   }
 
   override func willMove(toSuperview newSuperview: UIView?) {
     super.willMove(toSuperview: newSuperview)
-    videoLayer.player = newSuperview == nil ? nil : DropPlaybackService.shared.player
+    if newSuperview == nil {
+      DropPlaybackService.shared.detachVideoLayer(videoLayer)
+    } else {
+      DropPlaybackService.shared.attachVideoLayer(videoLayer)
+    }
   }
 }

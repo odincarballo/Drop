@@ -10,6 +10,9 @@ const state = {
   playable: true,
   completed: false,
   fullscreen: false,
+  pipPresentation: 'inline',
+  pipSupported: true,
+  pipAvailable: true,
   errorCode: null,
   uri: 'file:///private/secret.mp4',
 };
@@ -27,6 +30,9 @@ const native = {
   getState: jest.fn(async () => state),
   enterFullscreen: jest.fn(async () => ({ ...state, fullscreen: true })),
   exitFullscreen: jest.fn(async () => state),
+  startPiP: jest.fn(async () => ({ ...state, pipPresentation: 'pipStarting' })),
+  leavePlayerScreen: jest.fn(async () => ({ ...state, status: 'idle' })),
+  completePiPRestore: jest.fn(async () => state),
   beginDelete: jest.fn(async () => ({ ready: true })),
   endDelete: jest.fn(async () => ({ ready: true })),
   addListener: jest.fn((_event: string, listener: (value: unknown) => void) => {
@@ -58,6 +64,9 @@ test('open uses only a library ID and returns a whitelisted state', async () => 
     playable: true,
     completed: false,
     fullscreen: false,
+    pipPresentation: 'inline',
+    pipSupported: true,
+    pipAvailable: true,
     errorCode: null,
   });
   expect(JSON.stringify(result)).not.toContain('file://');
@@ -126,4 +135,29 @@ test('events whitelist data and unsubscribe removes listener', () => {
   expect(listener.mock.calls[1][0].errorCode).toBeNull();
   unsubscribe();
   expect(remove).toHaveBeenCalledTimes(1);
+});
+
+test('PiP commands stay serialized and expose only sanitized presentation state', async () => {
+  const { playback } =
+    require('@/services/playback') as typeof import('@/services/playback');
+  const started = await playback.startPiP();
+  expect(native.startPiP).toHaveBeenCalledTimes(1);
+  expect(started.pipPresentation).toBe('pipStarting');
+  expect(JSON.stringify(started)).not.toContain('file://');
+  await playback.leavePlayerScreen(id);
+  expect(native.leavePlayerScreen).toHaveBeenCalledWith(id);
+  await expect(playback.leavePlayerScreen('file:///secret')).rejects.toThrow();
+});
+
+test('PiP restoration event accepts only library IDs and is removable', () => {
+  const { playback } =
+    require('@/services/playback') as typeof import('@/services/playback');
+  const listener = jest.fn();
+  const unsubscribe = playback.subscribeRestore(listener);
+  eventListener?.({ libraryId: 'file:///secret' });
+  expect(listener).not.toHaveBeenCalled();
+  eventListener?.({ libraryId: id, uri: 'file:///secret' });
+  expect(listener).toHaveBeenCalledWith(id);
+  unsubscribe();
+  expect(remove).toHaveBeenCalled();
 });
