@@ -126,7 +126,7 @@ public final class DropLibraryStorage {
     return (url, size)
   }
 
-  func managedArtwork(id: String) throws -> (URL, Int64)? {
+  public func managedArtwork(id: String) throws -> (URL, Int64)? {
     let url = artwork.appendingPathComponent("\(try Self.validatedID(id)).jpg")
     guard let size = try regularSize(url) else { return nil }
     guard size > 0, size <= 2 * 1_048_576,

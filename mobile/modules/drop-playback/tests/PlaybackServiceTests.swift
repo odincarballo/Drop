@@ -18,6 +18,38 @@ final class DropLibraryStorage {
     guard values?.isRegularFile == true else { return nil }
     return (url, Int64(values?.fileSize ?? 0))
   }
+
+  func managedArtwork(id: String) throws -> (URL, Int64)? {
+    let url = root.appendingPathComponent("Artwork/\(id).jpg")
+    let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+    guard values?.isRegularFile == true else { return nil }
+    return (url, Int64(values?.fileSize ?? 0))
+  }
+}
+
+@MainActor
+final class FakePlaybackSystemBridge: PlaybackSystemBridge {
+  var activations = 0
+  var clears = 0
+  var metadata: [(UInt64, String, URL?, Double, Double, Double)] = []
+  var updates: [(Double, Double)] = []
+  var failActivation = false
+  private var handler: (@MainActor (UInt64, PlaybackSystemEvent) async -> Void)?
+  var token: UInt64 { metadata.last!.0 }
+
+  func activate() throws {
+    activations += 1
+    if failActivation { throw PlaybackRepositoryError.unavailable }
+  }
+  func setItem(token: UInt64, title: String, artworkURL: URL?, duration: Double,
+               position: Double, rate: Double,
+               onEvent: @escaping @MainActor (UInt64, PlaybackSystemEvent) async -> Void) {
+    metadata.append((token, title, artworkURL, duration, position, rate))
+    handler = onEvent
+  }
+  func update(position: Double, rate: Double) { updates.append((position, rate)) }
+  func clear() { clears += 1; handler = nil }
+  func send(_ event: PlaybackSystemEvent) async { await handler?(token, event) }
 }
 
 final class FakeProgressRepository: PlaybackProgressRepository {
@@ -50,6 +82,8 @@ struct PlaybackServiceTests {
       .appendingPathComponent("DropPlaybackServiceTests-\(UUID().uuidString)")
     let media = root.appendingPathComponent("Media", isDirectory: true)
     try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+    let artwork = root.appendingPathComponent("Artwork", isDirectory: true)
+    try FileManager.default.createDirectory(at: artwork, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let first = "00000000-0000-0000-0000-000000000001"
     let second = "00000000-0000-0000-0000-000000000002"
@@ -57,6 +91,8 @@ struct PlaybackServiceTests {
     let fourth = "00000000-0000-0000-0000-000000000004"
     let fifth = "00000000-0000-0000-0000-000000000005"
     let audioOne = media.appendingPathComponent("\(first).m4a")
+    try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to:
+      artwork.appendingPathComponent("\(first).jpg"))
     let audioTwo = media.appendingPathComponent("\(second).m4a")
     try createAudio(at: audioOne)
     try FileManager.default.copyItem(at: audioOne, to: audioTwo)
@@ -66,9 +102,11 @@ struct PlaybackServiceTests {
     let videoSize = Int64(try video.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
     let repository = FakeProgressRepository()
     repository.records[first] = PlaybackRecord(id: first, relativeMediaPath: "Media/\(first).m4a",
-      mediaType: "audio", sizeBytes: size, position: 0.4, completedAt: nil)
+      mediaType: "audio", sizeBytes: size, position: 0.4, completedAt: nil,
+      title: "Podcast Uno", relativeArtworkPath: "Artwork/\(first).jpg")
     repository.records[second] = PlaybackRecord(id: second, relativeMediaPath: "Media/\(second).m4a",
-      mediaType: "audio", sizeBytes: size, position: 0.7, completedAt: "finished")
+      mediaType: "audio", sizeBytes: size, position: 0.7, completedAt: "finished",
+      title: "Podcast Dos")
     repository.records[third] = PlaybackRecord(id: third, relativeMediaPath: "Media/\(third).mp4",
       mediaType: "video", sizeBytes: videoSize, position: 0, completedAt: nil)
     repository.records[fourth] = PlaybackRecord(id: fourth,
@@ -79,13 +117,20 @@ struct PlaybackServiceTests {
     repository.records[fifth] = PlaybackRecord(id: fifth,
       relativeMediaPath: "Media/\(fifth).mp4", mediaType: "video",
       sizeBytes: 4, position: 0, completedAt: nil)
-    let service = DropPlaybackService(storage: DropLibraryStorage(root: root), repository: repository)
+    let system = FakePlaybackSystemBridge()
+    let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
+      repository: repository, system: system)
     let onePlayer = ObjectIdentifier(service.player)
 
     _ = try await service.open(id: first)
     try check(service.isRetaining(first))
     try await ready(service)
     try check(service.snapshot()["status"] as? String == "ready")
+    try check(system.activations == 0)
+    try check(system.metadata.last?.1 == "Podcast Uno")
+    try check(system.metadata.last?.2?.lastPathComponent == "\(first).jpg")
+    try check(system.metadata.last?.3 ?? 0 > 0)
+    try check(system.metadata.last?.5 == 0)
     try check(abs((service.snapshot()["position"] as? Double ?? 0) - 0.4) < 0.05)
     _ = try await service.seek(-20)
     try check(service.snapshot()["position"] as? Double == 0)
@@ -107,9 +152,51 @@ struct PlaybackServiceTests {
     try check(service.player.rate == 0)
     _ = try await service.play()
     try check(service.snapshot()["rate"] as? Double == 1.75)
+    try check(system.activations == 1)
+    try check(system.updates.last?.1 == 1.75)
+    await system.send(.pause)
+    try check(service.snapshot()["status"] as? String == "paused")
+    try check(system.updates.last?.1 == 0)
+    await system.send(.play)
+    try check(service.snapshot()["status"] as? String == "playing")
+    try check(service.snapshot()["rate"] as? Double == 1.75)
+    await system.send(.interruptionBegan)
+    try check(service.snapshot()["status"] as? String == "interrupted")
+    try check(repository.writes.last?.0 == first)
+    await system.send(.interruptionEnded(shouldResume: true))
+    try check(service.snapshot()["status"] as? String == "playing")
+    await system.send(.oldDeviceUnavailable)
+    try check(service.snapshot()["status"] as? String == "paused")
+    await system.send(.newDeviceAvailable)
+    try check(service.snapshot()["status"] as? String == "paused")
+    await system.send(.seek(0))
+    await system.send(.play)
+    await system.send(.interruptionBegan)
+    _ = try await service.pause()
+    await system.send(.interruptionEnded(shouldResume: true))
+    try check(service.snapshot()["status"] as? String == "paused")
+    await system.send(.seek(0))
+    await system.send(.play)
+    await system.send(.interruptionBegan)
+    await system.send(.interruptionEnded(shouldResume: false))
+    try check(service.snapshot()["status"] as? String == "paused")
+    await system.send(.interruptionBegan)
+    await system.send(.interruptionEnded(shouldResume: true))
+    try check(service.snapshot()["status"] as? String == "paused")
+    await system.send(.skip(15))
+    await system.send(.skip(-15))
+    await system.send(.seek(0.3))
+    try check(abs((service.snapshot()["position"] as? Double ?? 0) - 0.3) < 0.1)
     _ = try await service.pause()
 
     _ = try await service.open(id: second)
+    try check(system.metadata.last?.1 == "Podcast Dos")
+    try check(system.metadata.last?.2 == nil)
+    let oldToken = system.metadata[0].0
+    try check(system.token != oldToken)
+    await service.handleSystemEvent(token: oldToken, event: .play)
+    await service.handleSystemEvent(token: oldToken, event: .interruptionBegan)
+    try check(service.snapshot()["status"] as? String == "loading")
     try check(!service.isRetaining(first) && service.isRetaining(second))
     try check(repository.writes.contains(where: { $0.0 == first }))
     try await ready(service)
@@ -121,6 +208,7 @@ struct PlaybackServiceTests {
     try check(repository.writes.last?.2 == nil)
 
     try await service.beginDelete(second)
+    try check(system.clears > 0)
     try check(!service.isRetaining(second))
     try check(service.snapshot()["status"] as? String == "idle")
     do { _ = try await service.open(id: second); fatalError("deleting item opened") }
@@ -216,6 +304,20 @@ struct PlaybackServiceTests {
     catch DropPlaybackError.unavailable {}
     try check(!service.isRetaining(first))
 
+    repository.records[first] = PlaybackRecord(id: first,
+      relativeMediaPath: "Media/\(first).m4a", mediaType: "audio",
+      sizeBytes: size, position: 0, completedAt: nil)
+    let failingSystem = FakePlaybackSystemBridge()
+    failingSystem.failActivation = true
+    let failingService = DropPlaybackService(storage: DropLibraryStorage(root: root),
+      repository: repository, system: failingSystem)
+    _ = try await failingService.open(id: first)
+    try await ready(failingService)
+    do { _ = try await failingService.play(); fatalError("audio session failure ignored") }
+    catch DropPlaybackError.audioSession {}
+    try check(failingService.snapshot()["status"] as? String == "failed")
+    try check(!failingService.isRetaining(first))
+
     print("PlaybackServiceTests: passed")
   }
 
@@ -297,7 +399,8 @@ struct PlaybackServiceTests {
     guard writer.status == .completed else { throw PlaybackRepositoryError.unavailable }
   }
 
-  private static func check(_ value: @autoclosure () -> Bool) throws {
-    if !value() { fatalError("PlaybackServiceTests failed") }
+  private static func check(_ value: @autoclosure () -> Bool,
+                            file: StaticString = #fileID, line: UInt = #line) throws {
+    if !value() { fatalError("PlaybackServiceTests failed at \(file):\(line)") }
   }
 }

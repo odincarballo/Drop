@@ -17,6 +17,7 @@ enum DropPlaybackError: Error {
   case notReady
   case invalidPosition
   case invalidRate
+  case audioSession
   case superseded
 
   var code: String {
@@ -28,6 +29,7 @@ enum DropPlaybackError: Error {
     case .notReady: return "NOT_READY"
     case .invalidPosition: return "INVALID_POSITION"
     case .invalidRate: return "INVALID_RATE"
+    case .audioSession: return "AUDIO_SESSION_FAILED"
     case .superseded: return "SUPERSEDED"
     }
   }
@@ -41,6 +43,7 @@ enum DropPlaybackError: Error {
     case .notReady: return "El reproductor todavía no está listo."
     case .invalidPosition: return "La posición de reproducción no es válida."
     case .invalidRate: return "Esta velocidad no está disponible."
+    case .audioSession: return "No se pudo activar el audio del dispositivo."
     case .superseded: return "La operación fue sustituida por otra."
     }
   }
@@ -56,6 +59,7 @@ final class DropPlaybackService {
 
   private var repository: PlaybackProgressRepository?
   private var storage: DropLibraryStorage?
+  private let system: PlaybackSystemBridge
   private var generation: UInt64 = 0
   private let leases = PlaybackLeaseCoordinator()
   private var activeID: String?
@@ -67,6 +71,8 @@ final class DropPlaybackService {
   private var position: Double = 0
   private var duration: Double?
   private var rate: Double = 1
+  private var wasPlayingBeforeInterruption = false
+  private var lastNowPlayingUpdate = Date.distantPast
   private var completedAt: String?
   private var dirty = false
   private var lastSave = Date()
@@ -82,10 +88,15 @@ final class DropPlaybackService {
   private var pendingSave: Task<Void, Never>?
 
   init(player: AVPlayer = AVPlayer(), storage: DropLibraryStorage? = nil,
-       repository: PlaybackProgressRepository? = nil) {
+       repository: PlaybackProgressRepository? = nil,
+       system: PlaybackSystemBridge? = nil) {
     self.player = player
     self.storage = storage
     self.repository = repository
+    self.system = system ?? IOSPlaybackSystemBridge()
+    #if os(iOS)
+    player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+    #endif
     #if canImport(UIKit)
     rateObservation = player.observe(\.rate, options: [.new]) { [weak self] player, _ in
       Task { @MainActor [weak self] in
@@ -94,6 +105,8 @@ final class DropPlaybackService {
         let selected = Double(player.defaultRate)
         if PlaybackPolicy.rates.contains(selected) { self.rate = selected }
         if player.rate > 0 {
+          do { try self.system.activate() }
+          catch { await self.failCurrent(.audioSession, token: self.generation); return }
           self.position = self.safeCurrentPosition()
           if let duration = self.duration, self.completedAt != nil,
              !PlaybackPolicy.completed(position: self.position, duration: duration) {
@@ -101,11 +114,13 @@ final class DropPlaybackService {
             self.dirty = true
           }
           if self.state != "playing" { self.state = "playing"; self.emit() }
+          self.updateNowPlaying()
         } else if self.state == "playing" {
           self.state = "paused"
           self.position = self.safeCurrentPosition()
           self.dirty = true
           self.emit()
+          self.updateNowPlaying()
           do { try await self.persist() }
           catch { self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit() }
         }
@@ -167,6 +182,7 @@ final class DropPlaybackService {
     position = 0
     duration = nil
     completedAt = nil
+    wasPlayingBeforeInterruption = false
     emit()
     do {
       let (storage, repository) = try resources()
@@ -203,6 +219,18 @@ final class DropPlaybackService {
         wasCompleted: record.completedAt != nil)
       let item = AVPlayerItem(asset: asset)
       player.replaceCurrentItem(with: item)
+      let artworkURL: URL?
+      if record.relativeArtworkPath == "Artwork/\(id).jpg" {
+        artworkURL = (try? storage.managedArtwork(id: id))?.0
+      } else {
+        artworkURL = nil
+      }
+      system.setItem(token: token,
+        title: String(record.title.prefix(240)).trimmingCharacters(in: .whitespacesAndNewlines),
+        artworkURL: artworkURL, duration: seconds, position: position, rate: 0) {
+          [weak self] eventToken, event in
+          await self?.handleSystemEvent(token: eventToken, event: event)
+        }
       observe(item: item, token: token, restorePosition: position)
       return snapshot()
     } catch {
@@ -232,6 +260,7 @@ final class DropPlaybackService {
           guard token == self.generation else { return }
           self.state = "ready"
           self.emit()
+          self.updateNowPlaying()
         case .failed:
           await self.failCurrent(.invalidMedia, token: token)
         default: break
@@ -248,6 +277,7 @@ final class DropPlaybackService {
         self.state = "ended"
         self.dirty = true
         self.emit()
+        self.updateNowPlaying()
         if let pendingSave = self.pendingSave { await pendingSave.value }
         guard token == self.generation else { return }
         try? await self.persist()
@@ -279,6 +309,7 @@ final class DropPlaybackService {
         if self.state == "ended" { self.state = "paused" }
         self.dirty = true
         self.emit()
+        self.updateNowPlaying()
         do { try await self.persist() }
         catch { self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit() }
       }
@@ -300,6 +331,9 @@ final class DropPlaybackService {
           self.completedAt = ISO8601DateFormatter().string(from: Date())
         }
         self.emit()
+        if Date().timeIntervalSince(self.lastNowPlayingUpdate) >= 15 {
+          self.updateNowPlaying()
+        }
         if PlaybackPolicy.shouldPersist(
           elapsed: Date().timeIntervalSince(self.lastSave), hasProgress: self.dirty
         ), self.pendingSave == nil {
@@ -331,9 +365,16 @@ final class DropPlaybackService {
 
   func play() async throws -> [String: Any] {
     guard player.currentItem != nil,
-          ["ready", "paused", "ended"].contains(state) else { throw DropPlaybackError.notReady }
+          ["ready", "paused", "ended", "interrupted"].contains(state) else {
+      throw DropPlaybackError.notReady
+    }
+    let token = generation
+    do { try system.activate() }
+    catch {
+      await failCurrent(.audioSession, token: token)
+      throw DropPlaybackError.audioSession
+    }
     if state == "ended" {
-      let token = generation
       await seekPlayer(to: 0, token: token)
       guard token == generation else { throw DropPlaybackError.superseded }
       position = 0
@@ -345,8 +386,10 @@ final class DropPlaybackService {
     player.defaultRate = Float(rate)
     player.playImmediately(atRate: Float(rate))
     state = "playing"
+    wasPlayingBeforeInterruption = false
     lastSave = Date()
     emit()
+    updateNowPlaying()
     return snapshot()
   }
 
@@ -354,13 +397,15 @@ final class DropPlaybackService {
     guard player.currentItem != nil else { throw DropPlaybackError.notReady }
     let token = generation
     player.pause()
-    if state == "playing" { state = "paused" }
+    if state == "playing" || state == "interrupted" { state = "paused" }
+    wasPlayingBeforeInterruption = false
     position = safeCurrentPosition()
     dirty = true
     if let pendingSave { await pendingSave.value }
     guard token == generation else { throw DropPlaybackError.superseded }
     try await persist()
     emit()
+    updateNowPlaying()
     return snapshot()
   }
 
@@ -382,6 +427,7 @@ final class DropPlaybackService {
     guard token == generation else { throw DropPlaybackError.superseded }
     try await persist()
     emit()
+    updateNowPlaying()
     return snapshot()
   }
 
@@ -396,6 +442,7 @@ final class DropPlaybackService {
     player.defaultRate = Float(value)
     if state == "playing" { player.rate = Float(value) }
     emit()
+    updateNowPlaying()
     return snapshot()
   }
 
@@ -419,6 +466,7 @@ final class DropPlaybackService {
       AVPlaybackSpeed(rate: Float($0), localizedName: "\($0)×")
     }
     controller.allowsPictureInPicturePlayback = false
+    controller.canStartPictureInPictureAutomaticallyFromInline = false
     controller.modalPresentationStyle = .fullScreen
     controller.didDisappear = { [weak self, weak controller] in
       Task { @MainActor [weak self, weak controller] in
@@ -434,6 +482,7 @@ final class DropPlaybackService {
       presenter.present(controller, animated: true) { continuation.resume() }
     }
     emit()
+    updateNowPlaying()
     return snapshot()
   }
 
@@ -505,6 +554,51 @@ final class DropPlaybackService {
     if activeID == id && position == saved && completedAt == completed { dirty = false }
   }
 
+  private func updateNowPlaying() {
+    guard activeID != nil else { return }
+    system.update(position: safeCurrentPosition(), rate: state == "playing" ? rate : 0)
+    lastNowPlayingUpdate = Date()
+  }
+
+  func handleSystemEvent(token: UInt64, event: PlaybackSystemEvent) async {
+    guard token == generation, activeID != nil, player.currentItem != nil else { return }
+    switch event {
+    case .play:
+      guard ["ready", "paused", "ended"].contains(state) else { return }
+      _ = try? await play()
+    case .pause:
+      guard ["playing", "interrupted"].contains(state) else { return }
+      _ = try? await pause()
+    case .skip(let seconds):
+      _ = try? await skip(seconds)
+    case .seek(let seconds):
+      _ = try? await seek(seconds)
+    case .interruptionBegan:
+      wasPlayingBeforeInterruption = state == "playing"
+      guard wasPlayingBeforeInterruption else { return }
+      player.pause()
+      state = "interrupted"
+      position = safeCurrentPosition()
+      dirty = true
+      emit()
+      updateNowPlaying()
+      if let pendingSave { await pendingSave.value }
+      guard token == generation else { return }
+      do { try await persist() }
+      catch { errorCode = "PROGRESS_SAVE_FAILED"; emit() }
+    case .interruptionEnded(let shouldResume):
+      let resume = shouldResume && wasPlayingBeforeInterruption && state == "interrupted"
+      wasPlayingBeforeInterruption = false
+      if state == "interrupted" { state = "paused"; emit(); updateNowPlaying() }
+      if resume { _ = try? await play() }
+    case .oldDeviceUnavailable:
+      wasPlayingBeforeInterruption = false
+      if state == "playing" || state == "interrupted" { _ = try? await pause() }
+    case .newDeviceAvailable:
+      break // Connecting an output never starts playback.
+    }
+  }
+
   private func retireCurrent() async throws {
     #if canImport(UIKit)
     await exitFullscreen()
@@ -524,6 +618,8 @@ final class DropPlaybackService {
     timeObserver = nil
     player.pause()
     player.replaceCurrentItem(with: nil)
+    system.clear()
+    wasPlayingBeforeInterruption = false
     position = finalPosition
     if id != nil { dirty = dirty || state == "playing" || state == "paused" }
     if let pendingSave { await pendingSave.value }

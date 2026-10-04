@@ -10,6 +10,21 @@ struct PlaybackRecord {
   let sizeBytes: Int64
   let position: Double
   let completedAt: String?
+  let title: String
+  let relativeArtworkPath: String?
+
+  init(id: String, relativeMediaPath: String, mediaType: String, sizeBytes: Int64,
+       position: Double, completedAt: String?, title: String = "Drop",
+       relativeArtworkPath: String? = nil) {
+    self.id = id
+    self.relativeMediaPath = relativeMediaPath
+    self.mediaType = mediaType
+    self.sizeBytes = sizeBytes
+    self.position = position
+    self.completedAt = completedAt
+    self.title = title
+    self.relativeArtworkPath = relativeArtworkPath
+  }
 }
 
 enum PlaybackRepositoryError: Error {
@@ -37,20 +52,23 @@ final class SQLitePlaybackProgressRepository: PlaybackProgressRepository, @unche
       var statement: OpaquePointer?
       defer { sqlite3_finalize(statement) }
       guard sqlite3_prepare_v2(db,
-        "SELECT relativeMediaPath, mediaType, sizeBytes, playbackPositionSeconds, completedAt FROM library_items WHERE id = ? AND lifecycle = 'ready'",
+        "SELECT relativeMediaPath, mediaType, sizeBytes, playbackPositionSeconds, completedAt, title, relativeArtworkPath FROM library_items WHERE id = ? AND lifecycle = 'ready'",
         -1, &statement, nil) == SQLITE_OK else { throw PlaybackRepositoryError.unavailable }
       sqlite3_bind_text(statement, 1, id, -1, SQLITE_TRANSIENT)
       let step = sqlite3_step(statement)
       if step == SQLITE_BUSY || step == SQLITE_LOCKED { throw PlaybackRepositoryError.busy }
       guard step == SQLITE_ROW,
             let path = sqlite3_column_text(statement, 0),
-            let type = sqlite3_column_text(statement, 1) else {
+            let type = sqlite3_column_text(statement, 1),
+            let title = sqlite3_column_text(statement, 5) else {
         throw PlaybackRepositoryError.invalidRecord
       }
       let completed = sqlite3_column_text(statement, 4).map { String(cString: $0) }
       return PlaybackRecord(id: id, relativeMediaPath: String(cString: path),
         mediaType: String(cString: type), sizeBytes: sqlite3_column_int64(statement, 2),
-        position: sqlite3_column_double(statement, 3), completedAt: completed)
+        position: sqlite3_column_double(statement, 3), completedAt: completed,
+        title: String(cString: title),
+        relativeArtworkPath: sqlite3_column_text(statement, 6).map { String(cString: $0) })
     }
   }
 

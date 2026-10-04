@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import {
+  AppState,
   Image,
   Pressable,
   ScrollView,
@@ -47,6 +48,8 @@ function message(code: string | null): string {
       return 'El archivo no se puede reproducir.';
     case 'PROGRESS_SAVE_FAILED':
       return 'No se pudo guardar el progreso de reproducción.';
+    case 'AUDIO_SESSION_FAILED':
+      return 'No se pudo activar el audio del dispositivo.';
     default:
       return 'No se pudo cargar el archivo para reproducirlo.';
   }
@@ -75,6 +78,18 @@ export default function PlayerScreen() {
               : next,
           );
         }
+      });
+      const appSubscription = AppState.addEventListener('change', (next) => {
+        if (next !== 'active') return;
+        // Backgrounding does not blur this route or close the native player.
+        // Adopt the native state when React becomes active again.
+        void playback
+          .getState()
+          .then((latest) => {
+            if (active && (latest.libraryId === id || latest.status === 'idle'))
+              setState(latest);
+          })
+          .catch(() => undefined);
       });
       isScrubbing.current = false;
       setScrubPosition(null);
@@ -109,6 +124,7 @@ export default function PlayerScreen() {
         seekGeneration.current += 1;
         isScrubbing.current = false;
         unsubscribe();
+        appSubscription.remove();
         // Ordered after an in-flight open. The route's focus cleanup, not a
         // component rerender, owns this one close and its native progress flush.
         void playback.close().catch(() => undefined);

@@ -1,6 +1,6 @@
-# Biblioteca — Subfase B, Paso 1: infraestructura de reproducción
+# Biblioteca — Subfase B: reproducción local
 
-Este paso no ofrece aún una pantalla de reproducción. Incorpora un único
+El Paso 1 incorporó un único
 `AVPlayer` nativo, controlado mediante `DropPlayback.open(libraryId)` y órdenes
 play/pause/seek/skip/rate/close. Solo acepta el ID de un registro `ready` de
 Biblioteca y resuelve su archivo regular dentro de `Application Support/Drop/Media`.
@@ -37,8 +37,6 @@ terminado, se prepara desde cero sin autoplay. Al reproducir o buscar una
 posición anterior al umbral, se limpia `completedAt`. Posiciones no finitas o
 duraciones desconocidas no generan finalización.
 
-## Pendiente
-
 ## Paso 2: interfaz y superficie de video
 
 Biblioteca abre una ruta por `libraryId`; nunca entrega la ruta del medio al
@@ -58,7 +56,42 @@ abandonar realmente la ruta se llama `close()` una sola vez y se refresca
 Biblioteca al recuperar foco. Abrir no reproduce automáticamente. Un elemento
 terminado se prepara en cero y ofrece “Reproducir de nuevo”.
 
+## Paso 3: audio del sistema y segundo plano
+
+El mismo `AVPlayer` usa `audiovisualBackgroundPlaybackPolicy = .continuesIfPossible`
+para mantener el audio de M4A y MP4 al bloquear el iPhone o cambiar de app.
+`UIBackgroundModes = audio` se genera desde `mobile/app.json`; no habilita
+descargas en segundo plano. `AVAudioSession.Category.playback` se configura y
+activa al empezar la reproducción, no al abrir Drop. Esto permite audio con
+el interruptor de silencio activo. Al cerrar el item se desactiva la sesión
+cuando es posible.
+
+Now Playing publica título, duración, posición, velocidad efectiva y portada
+local de Biblioteca; si falta o falla la portada se usa un recurso local de
+reserva. La imagen se decodifica fuera del hilo principal y se reduce a un
+máximo de 512 píxeles. No se consulta ninguna URL remota. El tiempo se
+actualiza en cambios importantes y, durante reproducción, como máximo cada
+15 segundos; iOS extrapola entre actualizaciones. Los comandos estándar de
+play, pause, ±15 segundos y seek actúan sobre el mismo servicio. No hay cola:
+next/previous/shuffle/repeat quedan deshabilitados.
+
+Una interrupción guarda progreso y recuerda si el usuario estaba reproduciendo.
+Solo se reanuda si iOS indica `shouldResume`, el item/generación sigue siendo
+el mismo y el usuario no pausó ni cerró durante la interrupción. Al perder
+una salida de audio (`oldDeviceUnavailable`) se pausa para evitar sonido
+inesperado por el altavoz; conectar una salida nueva no inicia la reproducción.
+Comandos y notificaciones tardías se ignoran por generación. Close, cambio
+de item y Delete retiran controles y metadata antes de soltar el player lease.
+
+React Native no cierra el reproductor por un cambio de `AppState` a background;
+la ruta solo lo cierra al navegar realmente fuera. Al volver a foreground,
+la pantalla solicita el estado nativo actualizado, incluido progreso y
+velocidad seleccionada. La persistencia periódica (~12 s de reproducción
+efectiva) sigue siendo nativa y no depende de JavaScript activo.
+
 ## Pendiente
 
-Paso 3: sesión de audio, reproducción en segundo plano, Now Playing, controles
-remotos e interrupciones. No se han activado capacidades de background ni PiP.
+Subfase C: Picture in Picture y temporizador de apagado. PiP permanece
+expresamente desactivado; este paso no agrega descargas en segundo plano.
+La reproducción con pantalla bloqueada, Bluetooth/AirPods y cambios reales de
+salida requiere validación física en iPhone, aparte de las pruebas automatizadas.

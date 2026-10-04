@@ -51,13 +51,14 @@ struct PlaybackCoreTests {
     defer { try? FileManager.default.removeItem(at: base) }
     let databaseURL = base.appendingPathComponent("library.sqlite")
     let db = try open(databaseURL)
-    try execute(db, "PRAGMA journal_mode=WAL; CREATE TABLE library_items(id TEXT PRIMARY KEY, lifecycle TEXT, relativeMediaPath TEXT, mediaType TEXT, sizeBytes INTEGER, playbackPositionSeconds REAL, completedAt TEXT);")
+    try execute(db, "PRAGMA journal_mode=WAL; CREATE TABLE library_items(id TEXT PRIMARY KEY, lifecycle TEXT, relativeMediaPath TEXT, mediaType TEXT, sizeBytes INTEGER, playbackPositionSeconds REAL, completedAt TEXT, title TEXT, relativeArtworkPath TEXT);")
     let id = "00000000-0000-0000-0000-000000000001"
-    try execute(db, "INSERT INTO library_items VALUES ('\(id)', 'ready', 'Media/\(id).m4a', 'audio', 100, 42, NULL)")
+    try execute(db, "INSERT INTO library_items VALUES ('\(id)', 'ready', 'Media/\(id).m4a', 'audio', 100, 42, NULL, 'Podcast local', NULL)")
     let repository = SQLitePlaybackProgressRepository(databaseURL: databaseURL)
     let loaded = try await repository.load(id: id)
     try check(loaded.position == 42 && loaded.completedAt == nil)
     try check(loaded.relativeMediaPath == "Media/\(id).m4a")
+    try check(loaded.title == "Podcast local")
     try await repository.save(id: id, position: 55, completedAt: nil)
     let at55 = try await repository.load(id: id)
     try check(at55.position == 55)

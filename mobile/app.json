@@ -21,7 +21,8 @@
         ]
       },
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Drop se conecta al backend de desarrollo en tu red local."
+        "NSLocalNetworkUsageDescription": "Drop se conecta al backend de desarrollo en tu red local.",
+        "UIBackgroundModes": ["audio"]
       }
     },
     "plugins": [

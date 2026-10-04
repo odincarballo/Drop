@@ -13,6 +13,6 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   s.dependency 'DropLibrary'
   s.library = 'sqlite3'
-  s.frameworks = 'AVFoundation', 'AVKit'
+  s.frameworks = 'AVFoundation', 'AVKit', 'AVFAudio', 'MediaPlayer', 'ImageIO'
   s.source_files = 'ios/*.swift'
 end

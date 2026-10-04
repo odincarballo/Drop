@@ -5,6 +5,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react-native';
+import { AppState } from 'react-native';
 
 import PlayerScreen from '@/app/player/[id]';
 import { getLibraryItem } from '@/services/library';
@@ -99,9 +100,18 @@ const video = {
 let mockState: PlaybackState;
 let mockEmit: ((state: PlaybackState) => void) | null;
 let mockUnsubscribe: jest.Mock;
+let mockAppStateListener:
+  ((status: 'active' | 'background' | 'inactive') => void) | null;
+let mockRemoveAppState: jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockAppStateListener = null;
+  mockRemoveAppState = jest.fn();
+  jest.spyOn(AppState, 'addEventListener').mockImplementation((_, listener) => {
+    mockAppStateListener = listener as typeof mockAppStateListener;
+    return { remove: mockRemoveAppState } as never;
+  });
   mockState = {
     libraryId: mockId,
     status: 'ready',
@@ -142,6 +152,10 @@ beforeEach(() => {
   jest
     .mocked(playback.enterFullscreen)
     .mockImplementation(async () => ({ ...mockState, fullscreen: true }));
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 test('audio opens by ID, displays local artwork, title, restored position and controls', async () => {
@@ -317,6 +331,26 @@ test('rerender does not close; leaving route unsubscribes and closes once', asyn
   await rendered.unmount();
   expect(playback.close).toHaveBeenCalledTimes(1);
   expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
+  expect(mockRemoveAppState).toHaveBeenCalledTimes(1);
+});
+
+test('background keeps native item; foreground adopts actual position and selected rate', async () => {
+  const rendered = await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByText('0:42')).toBeTruthy());
+  const readsBefore = jest.mocked(playback.getState).mock.calls.length;
+  await act(async () => mockAppStateListener?.('background'));
+  expect(playback.close).not.toHaveBeenCalled();
+  expect(playback.getState).toHaveBeenCalledTimes(readsBefore);
+  mockState = { ...mockState, status: 'playing', position: 77, rate: 1.5 };
+  await act(async () => mockAppStateListener?.('active'));
+  await waitFor(() => expect(screen.getByText('1:17')).toBeTruthy());
+  expect(
+    screen.getByRole('button', { name: 'Velocidad 1.5×' }).props
+      .accessibilityState.selected,
+  ).toBe(true);
+  expect(playback.close).not.toHaveBeenCalled();
+  await rendered.unmount();
+  expect(playback.close).toHaveBeenCalledTimes(1);
 });
 
 test('missing media and fallback artwork are handled without exposing a path', async () => {
