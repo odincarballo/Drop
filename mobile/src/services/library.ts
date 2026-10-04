@@ -2,6 +2,10 @@ import { requireOptionalNativeModule } from 'expo';
 import * as SQLite from 'expo-sqlite';
 
 import type { LibraryItem, LibraryMetadata } from '@/models/library';
+import {
+  beginPlaybackDeletion,
+  endPlaybackDeletion,
+} from '@/services/playback';
 
 type NativeStat = { exists: boolean; uri?: string; sizeBytes?: number };
 type NativeLibrary = {
@@ -43,6 +47,7 @@ let opening: Promise<SQLite.SQLiteDatabase> | null = null;
 let startup: Promise<void> | null = null;
 const leases = new Map<string, number>();
 const pendingDeletion = new Set<string>();
+const deletions = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
 
 function native(): NativeLibrary {
@@ -157,14 +162,19 @@ async function finishDeletion(row: Row): Promise<void> {
     pendingDeletion.add(row.id);
     return;
   }
-  const storage = native();
-  await storage.removeMedia(row.relativeMediaPath);
-  await storage.removeArtwork(row.id);
-  await (
-    await database()
-  ).runAsync('DELETE FROM library_items WHERE id = ?', row.id);
-  pendingDeletion.delete(row.id);
-  changed();
+  await beginPlaybackDeletion(row.id);
+  try {
+    const storage = native();
+    await storage.removeMedia(row.relativeMediaPath);
+    await storage.removeArtwork(row.id);
+    await (
+      await database()
+    ).runAsync('DELETE FROM library_items WHERE id = ?', row.id);
+    pendingDeletion.delete(row.id);
+    changed();
+  } finally {
+    await endPlaybackDeletion(row.id);
+  }
 }
 
 async function reconcile(): Promise<void> {
@@ -311,6 +321,12 @@ export async function listLibrary(): Promise<LibraryItem[]> {
   return items.filter((item): item is LibraryItem => item !== null);
 }
 
+export async function getLibraryItem(id: string): Promise<LibraryItem | null> {
+  await initializeLibrary();
+  const row = await rowFor(id);
+  return row?.lifecycle === 'ready' ? attach(row) : null;
+}
+
 export async function librarySpaceUsed(): Promise<number> {
   const items = await listLibrary();
   return items.reduce(
@@ -442,14 +458,29 @@ export async function withLibraryLease<T>(
   }
 }
 
-export async function deleteLibraryItem(id: string): Promise<void> {
+async function performDeletion(id: string): Promise<void> {
   await initializeLibrary();
-  const db = await database();
-  await db.runAsync(
-    "UPDATE library_items SET lifecycle = 'deleting' WHERE id = ? AND lifecycle = 'ready'",
-    id,
-  );
-  changed();
-  const row = await rowFor(id);
-  if (row?.lifecycle === 'deleting') await finishDeletion(row);
+  await beginPlaybackDeletion(id);
+  try {
+    const db = await database();
+    await db.runAsync(
+      "UPDATE library_items SET lifecycle = 'deleting' WHERE id = ? AND lifecycle = 'ready'",
+      id,
+    );
+    changed();
+    const row = await rowFor(id);
+    if (row?.lifecycle === 'deleting') await finishDeletion(row);
+  } finally {
+    await endPlaybackDeletion(id);
+  }
+}
+
+export function deleteLibraryItem(id: string): Promise<void> {
+  const existing = deletions.get(id);
+  if (existing) return existing;
+  const operation = performDeletion(id).finally(() => {
+    deletions.delete(id);
+  });
+  deletions.set(id, operation);
+  return operation;
 }

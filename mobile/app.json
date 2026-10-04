@@ -5,7 +5,7 @@
     "version": "1.0.1",
     "scheme": "mediadrop",
     "icon": "./assets/icon.png",
-    "orientation": "portrait",
+    "orientation": "default",
     "userInterfaceStyle": "automatic",
     "platforms": ["ios"],
     "ios": {

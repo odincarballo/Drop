@@ -1,0 +1,8 @@
+{
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["DropPlaybackModule"],
+    "appDelegateSubscribers": ["DropPlaybackOrientationSubscriber"],
+    "podspecPath": "DropPlayback.podspec"
+  }
+}

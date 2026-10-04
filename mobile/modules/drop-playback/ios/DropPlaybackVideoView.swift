@@ -1,0 +1,22 @@
+import AVFoundation
+import ExpoModulesCore
+import UIKit
+
+// Rendering only: the view neither owns a player nor creates an AVPlayerItem.
+final class DropPlaybackVideoView: ExpoView {
+  override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+  private var videoLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+  required init(appContext: AppContext? = nil) {
+    super.init(appContext: appContext)
+    videoLayer.videoGravity = .resizeAspect
+    videoLayer.player = DropPlaybackService.shared.player
+    backgroundColor = .black
+  }
+
+  override func willMove(toSuperview newSuperview: UIView?) {
+    super.willMove(toSuperview: newSuperview)
+    videoLayer.player = newSuperview == nil ? nil : DropPlaybackService.shared.player
+  }
+}

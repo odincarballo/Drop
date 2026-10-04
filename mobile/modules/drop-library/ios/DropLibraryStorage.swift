@@ -10,14 +10,14 @@ enum DropLibraryStorageError: Error {
   case invalidImage
 }
 
-final class DropLibraryStorage {
+public final class DropLibraryStorage {
   private let manager: FileManager
-  let root: URL
-  let media: URL
-  let artwork: URL
+  public let root: URL
+  public let media: URL
+  public let artwork: URL
   private let cache: URL
 
-  init(manager: FileManager = .default) throws {
+  public init(manager: FileManager = .default) throws {
     self.manager = manager
     guard let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
           let cache = manager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
@@ -116,7 +116,7 @@ final class DropLibraryStorage {
     if try regularSize(url) != nil { try manager.removeItem(at: url) }
   }
 
-  func managedMedia(relative: String) throws -> (URL, Int64)? {
+  public func managedMedia(relative: String) throws -> (URL, Int64)? {
     guard DropLibraryPaths.managedMediaPath(relative),
           let name = relative.split(separator: "/").last else {
       throw DropLibraryStorageError.invalidManagedPath

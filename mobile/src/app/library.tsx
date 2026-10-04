@@ -92,6 +92,21 @@ export default function LibraryScreen() {
     );
   }
 
+  function openItem(item: LibraryItem) {
+    const extension = item.relativeMediaPath.split('.').at(-1)?.toLowerCase();
+    if (!(
+      (item.mediaType === 'video' && extension === 'mp4') ||
+      (item.mediaType === 'audio' && extension === 'm4a')
+    )) {
+      Alert.alert(
+        'Formato no compatible',
+        'Este archivo aún no se puede reproducir en Drop. Puedes guardarlo en Archivos o compartirlo.',
+      );
+      return;
+    }
+    router.push(`/player/${item.id}` as Href);
+  }
+
   const visible = items.filter(
     (item) => filter === 'all' || item.mediaType === filter,
   );
@@ -201,98 +216,105 @@ export default function LibraryScreen() {
         }
         renderItem={({ item }) => (
           <View style={[styles.item, { borderBottomColor: colors.border }]}>
-            <View style={[styles.artwork, { backgroundColor: colors.subtle }]}>
-              {item.artworkUri ? (
-                <Image
-                  source={{ uri: item.artworkUri }}
-                  style={styles.image}
-                  accessibilityLabel="Portada descargada"
-                />
-              ) : (
-                <Image
-                  source={require('../../assets/icon.png')}
-                  style={styles.image}
-                  accessibilityLabel="Portada de Drop"
-                />
-              )}
-            </View>
-            <View style={styles.itemBody}>
-              <Text
-                numberOfLines={2}
-                style={[styles.itemTitle, { color: colors.text }]}
-              >
-                {item.title}
-              </Text>
-              <Text style={{ color: colors.secondary }}>
-                {item.mediaType === 'video' ? 'Video' : 'Audio'}
-                {item.resolution ? ` · ${item.resolution}` : ''} ·{' '}
-                {formatSize(item.sizeBytes)}
-              </Text>
-              <Text style={{ color: colors.secondary, fontSize: 12 }}>
-                {new Date(item.downloadedAt).toLocaleDateString()}
-              </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Reproducir ${item.title}`}
+              onPress={() => openItem(item)}
+              style={styles.playableRow}
+            >
               <View
-                style={[
-                  styles.progressTrack,
-                  { backgroundColor: colors.progressTrack },
-                ]}
+                style={[styles.artwork, { backgroundColor: colors.subtle }]}
               >
+                {item.artworkUri ? (
+                  <Image
+                    source={{ uri: item.artworkUri }}
+                    style={styles.image}
+                    accessibilityLabel="Portada descargada"
+                  />
+                ) : (
+                  <Image
+                    source={require('../../assets/icon.png')}
+                    style={styles.image}
+                    accessibilityLabel="Portada de Drop"
+                  />
+                )}
+              </View>
+              <View style={styles.itemBody}>
+                <Text
+                  numberOfLines={2}
+                  style={[styles.itemTitle, { color: colors.text }]}
+                >
+                  {item.title}
+                </Text>
+                <Text style={{ color: colors.secondary }}>
+                  {item.mediaType === 'video' ? 'Video' : 'Audio'}
+                  {item.resolution ? ` · ${item.resolution}` : ''} ·{' '}
+                  {formatSize(item.sizeBytes)}
+                </Text>
+                <Text style={{ color: colors.secondary, fontSize: 12 }}>
+                  {new Date(item.downloadedAt).toLocaleDateString()}
+                </Text>
                 <View
                   style={[
-                    styles.progress,
-                    {
-                      backgroundColor: colors.accent,
-                      width: `${
-                        item.completedAt
-                          ? 100
-                          : item.durationSeconds
-                            ? Math.min(
-                                100,
-                                (100 * item.playbackPositionSeconds) /
-                                  item.durationSeconds,
-                              )
-                            : 0
-                      }%`,
-                    },
+                    styles.progressTrack,
+                    { backgroundColor: colors.progressTrack },
                   ]}
-                />
+                >
+                  <View
+                    style={[
+                      styles.progress,
+                      {
+                        backgroundColor: colors.accent,
+                        width: `${
+                          item.completedAt
+                            ? 100
+                            : item.durationSeconds
+                              ? Math.min(
+                                  100,
+                                  (100 * item.playbackPositionSeconds) /
+                                    item.durationSeconds,
+                                )
+                              : 0
+                        }%`,
+                      },
+                    ]}
+                  />
+                </View>
               </View>
-              <View style={styles.actions}>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={busyId === item.id}
-                  onPress={() =>
-                    void run(item.id, (file) =>
-                      withNamedLibraryFile(file, saveLocalFileToFiles),
-                    )
-                  }
-                  style={styles.action}
-                >
-                  <Text style={{ color: colors.text }}>
-                    Guardar en Archivos
-                  </Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={busyId === item.id}
-                  onPress={() =>
-                    void run(item.id, (file) =>
-                      withNamedLibraryFile(file, shareLocalFile),
-                    )
-                  }
-                  style={styles.action}
-                >
-                  <Text style={{ color: colors.text }}>Compartir</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={busyId === item.id}
-                  onPress={() => confirmDelete(item)}
-                  style={styles.action}
-                >
-                  <Text style={{ color: colors.error }}>Eliminar</Text>
-                </Pressable>
-              </View>
+            </Pressable>
+            <View style={styles.actions}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={busyId === item.id}
+                onPress={() =>
+                  void run(item.id, (file) =>
+                    withNamedLibraryFile(file, saveLocalFileToFiles),
+                  )
+                }
+                style={styles.action}
+              >
+                <Text style={{ color: colors.text }}>Guardar en Archivos</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={busyId === item.id}
+                onPress={() =>
+                  void run(item.id, (file) =>
+                    withNamedLibraryFile(file, shareLocalFile),
+                  )
+                }
+                style={styles.action}
+              >
+                <Text style={{ color: colors.text }}>Compartir</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={busyId === item.id}
+                onPress={() => confirmDelete(item)}
+                style={styles.action}
+              >
+                <Text style={{ color: colors.error }}>Eliminar</Text>
+              </Pressable>
             </View>
           </View>
         )}
@@ -329,11 +351,10 @@ const styles = StyleSheet.create({
   },
   list: { paddingHorizontal: 22, paddingBottom: 24 },
   item: {
-    flexDirection: 'row',
-    gap: 12,
     paddingVertical: 16,
     borderBottomWidth: 1,
   },
+  playableRow: { flexDirection: 'row', gap: 12, minHeight: 80 },
   artwork: { width: 76, height: 76, borderRadius: 10, overflow: 'hidden' },
   image: { width: '100%', height: '100%' },
   itemBody: { flex: 1, gap: 5 },

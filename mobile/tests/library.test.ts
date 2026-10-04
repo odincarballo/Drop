@@ -9,6 +9,10 @@ const rows = new Map<string, Row>();
 const cache = new Map<string, number>();
 const media = new Map<string, number>();
 const artwork = new Map<string, number>();
+const playbackNative = {
+  beginDelete: jest.fn(async () => ({ ready: true })),
+  endDelete: jest.fn(async () => ({ ready: true })),
+};
 let nextId = 1;
 let failMove = false;
 let failReady = false;
@@ -201,7 +205,9 @@ beforeEach(() => {
   failArtwork = false;
   beforeReady = null;
   const expo = require('expo') as { requireOptionalNativeModule: jest.Mock };
-  expo.requireOptionalNativeModule.mockReturnValue(native);
+  expo.requireOptionalNativeModule.mockImplementation((name: string) =>
+    name === 'DropPlayback' ? playbackNative : native,
+  );
   const sqlite = require('expo-sqlite') as { openDatabaseAsync: jest.Mock };
   sqlite.openDatabaseAsync.mockResolvedValue(db);
   jest.clearAllMocks();
@@ -241,7 +247,9 @@ test('direct media promotes without a second media copy and survives service res
   jest.resetModules();
   (
     require('expo') as { requireOptionalNativeModule: jest.Mock }
-  ).requireOptionalNativeModule.mockReturnValue(native);
+  ).requireOptionalNativeModule.mockImplementation((name: string) =>
+    name === 'DropPlayback' ? playbackNative : native,
+  );
   (
     require('expo-sqlite') as { openDatabaseAsync: jest.Mock }
   ).openDatabaseAsync.mockResolvedValue(db);
@@ -274,7 +282,9 @@ test('restart finalizes a move interrupted before ready', async () => {
   jest.resetModules();
   (
     require('expo') as { requireOptionalNativeModule: jest.Mock }
-  ).requireOptionalNativeModule.mockReturnValue(native);
+  ).requireOptionalNativeModule.mockImplementation((name: string) =>
+    name === 'DropPlayback' ? playbackNative : native,
+  );
   (
     require('expo-sqlite') as { openDatabaseAsync: jest.Mock }
   ).openDatabaseAsync.mockResolvedValue(db);
@@ -386,4 +396,50 @@ test('deleting interrupted on restart is completed', async () => {
   expect(rows.size).toBe(0);
   expect(media.size).toBe(0);
   expect(artwork.size).toBe(0);
+});
+
+test('Delete closes native player before physically removing media', async () => {
+  cache.set('MediaDrop/job/video.mp4', 10);
+  const library = service();
+  const item = await library.promoteToLibrary(
+    'file:///cache/MediaDrop/job/video.mp4',
+    meta,
+  );
+  await library.deleteLibraryItem(item.id);
+  expect(playbackNative.beginDelete).toHaveBeenCalledWith(item.id);
+  expect(playbackNative.endDelete).toHaveBeenCalledWith(item.id);
+  expect(native.removeMedia).toHaveBeenCalled();
+  expect(playbackNative.beginDelete.mock.invocationCallOrder[0]!).toBeLessThan(
+    native.removeMedia.mock.invocationCallOrder[0]!,
+  );
+  expect(media.size).toBe(0);
+});
+
+test('failed native deletion barrier does not mark ready media deleting', async () => {
+  cache.set('MediaDrop/job/video.mp4', 10);
+  const library = service();
+  const item = await library.promoteToLibrary(
+    'file:///cache/MediaDrop/job/video.mp4',
+    meta,
+  );
+  playbackNative.beginDelete.mockRejectedValueOnce(new Error('player busy'));
+  await expect(library.deleteLibraryItem(item.id)).rejects.toThrow(
+    'player busy',
+  );
+  expect(rows.get(item.id)?.lifecycle).toBe('ready');
+  expect(media.size).toBe(1);
+});
+
+test('concurrent Delete requests share one coordinated operation', async () => {
+  cache.set('MediaDrop/job/video.mp4', 10);
+  const library = service();
+  const item = await library.promoteToLibrary(
+    'file:///cache/MediaDrop/job/video.mp4',
+    meta,
+  );
+  const first = library.deleteLibraryItem(item.id);
+  const second = library.deleteLibraryItem(item.id);
+  expect(second).toBe(first);
+  await Promise.all([first, second]);
+  expect(native.removeMedia).toHaveBeenCalledTimes(1);
 });

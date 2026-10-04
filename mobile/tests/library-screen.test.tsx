@@ -18,8 +18,10 @@ import {
   withLibraryLease,
 } from '@/services/library';
 
+const mockPush = jest.fn();
+
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+  useRouter: () => ({ push: mockPush, replace: jest.fn() }),
   useFocusEffect: (callback: () => void) =>
     require('react').useEffect(callback, []),
 }));
@@ -122,4 +124,50 @@ test('deletion asks for confirmation before removing an item', async () => {
   confirm?.onPress?.();
   await waitFor(() => expect(deleteLibraryItem).toHaveBeenCalledWith(item.id));
   alert.mockRestore();
+});
+
+test('compatible audio and video open only by library ID', async () => {
+  const video = {
+    ...item,
+    id: '00000000-0000-0000-0000-000000000002',
+    title: 'Video local',
+    mediaType: 'video',
+    relativeMediaPath: 'Media/private.mp4',
+  };
+  jest.mocked(listLibrary).mockResolvedValue([item, video] as never);
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Video local')).toBeTruthy());
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reproducir Podcast largo' }),
+  );
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reproducir Video local' }),
+  );
+  expect(mockPush).toHaveBeenNthCalledWith(1, `/player/${item.id}`);
+  expect(mockPush).toHaveBeenNthCalledWith(2, `/player/${video.id}`);
+  expect(JSON.stringify(mockPush.mock.calls)).not.toContain('file://');
+});
+
+test('unsupported format retains export/share/delete but does not navigate', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  jest
+    .mocked(listLibrary)
+    .mockResolvedValue([
+      { ...item, relativeMediaPath: 'Media/a.webm' },
+    ] as never);
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reproducir Podcast largo' }),
+  );
+  expect(mockPush).not.toHaveBeenCalled();
+  expect(alert).toHaveBeenCalledWith(
+    'Formato no compatible',
+    expect.any(String),
+  );
+  expect(
+    screen.getByRole('button', { name: 'Guardar en Archivos' }),
+  ).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Compartir' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Eliminar' })).toBeTruthy();
 });
