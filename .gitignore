@@ -52,3 +52,8 @@ secrets/
 *.xcresult
 *.dSYM/
 *.dSYM.zip
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.log
+!**/tests/fixtures/*.log

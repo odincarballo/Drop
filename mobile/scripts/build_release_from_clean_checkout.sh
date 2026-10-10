@@ -9,17 +9,18 @@ for path in ios node_modules modules/on-device-youtube/vendor; do
     exit 1
   fi
 done
-for path in .env .env.production; do
-  if [[ -e "$path" ]]; then
-    echo "Clean checkout required; untracked environment exists: $path" >&2
-    exit 1
-  fi
+for path in .env .env.*; do
+  [[ -e "$path" && "$path" != *.example ]] || continue
+  echo "Clean checkout required; untracked environment exists: $path" >&2
+  exit 1
 done
 
-# These are public build settings. The access token stays in iOS SecureStore.
-set -a
-source ./.env.production.example
-set +a
+# The example file documents settings; it must never silently configure a Release.
+# The Bearer token is entered on-device and remains in iOS SecureStore.
+export EXPO_PUBLIC_APP_ENV=production
+export EXPO_PUBLIC_API_TIMEOUT_MS="${EXPO_PUBLIC_API_TIMEOUT_MS:-90000}"
+export EXPO_PUBLIC_JOB_POLL_INTERVAL_MS="${EXPO_PUBLIC_JOB_POLL_INTERVAL_MS:-750}"
+node scripts/public_build_config.cjs
 
 npm ci --no-audit --no-fund
 node scripts/generate_download_size_policy.mjs --check
@@ -42,7 +43,7 @@ RUBYOPT="-rbundler/setup -r$PWD/scripts/cocoapods_compat.rb" \
 workspace="$(bundle _2.4.22_ exec ruby scripts/ios_application_project.rb --workspace)"
 scheme="$(bundle _2.4.22_ exec ruby scripts/ios_application_project.rb --scheme)"
 destination="${DROP_IOS_DESTINATION:-generic/platform=iOS}"
-team="${DROP_DEVELOPMENT_TEAM:-HK927RUDLZ}"
+team="$DROP_DEVELOPMENT_TEAM"
 
 EXPO_USE_PRECOMPILED_MODULES=0 NODE_ENV=production \
   xcodebuild -workspace "$workspace" -scheme "$scheme" \

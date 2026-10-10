@@ -9,7 +9,6 @@
     "userInterfaceStyle": "automatic",
     "platforms": ["ios"],
     "ios": {
-      "bundleIdentifier": "com.odincarballo.mediadrop",
       "buildNumber": "3",
       "supportsTablet": false,
       "privacyManifests": {

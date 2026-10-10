@@ -1,14 +1,14 @@
 # frozen_string_literal: true
 
-require 'json'
 require 'xcodeproj'
 
 module IOSApplicationProject
   ROOT = File.expand_path('..', __dir__)
 
   def self.open
-    configuration = JSON.parse(File.read(File.join(ROOT, 'app.json')))
-    bundle_id = configuration.fetch('expo').fetch('ios').fetch('bundleIdentifier')
+    # Expo resolves DROP_BUNDLE_IDENTIFIER in app.config.js before prebuild.
+    bundle_id = ENV.fetch('DROP_BUNDLE_IDENTIFIER')
+    raise 'DROP_BUNDLE_IDENTIFIER is required for the generated iOS project' if bundle_id.empty?
     projects = Dir.glob(File.join(ROOT, 'ios', '*.xcodeproj')).select { |path| File.directory?(path) }
     raise "Expected one generated iOS project, found #{projects.length}" unless projects.length == 1
 
