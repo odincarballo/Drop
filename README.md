@@ -53,7 +53,9 @@ clone/build verification is still pending.
 - macOS, Xcode with iOS device support, an Apple ID/Team for device signing,
   and an iPhone for physical installation.
 - Node.js 22 (`mobile/.nvmrc`; `mobile/package.json` requires at least 22.13),
-  npm, Ruby/Bundler, and CocoaPods from `mobile/Gemfile.lock`.
+  npm, Ruby 2.6–3.1, Bundler 2.4.22, and CocoaPods from
+  `mobile/Gemfile.lock`. The current lock includes `CFPropertyList` 3.0.9,
+  which rejects Ruby 3.2 and newer; check `ruby --version` before bootstrap.
 - Internet access to install dependencies and the pinned on-device Python
   runtime during bootstrap.
 - For a local backend: Python 3.13 and `uv`. The default `auto` provider also
@@ -81,7 +83,9 @@ preparation will verify the full path before public release.
    `export DROP_BUNDLE_IDENTIFIER=com.yourcompany.drop`. Do not use the
    repository author's Bundle ID. Prepare the pinned runtime with
    `node scripts/prepare_on_device_youtube.mjs`.
-3. Install the locked Ruby dependencies with
+3. Select a compatible Ruby (`ruby --version` must report 2.6–3.1; on a Mac
+   where a newer Homebrew Ruby takes precedence, select a compatible Ruby
+   before running these commands). Install the locked Ruby dependencies with
    `gem install --user-install bundler --version 2.4.22 --no-document` if that
    Bundler version is not already available, then
    `bundle _2.4.22_ config set --local path vendor/bundle` and

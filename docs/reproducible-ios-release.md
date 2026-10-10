@@ -2,9 +2,11 @@
 
 Partir de un clon o worktree temporal sin `mobile/ios`, `node_modules`, Pods,
 `vendor` ni DerivedData. La Mac necesita Xcode con licencia aceptada, Node según
-`mobile/.nvmrc`, Ruby/RubyGems, acceso a Internet y una identidad de firma válida
-del Team elegido por quien construye la app. La identidad y el perfil de Apple
-no se guardan en Git.
+`mobile/.nvmrc`, Ruby 2.6–3.1, Bundler 2.4.22, acceso a Internet y una identidad
+de firma válida del Team elegido por quien construye la app. El lock actual
+incluye `CFPropertyList` 3.0.9, incompatible con Ruby 3.2 o superior: comprobar
+`ruby --version` y seleccionar un intérprete compatible antes del bootstrap.
+La identidad y el perfil de Apple no se guardan en Git.
 
 Definir explícitamente los valores propios antes de compilar. La URL debe ser
 el origen HTTPS de un backend bajo control del fork; no usar la URL de ejemplo.
@@ -26,6 +28,9 @@ con un DerivedData nuevo en `ios/build/clean-release`.
 La instalación de Pods usa su propio `mobile/.cocoapods` y desactiva la caché
 compartida de frameworks de React Native; no se apoya en descargas previas de
 la Mac.
+`mobile/ios/Podfile.lock` se genera dentro de un directorio ignorado y no se
+versiona. Una instalación limpia de Pods demuestra que sus dependencias se
+resuelven hoy, no que dos instalaciones futuras produzcan un grafo idéntico.
 
 `.env.production.example` es solo una plantilla y **no se carga** en Release.
 El script exige Team, Bundle ID y URL de backend explícitos, rechaza ejemplos
@@ -45,6 +50,29 @@ credenciales.
 El script no instala la app ni borra un proyecto iOS existente. Si falta la
 identidad o el perfil de firma, Xcode debe fallar con su error de firma; no se
 reemplaza por material privado versionado.
+
+## Comprobación de compilación sin firma de Apple
+
+Para comprobar la compilación en un checkout limpio sin un Apple Team real,
+seguir los pasos manuales del README hasta terminar `pod install`, con un
+Bundle ID distinto del de Drop y un origen HTTPS de prueba. Después, desde
+`mobile/`, ejecutar:
+
+```bash
+EXPO_USE_PRECOMPILED_MODULES=0 NODE_ENV=production EXPO_PUBLIC_APP_ENV=production \
+  xcodebuild -workspace ios/Drop.xcworkspace -scheme Drop \
+  -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+  -derivedDataPath ios/build/clean-release CODE_SIGNING_ALLOWED=NO \
+  EXPANDED_CODE_SIGN_IDENTITY_NAME='Ad Hoc' \
+  EXPANDED_CODE_SIGN_IDENTITY='-' build
+```
+
+El empaquetado de BeeWare firma ad hoc los frameworks de extensión de Python;
+por eso necesita esas dos variables incluso cuando la firma de la app está
+desactivada. El resultado **no es instalable en iPhone** y no verifica la firma
+real ni el script integral `build_release_from_clean_checkout.sh`, que requiere
+un Team y un perfil propios. Una URL de prueba solo demuestra que la
+configuración se propaga: no verifica un backend Drop operativo.
 
 ## Referencia histórica: candidata 1.0.1
 
