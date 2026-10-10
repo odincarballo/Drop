@@ -2,7 +2,6 @@ import { requireOptionalNativeModule } from 'expo';
 
 import {
   localCombinedDownloadEventSchema,
-  localEjsFixtureResultSchema,
   localAudioDownloadEventSchema,
   localVideoDownloadEventSchema,
   localYoutubeResultSchema,
@@ -14,7 +13,6 @@ import { serverError } from '@/services/errors';
 
 type LocalEngine = {
   analyze: (url: string) => Promise<string>;
-  testEjsFixture: () => Promise<string>;
   startAudioDownload: (
     analysisId: string,
     formatId: string,
@@ -77,21 +75,6 @@ export async function analyzeYoutubeOnDevice(url: string) {
   const parsed = localYoutubeResultSchema.safeParse(JSON.parse(raw) as unknown);
   if (!parsed.success)
     throw new Error('El motor local devolvió una respuesta inválida.');
-  return parsed.data;
-}
-
-export async function testEjsOnDevice() {
-  const native = engine();
-  if (!native)
-    throw new Error('Esta build no incluye el motor local experimental.');
-  const raw = await native.testEjsFixture();
-  if (raw.length > 64 * 1024)
-    throw new Error('El diagnóstico EJS superó el límite permitido.');
-  const parsed = localEjsFixtureResultSchema.safeParse(
-    JSON.parse(raw) as unknown,
-  );
-  if (!parsed.success)
-    throw new Error('El motor EJS devolvió una respuesta inválida.');
   return parsed.data;
 }
 

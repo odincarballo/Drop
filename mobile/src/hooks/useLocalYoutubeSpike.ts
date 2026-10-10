@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   LocalAudioDownloadEvent,
   LocalCombinedDownloadEvent,
-  LocalEjsFixtureResult,
   LocalHttpTransferDiagnostics,
   LocalVideoDownloadEvent,
   LocalYoutubeResult,
@@ -27,7 +26,6 @@ import {
   startLocalAudioDownload,
   startLocalCombinedDownload,
   startLocalVideoDownload,
-  testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
 import { selectLocalVideoOptions } from '@/utils/onDeviceYoutubeFormats';
 
@@ -35,12 +33,6 @@ type State =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'result'; result: LocalYoutubeResult }
-  | { status: 'error'; message: string };
-
-type EjsState =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'result'; result: LocalEjsFixtureResult }
   | { status: 'error'; message: string };
 
 export type LocalAudioState =
@@ -159,7 +151,6 @@ export type LocalCombinedState =
 
 export function useLocalYoutubeSpike() {
   const [state, setState] = useState<State>({ status: 'idle' });
-  const [ejsState, setEjsState] = useState<EjsState>({ status: 'idle' });
   const [audioState, setAudioState] = useState<LocalAudioState>({
     status: 'idle',
   });
@@ -540,7 +531,6 @@ export function useLocalYoutubeSpike() {
     videoJobId.current = null;
     combinedJobId.current = null;
     setState({ status: 'idle' });
-    setEjsState({ status: 'idle' });
     setAudioState({ status: 'idle' });
     setVideoState({ status: 'idle' });
     setCombinedState({ status: 'idle' });
@@ -565,24 +555,6 @@ export function useLocalYoutubeSpike() {
     setVideoState({ status: 'idle' });
     setCombinedState({ status: 'idle' });
   }
-  async function testEjs() {
-    if (busy.current) return;
-    busy.current = true;
-    setEjsState({ status: 'loading' });
-    try {
-      const result = await testEjsOnDevice();
-      if (mounted.current) setEjsState({ status: 'result', result });
-    } catch {
-      if (mounted.current)
-        setEjsState({
-          status: 'error',
-          message: 'No se pudo completar la prueba EJS local.',
-        });
-    } finally {
-      busy.current = false;
-    }
-  }
-
   function downloadAudio() {
     if (
       busy.current ||
@@ -803,7 +775,6 @@ export function useLocalYoutubeSpike() {
 
   return {
     state,
-    ejsState,
     audioState,
     videoState,
     combinedState,
@@ -812,7 +783,6 @@ export function useLocalYoutubeSpike() {
     selectVideoFormat,
     analyze,
     reset,
-    testEjs,
     downloadAudio,
     cancelAudio,
     shareAudio,
@@ -825,7 +795,6 @@ export function useLocalYoutubeSpike() {
     cancel: cancelLocalYoutube,
     isBusy:
       state.status === 'loading' ||
-      ejsState.status === 'loading' ||
       audioState.status === 'preparing' ||
       audioState.status === 'saving' ||
       audioState.status === 'downloading' ||

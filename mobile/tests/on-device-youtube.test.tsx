@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react-native';
 import { requireOptionalNativeModule } from 'expo';
 
-import { LocalYoutubeSpikeCard } from '@/components/LocalYoutubeSpikeCard';
+import { LocalYoutubeMainCard } from '@/components/LocalYoutubeMainCard';
 import { LocalYoutubeDiagnosticsCard } from '@/components/LocalYoutubeDiagnosticsCard';
 import { ActionButton } from '@/components/ActionButton';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
@@ -24,7 +24,6 @@ import {
   localAudioError,
   localCombinedError,
   localVideoError,
-  testEjsOnDevice,
 } from '@/services/onDeviceYoutube';
 import { shareLocalFile } from '@/services/jobs';
 import { promoteToLibrary } from '@/services/library';
@@ -51,7 +50,6 @@ let videoListener: ((event: unknown) => void) | null = null;
 let combinedListener: ((event: unknown) => void) | null = null;
 const native = {
   analyze: jest.fn(),
-  testEjsFixture: jest.fn(),
   startAudioDownload: jest.fn(),
   cancelAudioDownload: jest.fn(),
   startVideoDownload: jest.fn(),
@@ -183,70 +181,6 @@ beforeEach(() => {
     '7D628D93-DC67-4729-83AD-B8EF70877A87',
   );
   jest.mocked(shareLocalFile).mockResolvedValue();
-  native.testEjsFixture.mockResolvedValue(
-    JSON.stringify({
-      fixture: {
-        status: 'passed',
-        challengeType: 'n',
-        challengeInput: 'IlLiA21ny7gqA2m4p37',
-        expected: '9nRTxrbM1f0yHg',
-        actual: '9nRTxrbM1f0yHg',
-        playerId: '74edf1a3',
-        playerSha256:
-          'ed9a4ea0646332a6b6c973ebe5a915c62c43db89bb2bb1a31eba07d906ef8ff7',
-        provider: 'MediaDropEmbedded',
-        providerRegistered: true,
-        scriptSource: 'yt-dlp-ejs bundled Python package',
-        ejsVersion: '0.8.0',
-      },
-      elapsedSeconds: 0.5,
-      jsChallengeCalls: 1,
-      nativeRunJsCalls: 4,
-      processAttempts: 0,
-      subprocessUsed: false,
-      quickJsFilesystem: false,
-      quickJsNetwork: false,
-      diagnostics: {
-        providerInvoked: true,
-        runJsInvoked: true,
-        quickJsCompletedNormally: true,
-        scriptLength: 6500000,
-        responseType: 'str',
-        responseLength: 3824404,
-        responsePayloadType: 'result',
-        responsePreview: '{"type":"result","responses":[{"type":"result"}]}',
-        parserError: null,
-        consoleLogCaptured: true,
-        evaluationReturnIgnored: true,
-        javascriptExceptionCaught: true,
-        quickJsFilesystemAttempts: 0,
-        quickJsNetworkAttempts: 0,
-        native: {
-          memoryLimitBytes: 201326592,
-          stackLimitBytes: 2097152,
-          timeoutSeconds: 25,
-          outputLimitBytes: 8388608,
-          capturedBytes: 3824404,
-          consoleCalls: 1,
-          interrupted: false,
-          completedNormally: true,
-          quickJsMallocBytes: 150000000,
-          quickJsMemoryUsedBytes: 140000000,
-        },
-      },
-      deviceRuntime: 'ios-device',
-    }),
-  );
-});
-
-test('EJS fixture uses the native engine without network fallback', async () => {
-  const fetchSpy = jest.spyOn(global, 'fetch');
-  const fixture = await testEjsOnDevice();
-  expect(fixture.fixture?.actual).toBe('9nRTxrbM1f0yHg');
-  expect(fixture.jsChallengeCalls).toBe(1);
-  expect(native.testEjsFixture).toHaveBeenCalledTimes(1);
-  expect(fetchSpy).not.toHaveBeenCalled();
-  fetchSpy.mockRestore();
 });
 
 test('metadata uses the native module without HTTP client, token or backend fallback', async () => {
@@ -310,7 +244,12 @@ function TestCard() {
         onPress={() => void spike.analyze('https://youtu.be/AWGPaFraPN4')}
         disabled={spike.isBusy}
       />
-      <LocalYoutubeSpikeCard spike={spike} disabled={spike.isBusy} />
+      <LocalYoutubeMainCard
+        spike={spike}
+        disabled={spike.isBusy}
+        onNewDownload={spike.reset}
+      />
+      <LocalYoutubeDiagnosticsCard spike={spike} />
     </>
   );
 }
@@ -467,13 +406,12 @@ test('local metadata card selects direct M4A without exposing a stream URL', asy
   await screen.findByText('Video autorizado');
   expect(screen.getByText('Video autorizado')).toBeTruthy();
   expect(screen.getByText(/360p · mp4 · avc1/)).toBeTruthy();
-  expect(screen.getByText(/12:34/)).toBeTruthy();
-  expect(screen.getByText(/Seleccionado: M4A · mp4a.40.2/)).toBeTruthy();
-  await fireEvent.press(
-    screen.getByRole('button', {
-      name: 'Descargar audio en este iPhone',
-    }),
-  );
+  expect(screen.getAllByText(/12:34/).length).toBeGreaterThan(0);
+  expect(
+    screen.getByText(/Audio seleccionado: ID 140 · mp4a.40.2/),
+  ).toBeTruthy();
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   expect(native.startAudioDownload).toHaveBeenCalledWith(
     'a'.repeat(32),
     '140',
@@ -504,14 +442,10 @@ test.each(['audio', 'combined'] as const)(
     await render(<TestCard />);
     await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
     await screen.findByText('Video autorizado');
-    await fireEvent.press(
-      screen.getByRole('button', {
-        name:
-          mode === 'audio'
-            ? 'Descargar audio en este iPhone'
-            : 'Descargar video con audio en este iPhone',
-      }),
-    );
+    if (mode === 'audio') {
+      await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+    }
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
     if (mode === 'audio') {
       expect(native.startAudioDownload).toHaveBeenCalledWith(
         'a'.repeat(32),
@@ -541,14 +475,9 @@ test('native video-only progress completes, shares, and never exposes its URL', 
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
-  expect(
-    screen.getByText(/Seleccionado: 360p · MP4 · avc1 · ID 134/),
-  ).toBeTruthy();
-  await fireEvent.press(
-    screen.getByRole('button', {
-      name: 'Descargar video sin audio en este iPhone',
-    }),
-  );
+  expect(screen.getByText(/Video seleccionado: ID 134 · 360p/)).toBeTruthy();
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo video' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   expect(native.startVideoDownload).toHaveBeenCalledWith('a'.repeat(32), '134');
   expect(JSON.stringify(native.startVideoDownload.mock.calls)).not.toContain(
     'googlevideo',
@@ -566,7 +495,7 @@ test('native video-only progress completes, shares, and never exposes its URL', 
       progress: 0.5,
     });
   });
-  expect(screen.getByText('Descargando video… 50 %')).toBeTruthy();
+  expect(screen.getByText(/Descargando video… .*50 %/)).toBeTruthy();
   await act(() => {
     videoListener?.({
       jobId: 'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
@@ -580,10 +509,8 @@ test('native video-only progress completes, shares, and never exposes its URL', 
       localUri: 'file:///cache/Own%20video.mp4',
     });
   });
-  expect(screen.getByText('✓ Descarga de video completada')).toBeTruthy();
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Compartir video' }),
-  );
+  expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
   await waitFor(() =>
     expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4'),
   );
@@ -593,11 +520,8 @@ test('native video-only cancellation delegates to URLSession owner', async () =>
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
-  await fireEvent.press(
-    screen.getByRole('button', {
-      name: 'Descargar video sin audio en este iPhone',
-    }),
-  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo video' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   await act(() => {
     videoListener?.({
       jobId: 'A5371425-C825-4B4E-BAB1-C83E99D9ACF5',
@@ -612,7 +536,7 @@ test('native video-only cancellation delegates to URLSession owner', async () =>
     });
   });
   await fireEvent.press(
-    screen.getByRole('button', { name: 'Cancelar descarga de video' }),
+    screen.getByRole('button', { name: 'Cancelar descarga' }),
   );
   expect(native.cancelVideoDownload).toHaveBeenCalledTimes(1);
   await act(() => {
@@ -631,11 +555,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
-  await fireEvent.press(
-    screen.getByRole('button', {
-      name: 'Descargar video con audio en este iPhone',
-    }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   expect(native.startCombinedDownload).toHaveBeenCalledWith(
     'a'.repeat(32),
     '134',
@@ -656,7 +576,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
       progress: 0.5,
     });
   });
-  expect(screen.getByText(/Descargando video… 50 %/)).toBeTruthy();
+  expect(screen.getByText(/Descargando video… .*50 %/)).toBeTruthy();
   await act(() => {
     combinedListener?.({
       jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
@@ -666,7 +586,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
       progress: 0.5,
     });
   });
-  expect(screen.getByText(/Descargando audio… 50 %/)).toBeTruthy();
+  expect(screen.getByText(/Descargando audio… .*50 %/)).toBeTruthy();
   await act(() => {
     combinedListener?.({
       jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
@@ -674,7 +594,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
       progress: 0.75,
     });
   });
-  expect(screen.getByText('Combinando video y audio… 75 %')).toBeTruthy();
+  expect(screen.getByText('Combinando… 75 %')).toBeTruthy();
   await act(() => {
     combinedListener?.({
       jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
@@ -695,7 +615,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
       },
     });
   });
-  expect(screen.getByText('✓ Video con audio completado')).toBeTruthy();
+  expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
   expect(
     screen.getByText(/Primer Range solicitado: bytes=0-262143/),
   ).toBeTruthy();
@@ -703,12 +623,8 @@ test('combined download reports both transfers, muxes, completes, and shares', a
   expect(
     screen.getByText(/Primer Content-Range: bytes 0-262143\/586796/),
   ).toBeTruthy();
-  expect(
-    screen.getByText(/Host final del primer request: rr1\.googlevideo\.com/),
-  ).toBeTruthy();
-  await fireEvent.press(
-    screen.getAllByRole('button', { name: 'Compartir video' })[0]!,
-  );
+  expect(screen.getByText(/Host final: rr1\.googlevideo\.com/)).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
   await waitFor(() =>
     expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4'),
   );
@@ -718,32 +634,15 @@ test('720p selection is dynamic and remains opaque to React Native', async () =>
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
-  expect(
-    screen.getByRole('button', {
-      name: '360p · MP4 · AVC · seleccionada',
-    }),
-  ).toBeDisabled();
-  expect(
-    screen.queryByRole('button', { name: /720p · WebM · VP9/ }),
-  ).toBeNull();
+  expect(screen.getByRole('radio', { name: '360p' })).toBeChecked();
+  expect(screen.queryByRole('radio', { name: /WebM/ })).toBeNull();
   expect(screen.queryByText(/seleccionada.*ID 232/)).toBeNull();
 
-  await fireEvent.press(
-    screen.getByRole('button', { name: '720p · MP4 · AVC' }),
-  );
-  expect(
-    screen.getByRole('button', {
-      name: '720p · MP4 · AVC · seleccionada',
-    }),
-  ).toBeDisabled();
-  expect(screen.getByText(/Video: 720p · MP4 · avc1\.64001f/)).toBeTruthy();
-  expect(screen.getByText(/ID 136 · protocolo https/)).toBeTruthy();
+  await fireEvent.press(screen.getByRole('radio', { name: '720p' }));
+  expect(screen.getByRole('radio', { name: '720p' })).toBeChecked();
+  expect(screen.getByText(/Video seleccionado: ID 136 · 720p/)).toBeTruthy();
 
-  await fireEvent.press(
-    screen.getByRole('button', {
-      name: 'Descargar video con audio en este iPhone',
-    }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   expect(native.startCombinedDownload).toHaveBeenCalledWith(
     'a'.repeat(32),
     '136',
@@ -764,11 +663,7 @@ test.each([
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
-  await fireEvent.press(
-    screen.getByRole('button', {
-      name: 'Descargar video con audio en este iPhone',
-    }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   await act(() => {
     combinedListener?.({
       jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
@@ -783,7 +678,7 @@ test.each([
       errorCode: code,
     });
   });
-  expect(screen.getByText(new RegExp(`Código: ${code}`))).toBeTruthy();
+  expect(screen.getByRole('alert')).toHaveTextContent(localCombinedError(code));
 });
 
 test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
@@ -792,11 +687,7 @@ test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
     await render(<TestCard />);
     await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
     await screen.findByText('Video autorizado');
-    await fireEvent.press(
-      screen.getByRole('button', {
-        name: 'Descargar video con audio en este iPhone',
-      }),
-    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
     await act(() => {
       combinedListener?.({
         jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
@@ -805,12 +696,7 @@ test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
       });
     });
     await fireEvent.press(
-      screen.getByRole('button', {
-        name:
-          phase === 'MUXING'
-            ? 'Cancelar combinación'
-            : 'Cancelar video con audio',
-      }),
+      screen.getByRole('button', { name: 'Cancelar descarga' }),
     );
     expect(native.cancelCombinedDownload).toHaveBeenCalledTimes(1);
     await act(() => {
@@ -823,7 +709,7 @@ test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
         durationSeconds: 754,
       });
     });
-    expect(screen.queryByText('✓ Video con audio completado')).toBeNull();
+    expect(screen.queryByText('✓ Descarga completada')).toBeNull();
   },
 );
 
@@ -831,9 +717,8 @@ test('late audio completion after cancellation is ignored, then a retry can shar
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Descargar audio en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   expect(audioListener).not.toBeNull();
   await act(() => {
     audioListener?.({
@@ -847,9 +732,9 @@ test('late audio completion after cancellation is ignored, then a retry can shar
       progress: 0.5,
     });
   });
-  expect(screen.getByText('Descargando… 50 %')).toBeTruthy();
+  expect(screen.getByText(/Descargando audio… .*50 %/)).toBeTruthy();
   await fireEvent.press(
-    screen.getByRole('button', { name: 'Cancelar descarga de audio' }),
+    screen.getByRole('button', { name: 'Cancelar descarga' }),
   );
   expect(native.cancelAudioDownload).toHaveBeenCalledTimes(1);
 
@@ -871,9 +756,8 @@ test('late audio completion after cancellation is ignored, then a retry can shar
   expect(screen.queryByText('✓ Descarga completada')).toBeNull();
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Descargar audio en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   await act(() => {
     audioListener?.({
       jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
@@ -887,9 +771,7 @@ test('late audio completion after cancellation is ignored, then a retry can shar
     });
   });
   expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Compartir audio' }),
-  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
   await waitFor(() =>
     expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4'),
   );
@@ -899,9 +781,8 @@ test('downloaded audio is not published when passthrough normalization fails', a
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   await screen.findByText('Video autorizado');
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Descargar audio en este iPhone' }),
-  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   await act(() => {
     audioListener?.({
       jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
@@ -912,7 +793,7 @@ test('downloaded audio is not published when passthrough normalization fails', a
     });
   });
   expect(screen.queryByText('✓ Descarga completada')).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Compartir audio' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Más opciones' })).toBeNull();
   await act(() => {
     audioListener?.({
       jobId: 'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
@@ -921,7 +802,7 @@ test('downloaded audio is not published when passthrough normalization fails', a
     });
   });
   expect(screen.queryByText('✓ Descarga completada')).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Compartir audio' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Más opciones' })).toBeNull();
   expect(screen.getByText(/No se pudo preparar el archivo M4A/)).toBeTruthy();
 });
 
@@ -935,16 +816,6 @@ test('invalid local audio events are ignored', async () => {
     });
   });
   expect(screen.queryByText('✓ Descarga completada')).toBeNull();
-});
-
-test('physical EJS action displays the validated provider result', async () => {
-  await render(<TestCard />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Probar EJS en este iPhone' }),
-  );
-  expect(screen.getByText('✓ EJS real pasó')).toBeTruthy();
-  expect(screen.getByText(/MediaDropEmbedded · EJS 0.8.0/)).toBeTruthy();
-  expect(screen.getByText(/Subprocess: no · intentos: 0/)).toBeTruthy();
 });
 
 test('local LOGIN_REQUIRED stays specific, with no login suggestion', async () => {
@@ -966,7 +837,7 @@ test('pending local analysis prevents a second request and exposes cancellation'
     screen.getByRole('button', { name: 'Analizando en el iPhone…' }),
   ).toBeDisabled();
   await fireEvent.press(
-    screen.getByRole('button', { name: 'Cancelar análisis local' }),
+    screen.getByRole('button', { name: 'Cancelar análisis' }),
   );
   expect(native.analyze).toHaveBeenCalledTimes(1);
   expect(native.cancel).toHaveBeenCalledTimes(1);

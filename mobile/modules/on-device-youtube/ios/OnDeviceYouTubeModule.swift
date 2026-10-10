@@ -20,10 +20,6 @@ public class OnDeviceYouTubeModule: Module {
       MDPythonBridge.analyze(url) { result in promise.resolve(result) }
     }
 
-    AsyncFunction("testEjsFixture") { (promise: Promise) in
-      MDPythonBridge.testEJS { result in promise.resolve(result) }
-    }
-
     Function("startAudioDownload") {
       (analysisId: String, formatId: String, durationSeconds: Double) -> String? in
       guard !combinedDownload.isActive else { return nil }

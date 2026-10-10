@@ -138,7 +138,6 @@ function localYoutubeNativeEngine() {
   const listeners: Record<string, (event: unknown) => void> = {};
   return {
     analyze: jest.fn().mockResolvedValue(JSON.stringify(localYoutubeMetadata)),
-    testEjsFixture: jest.fn(),
     startAudioDownload: jest.fn(),
     cancelAudioDownload: jest.fn(),
     startVideoDownload: jest.fn(),
@@ -201,10 +200,12 @@ test('technical details show diagnostics without laboratory controls', async () 
   expect(screen.getByText(/ID: AWGPaFraPN4/)).toBeTruthy();
   expect(screen.queryByRole('button', { name: /Probar EJS/ })).toBeNull();
   expect(
+    screen.queryByRole('button', { name: 'Probar puente EJS/QuickJS' }),
+  ).toBeNull();
+  expect(
     screen.queryByRole('button', { name: /Descargar .* en este iPhone/ }),
   ).toBeNull();
   expect(screen.queryByText('Resolución de prueba')).toBeNull();
-  expect(native.testEjsFixture).not.toHaveBeenCalled();
 });
 
 test('YouTube never falls back to Render when the native engine is absent', async () => {

@@ -66,26 +66,3 @@ for (const [name, url, hash, directory] of dependencies) {
   }
   console.log(`Verified: ${name}`);
 }
-
-// Official yt-dlp/ejs 0.8.0 test vector player. Upstream's test harness also
-// downloads players from this URL; pinning the digest makes the iOS fixture
-// deterministic and prevents executing changed build-time input.
-const fixtureDirectory = resolve(root, 'fixtures');
-const fixtureName = 'player-74edf1a3-main.js';
-const fixtureUrl =
-  'https://www.youtube.com/s/player/74edf1a3/player_ias.vflset/en_US/base.js';
-const fixtureHash =
-  'ed9a4ea0646332a6b6c973ebe5a915c62c43db89bb2bb1a31eba07d906ef8ff7';
-const fixturePath = resolve(fixtureDirectory, fixtureName);
-mkdirSync(fixtureDirectory, { recursive: true });
-if (!existsSync(fixturePath)) {
-  const response = await fetch(fixtureUrl);
-  if (!response.ok) throw new Error(`Fixture download failed: ${fixtureName}`);
-  writeFileSync(fixturePath, Buffer.from(await response.arrayBuffer()));
-}
-if (
-  createHash('sha256').update(readFileSync(fixturePath)).digest('hex') !==
-  fixtureHash
-)
-  throw new Error(`Fixture checksum mismatch: ${fixtureName}`);
-console.log(`Verified: ${fixtureName}`);

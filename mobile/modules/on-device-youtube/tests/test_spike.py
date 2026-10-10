@@ -1,6 +1,7 @@
 """Offline host tests: not a replacement for execution on the physical iPhone."""
 
 import io
+import hashlib
 import json
 import socket
 import sys
@@ -20,6 +21,11 @@ import mediadrop_spike as spike  # noqa: E402
 import safe_network as network  # noqa: E402
 from yt_dlp.networking.common import Request  # noqa: E402
 from yt_dlp.networking.exceptions import TransportError  # noqa: E402
+from yt_dlp.extractor.youtube.jsc.provider import (  # noqa: E402
+    JsChallengeRequest,
+    JsChallengeType,
+    NChallengeInput,
+)
 
 
 class SpikeTests(unittest.TestCase):
@@ -616,58 +622,66 @@ class SpikeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "LOCAL_PROCESS_FORBIDDEN"):
             spike.prohibit_processes("subprocess.Popen", ())
 
-    def test_fixture_traverses_yt_dlp_ejs_provider(self):
+    def test_synthetic_fixture_traverses_production_provider_with_mock_native(self):
+        fixture_path = Path(__file__).resolve().parent / "fixtures/drop-ejs-diagnostic.js"
+        fixture = fixture_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            hashlib.sha256(fixture.encode("utf-8")).hexdigest(),
+            "da37d56875946ef256714d0ad35c485a1414d1abd742d4dc0989d2cc4d4b1683",
+        )
+        self.assertLess(len(fixture.encode("utf-8")), 4096)
+        self.assertNotIn("youtube.com", fixture.lower())
         response = json.dumps(
             {
                 "type": "result",
                 "responses": [
                     {
                         "type": "result",
-                        "data": {
-                            spike.EJS_FIXTURE_INPUT: spike.EJS_FIXTURE_EXPECTED
-                        },
+                        "data": {"drop-diagnostic": "citsongaid-pord"},
                     }
                 ],
                 "preprocessed_player": "fixture",
             }
         )
         native.run_js.side_effect = self.js_bridge(response)
-        with patch.object(spike, "load_ejs_fixture", return_value="player-code"):
-            result = json.loads(spike.run_ejs_fixture())
-        self.assertEqual(result["fixture"]["status"], "passed")
-        self.assertEqual(result["fixture"]["provider"], "MediaDropEmbedded")
-        self.assertEqual(result["jsChallengeCalls"], 1)
-        self.assertEqual(result["nativeRunJsCalls"], 4)
-        self.assertEqual(result["processAttempts"], 0)
-        self.assertFalse(result["subprocessUsed"])
-        self.assertTrue(result["diagnostics"]["providerInvoked"])
-        self.assertTrue(result["diagnostics"]["runJsInvoked"])
-        self.assertTrue(result["diagnostics"]["quickJsCompletedNormally"])
-        self.assertTrue(result["diagnostics"]["consoleLogCaptured"])
-        self.assertTrue(result["diagnostics"]["evaluationReturnIgnored"])
-        self.assertTrue(result["diagnostics"]["javascriptExceptionCaught"])
-        self.assertIsNone(result["diagnostics"]["parserError"])
+        with spike.LocalYoutubeDL(spike.local_options()) as downloader:
+            extractor = downloader.get_info_extractor("Youtube")
+            extractor.initialize()
+            director = extractor._jsc_director
+            provider = director.providers[spike.MediaDropEmbeddedJCP.PROVIDER_KEY]
+            self.assertTrue(provider.is_available())
+            provider._get_player = lambda video_id, player_url: fixture
+            request = JsChallengeRequest(
+                type=JsChallengeType.N,
+                video_id="drop-diagnostic",
+                input=NChallengeInput(
+                    player_url="https://drop.invalid/diagnostic/player.js",
+                    challenges=["drop-diagnostic"],
+                ),
+            )
+            responses = director.bulk_solve([request])
         self.assertEqual(
-            result["diagnostics"]["native"]["memoryLimitBytes"],
-            192 * 1024 * 1024,
+            responses[0][1].output.results["drop-diagnostic"],
+            "citsongaid-pord",
         )
+        self.assertEqual(spike.js_calls, 1)
         script = native.run_js.call_args.args[0]
-        self.assertIn("player-code", script)
-        self.assertIn(spike.EJS_FIXTURE_INPUT, script)
+        self.assertIn("createDropProbe", script)
+        self.assertIn("drop-diagnostic", script)
 
-    def test_fixture_rejects_an_invalid_solver_response(self):
-        response = json.dumps(
-            {
-                "type": "result",
-                "responses": [{"type": "result", "data": {}}],
-                "preprocessed_player": "fixture",
-            }
+    def test_synthetic_fixture_is_not_a_runtime_dependency(self):
+        module_root = Path(__file__).resolve().parents[1]
+        production = (module_root / "python/mediadrop_spike.py").read_text(
+            encoding="utf-8"
         )
-        native.run_js.side_effect = self.js_bridge(response)
-        with patch.object(spike, "load_ejs_fixture", return_value="player-code"):
-            result = json.loads(spike.run_ejs_fixture())
-        self.assertEqual(result["error"]["code"], "EJS_RESPONSE_MISSING")
-        self.assertEqual(result["jsChallengeCalls"], 1)
+        embed = (module_root.parents[1] / "scripts/embed_on_device_python.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("drop-ejs-diagnostic.js", production)
+        self.assertNotIn("md_fixtures", production)
+        self.assertNotIn("md_fixtures", embed)
+        self.assertNotIn("vendor/fixtures", embed)
+        self.assertIn("MediaDropEmbeddedJCP", production)
 
     def test_ejs_response_diagnostics_for_valid_json(self):
         diagnostics = spike.inspect_ejs_response(
@@ -691,22 +705,6 @@ class SpikeTests(unittest.TestCase):
             diagnostics["parserError"], "JSONDecodeError line 1 column 1"
         )
         self.assertEqual(diagnostics["responsePreview"], "not-json")
-
-    def test_js_bridge_contract_checks_console_return_and_exception(self):
-        native.run_js.side_effect = self.js_bridge("unused")
-        self.assertEqual(
-            spike.verify_js_bridge_contract(),
-            {
-                "consoleLogCaptured": True,
-                "evaluationReturnIgnored": True,
-                "javascriptExceptionCaught": True,
-            },
-        )
-
-    def test_js_bridge_contract_rejects_bad_console_capture(self):
-        native.run_js.side_effect = lambda script: "wrong"
-        with self.assertRaisesRegex(ValueError, "EJS_BRIDGE_CONTRACT_INVALID"):
-            spike.verify_js_bridge_contract()
 
     def test_native_diagnostics_are_allowlisted(self):
         native.get_js_diagnostics.return_value = json.dumps(

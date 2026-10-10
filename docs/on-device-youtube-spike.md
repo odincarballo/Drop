@@ -15,6 +15,12 @@ estable. `v1.0.1` permanece etiquetada y estable; la rama
 - CPython 3.13.15 ejecuta yt-dlp 2026.08.19 dentro del iPhone. QuickJS-NG
   0.16.2 está empaquetado para el proveedor EJS, pero su presencia no garantiza
   compatibilidad completa con todos los videos de YouTube.
+- El diagnóstico EJS sintético no forma parte de la app: no hay botón ni fixture
+  empaquetada. La fixture original de Drop vive solo en `tests/fixtures/` y el
+  verificador `node mobile/scripts/verify_ejs_diagnostic.mjs` ejercita el solver
+  EJS fijado en el host. Esta prueba **no** recorre el puente nativo del iPhone
+  ni demuestra compatibilidad con el JavaScript actual de YouTube. La
+  extracción normal conserva el proveedor EJS y QuickJS integrados.
 - La selección usa el catálogo del análisis actual y la identidad única de la
   pista de audio. Prioriza la pista original/predeterminada cuando los metadatos
   permiten identificarla; si hay ambigüedad, no sustituye silenciosamente la
@@ -175,7 +181,7 @@ otros procesos pueden consumirlo, por lo que siguen siendo necesarios el manejo
 de errores de escritura y la limpieza de parciales. No cambia los límites de
 recursos directos/Render.
 
-**Validación física manual:** con *The Wild Project #385 - Expediente Vallecas*
+**Validación física manual:** con _The Wild Project #385 - Expediente Vallecas_
 (aproximadamente 2 h 25 min), Drop habilitó 360p y Solo audio, bloqueó 720p
 por superar 1 GiB y mostró aproximadamente 457,3 MB para Video + audio 360p.
 La descarga combinada tardó unos 5–6 minutos, completó el mux y produjo un MP4

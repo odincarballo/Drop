@@ -8,7 +8,6 @@ import re
 import sys
 import time
 import uuid
-from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from _mediadrop_native import check, get_js_diagnostics, run_js
@@ -16,15 +15,11 @@ from safe_network import NetworkBudget, OnDeviceRH
 from yt_dlp import YoutubeDL
 from yt_dlp.extractor.youtube.jsc._builtin.ejs import EJSBaseJCP, ScriptSource
 from yt_dlp.extractor.youtube.jsc.provider import (
-    JsChallengeRequest,
-    JsChallengeType,
-    NChallengeInput,
     register_preference,
     register_provider,
 )
 from yt_dlp.utils import DownloadError
 from yt_dlp.version import __version__
-from yt_dlp_ejs import version as ejs_version
 from download_size_policy import (
     MAX_AUDIO_BYTES,
     PHASE_ONE_1080_MAX_BYTES,
@@ -33,19 +28,6 @@ from download_size_policy import (
 )
 
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
-EJS_FIXTURE_PLAYER_ID = "74edf1a3"
-EJS_FIXTURE_PLAYER_URL = (
-    "https://www.youtube.com/s/player/74edf1a3/"
-    "player_ias.vflset/en_US/base.js"
-)
-EJS_FIXTURE_PATH = (
-    Path(__file__).resolve().parent.parent / "md_fixtures/player-74edf1a3-main.js"
-)
-EJS_FIXTURE_SHA256 = (
-    "ed9a4ea0646332a6b6c973ebe5a915c62c43db89bb2bb1a31eba07d906ef8ff7"
-)
-EJS_FIXTURE_INPUT = "IlLiA21ny7gqA2m4p37"
-EJS_FIXTURE_EXPECTED = "9nRTxrbM1f0yHg"
 js_calls = 0
 native_js_calls = 0
 process_attempts = 0
@@ -165,13 +147,6 @@ def local_options():
     }
 
 
-def load_ejs_fixture():
-    content = EJS_FIXTURE_PATH.read_bytes()
-    if hashlib.sha256(content).hexdigest() != EJS_FIXTURE_SHA256:
-        raise ValueError("EJS_FIXTURE_INVALID")
-    return content.decode("utf-8")
-
-
 def execute_js(script):
     global native_js_calls
     native_js_calls += 1
@@ -248,111 +223,6 @@ def inspect_ejs_response(response):
     else:
         diagnostics["responsePreview"] = repr(parsed)[:240]
     return diagnostics
-
-
-def verify_js_bridge_contract():
-    console_output = execute_js(
-        'console.log("alpha", 7); console.log(JSON.stringify({ok: true}));'
-    )
-    return_output = execute_js("21 * 2;")
-    exception_caught = False
-    try:
-        execute_js('throw new Error("fixture error");')
-    except RuntimeError as error:
-        exception_caught = sanitize_runtime_error(error) == "LOCAL_JS_EVAL_FAILED"
-    diagnostics = {
-        "consoleLogCaptured": console_output == 'alpha 7\n{"ok":true}\n',
-        "evaluationReturnIgnored": return_output == "",
-        "javascriptExceptionCaught": exception_caught,
-    }
-    if not all(diagnostics.values()):
-        raise ValueError("EJS_BRIDGE_CONTRACT_INVALID")
-    return diagnostics
-
-
-def run_ejs_fixture():
-    """Run an upstream n-challenge vector through yt-dlp's actual JSC director."""
-    global ejs_diagnostics, js_calls, native_js_calls
-    started = time.monotonic()
-    js_calls = 0
-    native_js_calls = 0
-    ejs_diagnostics = {
-        "providerInvoked": False,
-        "runJsInvoked": False,
-        "quickJsCompletedNormally": False,
-        "quickJsFilesystemAttempts": 0,
-        "quickJsNetworkAttempts": 0,
-    }
-    attempts_before = process_attempts
-    result = {}
-    try:
-        check()
-        ejs_diagnostics.update(verify_js_bridge_contract())
-        player = load_ejs_fixture()
-        with LocalYoutubeDL(local_options()) as downloader:
-            extractor = downloader.get_info_extractor("Youtube")
-            extractor.initialize()
-            director = extractor._jsc_director
-            provider_key = MediaDropEmbeddedJCP.PROVIDER_KEY
-            if provider_key not in director.providers:
-                raise ValueError("EJS_PROVIDER_NOT_REGISTERED")
-            provider = director.providers[provider_key]
-            if not provider.is_available():
-                raise ValueError("EJS_PROVIDER_UNAVAILABLE")
-
-            # Keep the fixture deterministic and offline on-device while still
-            # traversing director.bulk_solve -> provider.bulk_solve ->
-            # EJSBaseJCP._real_bulk_solve -> _construct_stdin -> run_js.
-            provider._get_player = lambda video_id, player_url: player
-            request = JsChallengeRequest(
-                type=JsChallengeType.N,
-                video_id="fixture-ejs",
-                input=NChallengeInput(
-                    player_url=EJS_FIXTURE_PLAYER_URL,
-                    challenges=[EJS_FIXTURE_INPUT],
-                ),
-            )
-            responses = director.bulk_solve([request])
-        check()
-        if len(responses) != 1:
-            raise ValueError("EJS_RESPONSE_MISSING")
-        actual = responses[0][1].output.results.get(EJS_FIXTURE_INPUT)
-        if actual != EJS_FIXTURE_EXPECTED or js_calls < 1:
-            raise ValueError("EJS_RESPONSE_INVALID")
-        result["fixture"] = {
-            "status": "passed",
-            "challengeType": "n",
-            "challengeInput": EJS_FIXTURE_INPUT,
-            "expected": EJS_FIXTURE_EXPECTED,
-            "actual": actual,
-            "playerId": EJS_FIXTURE_PLAYER_ID,
-            "playerSha256": EJS_FIXTURE_SHA256,
-            "provider": provider_key,
-            "providerRegistered": True,
-            "scriptSource": "yt-dlp-ejs bundled Python package",
-            "ejsVersion": ejs_version,
-        }
-    except ValueError as error:
-        code = str(error)
-        result["error"] = {
-            "code": code if re.fullmatch(r"[A-Z_]+", code) else "EJS_FIXTURE_FAILED"
-        }
-    except Exception as error:
-        result["error"] = {"code": "EJS_FIXTURE_FAILED"}
-        result["exceptionType"] = type(error).__name__
-    result.update(
-        {
-            "elapsedSeconds": round(time.monotonic() - started, 3),
-            "jsChallengeCalls": js_calls,
-            "nativeRunJsCalls": native_js_calls,
-            "processAttempts": process_attempts - attempts_before,
-            "subprocessUsed": False,
-            "quickJsFilesystem": False,
-            "quickJsNetwork": False,
-            "diagnostics": ejs_diagnostics,
-        }
-    )
-    return json.dumps(result, allow_nan=False)
 
 
 def canonical_url(raw):

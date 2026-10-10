@@ -335,10 +335,6 @@ static BOOL mdInitialize(void) {
   [self invokePythonMethod:@"analyze" argument:url timeoutSeconds:100 completion:completion];
 }
 
-+ (void)testEJS:(void (^)(NSString *))completion {
-  [self invokePythonMethod:@"run_ejs_fixture" argument:nil timeoutSeconds:100 completion:completion];
-}
-
 + (void)prepareAudioDownload:(NSString *)analysisId
                     formatId:(NSString *)formatId
                   completion:(void (^)(NSString *))completion {
