@@ -4,7 +4,8 @@ from app.core.config import Settings
 
 
 def main() -> None:
-    settings = Settings()
+    # pydantic-settings loads the required token from the environment at runtime.
+    settings = Settings()  # type: ignore[call-arg]
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",

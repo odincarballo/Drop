@@ -24,7 +24,7 @@ class Settings(BaseSettings):
         le=65535,
         validation_alias=AliasChoices("PORT", "MEDIADROP_PORT"),
     )
-    api_token: SecretStr = Field(default=SecretStr("change-me"), min_length=8, max_length=512)
+    api_token: SecretStr = Field(min_length=8, max_length=512)
     analysis_provider: str = Field(default="auto", pattern=r"^(auto|direct|mock)$")
     analysis_timeout_seconds: float = Field(default=10, gt=0)
     max_file_size: int = Field(
@@ -101,7 +101,9 @@ class Settings(BaseSettings):
         token = self.api_token.get_secret_value()
         if token != token.strip():
             raise ValueError("MEDIADROP_API_TOKEN must not contain surrounding whitespace")
-        if self.environment == "production" and (token == "change-me" or len(token) < 32):
+        if token == "change-me":
+            raise ValueError("Replace the example API token before starting the backend")
+        if self.environment == "production" and len(token) < 32:
             raise ValueError("Production requires a unique API token of at least 32 characters")
         if self.max_temp_work_bytes < self.max_input_bytes + self.max_output_bytes:
             raise ValueError("MAX_TEMP_WORK_BYTES must cover MAX_INPUT_BYTES plus MAX_OUTPUT_BYTES")

@@ -42,6 +42,17 @@ def test_protected_route_rejects_incorrect_token(settings: Settings) -> None:
     assert response.json()["error"]["code"] == "AUTH_INVALID"
 
 
+def test_protected_route_rejects_example_token(settings: Settings) -> None:
+    with TestClient(
+        create_app(settings), headers={"Authorization": "Bearer change-me"}
+    ) as unauthenticated_client:
+        response = unauthenticated_client.post(
+            "/analyze", json={"url": "https://example.com/video.mp4"}
+        )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "AUTH_INVALID"
+
+
 def test_protected_route_accepts_correct_token(settings: Settings) -> None:
     with TestClient(create_app(settings), headers=AUTH_HEADERS) as authenticated_client:
         response = authenticated_client.post(

@@ -126,21 +126,24 @@ app container.
 ### Backend and Bearer token
 
 YouTube uses the on-device path. Direct HTTP(S) resources require a backend
-you operate. For local development, configure `backend/.env` from
-`backend/.env.example`, set a unique token, then start the backend with the
-locked Python dependencies:
+you operate. For development on this Mac only, configure `backend/.env` from
+`backend/.env.example`, replace the example token, then start the backend with
+the locked Python dependencies:
 
 ```bash
 cd ../backend
 cp .env.example .env
 uv sync --frozen --extra dev
-uv run --frozen uvicorn app.main:app --host 0.0.0.0 --port 8000
+uv run --frozen uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Replace `change-me` in `backend/.env` before starting a production backend;
-production requires a unique token of at least 32 characters. Run
-`cd ../mobile`, copy `.env.development.example` to `.env.development`, and set
-its URL to your Mac's LAN origin when testing on a physical iPhone. The
+The example token is not functional: the backend refuses to start with it or
+without an explicit token in every environment. Production requires a unique
+token of at least 32 characters. To test from a physical iPhone on a trusted
+LAN, explicitly use `--host 0.0.0.0` instead and set the URL in
+`mobile/.env.development` to your Mac's LAN origin (copy it from
+`mobile/.env.development.example`). Plain HTTP on a LAN transmits the Bearer
+token without TLS encryption; do not use it on an untrusted network. The
 development example contains no secret. Enter the corresponding backend token
 in Drop's private-access UI; the app stores it in SecureStore.
 

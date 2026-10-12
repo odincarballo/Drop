@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    config = settings if settings is not None else Settings()
+    # pydantic-settings loads the required token from the environment at runtime.
+    config = settings if settings is not None else Settings()  # type: ignore[call-arg]
     storage = LocalTemporaryStorage(config.temp_directory, config.temp_file_ttl)
     url_policy = URLSafetyPolicy(config)
     http_client = SafeHTTPClient(url_policy, AiohttpPinnedTransport(config), config)

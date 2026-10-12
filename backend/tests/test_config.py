@@ -4,18 +4,34 @@ from pydantic import ValidationError
 from app.core.config import Settings
 
 
-def test_production_rejects_placeholder_token() -> None:
-    with pytest.raises(ValidationError, match="unique API token"):
-        Settings(_env_file=None, environment="production", api_token="change-me")
+@pytest.mark.parametrize("environment", ["test", "development", "production"])
+def test_all_environments_reject_placeholder_token(environment: str) -> None:
+    with pytest.raises(ValidationError, match="Replace the example API token"):
+        Settings(_env_file=None, environment=environment, api_token="change-me")
 
 
-def test_production_accepts_strong_token() -> None:
+@pytest.mark.parametrize("environment", ["test", "development", "production"])
+def test_all_environments_reject_missing_token(
+    environment: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MEDIADROP_API_TOKEN", raising=False)
+    with pytest.raises(ValidationError, match="api_token"):
+        Settings(_env_file=None, environment=environment)
+
+
+@pytest.mark.parametrize("environment", ["test", "development", "production"])
+def test_all_environments_accept_explicit_token(environment: str) -> None:
     settings = Settings(
         _env_file=None,
-        environment="production",
-        api_token="a-production-token-with-at-least-32-characters",
+        environment=environment,
+        api_token="synthetic-test-token-with-at-least-32-characters",
     )
-    assert settings.environment == "production"
+    assert settings.environment == environment
+
+
+def test_production_still_rejects_short_token() -> None:
+    with pytest.raises(ValidationError, match="at least 32 characters"):
+        Settings(_env_file=None, environment="production", api_token="short-token")
 
 
 def test_container_environment_variable_names(monkeypatch: pytest.MonkeyPatch) -> None:
