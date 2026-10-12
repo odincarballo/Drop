@@ -46,7 +46,9 @@ persisting signed stream URLs and keeps the backend Bearer token in iOS
 SecureStore rather than source code or an `EXPO_PUBLIC_*` variable. Lockfiles,
 pinned preparation inputs, checksums, automated suites, and documented
 physical-device checks support reproducible verification; a fresh public
-clone/build verification is still pending.
+clone has been verified anonymously. Clean-checkout Release verification was
+completed during repository preparation; independent third-party end-to-end
+build and installation from a fresh public clone remain pending.
 
 ## Requirements
 
@@ -67,9 +69,10 @@ Do not put signing identities, provisioning profiles, or Bearer tokens in Git.
 
 ## Run Drop on your iPhone
 
-The following is the intended development workflow, **not yet independently
-validated from a fresh public clone**. Block 3 of the public-repository
-preparation will verify the full path before public release.
+The published repository has been cloned anonymously. A clean-checkout Release
+was verified from an isolated checkout during repository preparation. The
+manual development and installation workflow below has not yet been
+independently validated end-to-end by a third party from a fresh public clone.
 
 1. Clone this repository and install the locked JavaScript dependencies:
 
@@ -156,8 +159,10 @@ Never put the Bearer token there: configure the token on your own backend and
 enter it in Drop's private-access UI, which stores it in SecureStore.
 
 The clean-checkout Release procedure is documented in
-[docs/reproducible-ios-release.md](docs/reproducible-ios-release.md). It has not
-yet been verified end-to-end by a third-party clone; that is Block 3.
+[docs/reproducible-ios-release.md](docs/reproducible-ios-release.md).
+Clean-checkout Release verification was completed during repository
+preparation; independent third-party end-to-end build and installation from
+the published repository remain pending.
 
 ## Security model and authorized content
 
@@ -194,8 +199,9 @@ Ruff and mypy checks are configured in `backend/pyproject.toml`.
 The repository contains Swift unit-test sources alongside native modules.
 Automated tests do not replace physical verification of signing, background
 audio, PiP, file export, or iOS storage behavior. The versioned Release script
-uses pinned dependencies and verifies bootstrap inputs; Block 3 will test its
-public-clone reproducibility.
+uses pinned dependencies and verifies bootstrap inputs. The clean-checkout
+Release workflow was verified during repository preparation; independent
+third-party end-to-end verification from a fresh public clone remains pending.
 
 ## Known limitations and roadmap
 
@@ -207,8 +213,10 @@ background playback is separate. There is no sleep timer, playlist, cloud
 sync, or import of old Files exports. Source compatibility and available
 storage may vary by device and source.
 
-The roadmap is intentionally short: finish public-clone reproducibility and
-security/distribution review before committing to additional product features.
+The repository is now public, and its publication security/distribution review
+is complete. The remaining distribution-validation item is independent
+third-party end-to-end build and installation verification from a fresh public
+clone.
 
 ## Third-party software and license
 
