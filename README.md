@@ -1,8 +1,8 @@
 # Drop
 
 Drop is an iPhone app for downloading authorized media and keeping it in an
-offline library. This repository is named **MediaDrop**; the app shown on the
-iPhone is **Drop**. The current tagged app is v1.1.0.
+offline library. The repository and the iPhone app are both named **Drop**.
+The current tagged app is v1.1.0.
 
 Drop is designed for public or otherwise authorized content. It does not
 support DRM bypass, private accounts, memberships, paywalls, login cookies,
@@ -74,8 +74,8 @@ preparation will verify the full path before public release.
 1. Clone this repository and install the locked JavaScript dependencies:
 
    ```bash
-   git clone https://github.com/odincarballo/MediaDrop.git
-   cd MediaDrop/mobile
+   git clone https://github.com/odincarballo/Drop.git
+   cd Drop/mobile
    npm ci
    ```
 

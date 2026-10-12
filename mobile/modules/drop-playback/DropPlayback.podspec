@@ -3,10 +3,10 @@ Pod::Spec.new do |s|
   s.version = '0.1.0'
   s.summary = 'Single local-media player for the Drop library'
   s.description = s.summary
-  s.license = { :type => 'Private' }
+  s.license = { :type => 'MIT' }
   s.author = 'Drop'
-  s.homepage = 'https://github.com/odincarballo/MediaDrop'
-  s.source = { :git => 'https://github.com/odincarballo/MediaDrop.git' }
+  s.homepage = 'https://github.com/odincarballo/Drop'
+  s.source = { :git => 'https://github.com/odincarballo/Drop.git' }
   s.platform = :ios, '16.4'
   s.swift_version = '5.9'
   s.static_framework = true
