@@ -47,8 +47,10 @@ SecureStore rather than source code or an `EXPO_PUBLIC_*` variable. Lockfiles,
 pinned preparation inputs, checksums, automated suites, and documented
 physical-device checks support reproducible verification; a fresh public
 clone has been verified anonymously. Clean-checkout Release verification was
-completed during repository preparation; independent third-party end-to-end
-build and installation from a fresh public clone remain pending.
+completed during repository preparation. The author subsequently completed a
+fresh public-clone Release self-validation, including build, signed installation,
+and physical smoke testing. Independent third-party end-to-end verification
+remains pending.
 
 ## Requirements
 
@@ -69,10 +71,10 @@ Do not put signing identities, provisioning profiles, or Bearer tokens in Git.
 
 ## Run Drop on your iPhone
 
-The published repository has been cloned anonymously. A clean-checkout Release
-was verified from an isolated checkout during repository preparation. The
-manual development and installation workflow below has not yet been
-independently validated end-to-end by a third party from a fresh public clone.
+The author completed Release self-validation from an anonymous fresh clone of
+the published repository: build, signing, side-by-side installation, and launch
+without Metro succeeded. Independent third-party end-to-end validation of the
+workflow below remains pending.
 
 1. Clone this repository and install the locked JavaScript dependencies:
 
@@ -161,8 +163,9 @@ enter it in Drop's private-access UI, which stores it in SecureStore.
 The clean-checkout Release procedure is documented in
 [docs/reproducible-ios-release.md](docs/reproducible-ios-release.md).
 Clean-checkout Release verification was completed during repository
-preparation; independent third-party end-to-end build and installation from
-the published repository remain pending.
+preparation. A Release was subsequently built, signed, installed side by side,
+and physically smoke-tested from a fresh clone of the published repository by
+the author. Independent third-party verification remains pending.
 
 ## Security model and authorized content
 
@@ -202,6 +205,10 @@ audio, PiP, file export, or iOS storage behavior. The versioned Release script
 uses pinned dependencies and verifies bootstrap inputs. The clean-checkout
 Release workflow was verified during repository preparation; independent
 third-party end-to-end verification from a fresh public clone remains pending.
+In the author's fresh public-clone self-validation, the Release built and
+installed, launched without Metro, downloaded an authorized YouTube video, and
+passed local playback, controls, background audio, PiP, and library-persistence
+checks across an app restart, including playback after reopening.
 
 ## Known limitations and roadmap
 
@@ -214,9 +221,9 @@ sync, or import of old Files exports. Source compatibility and available
 storage may vary by device and source.
 
 The repository is now public, and its publication security/distribution review
-is complete. The remaining distribution-validation item is independent
-third-party end-to-end build and installation verification from a fresh public
-clone.
+and author fresh public-clone self-validation are complete. The remaining
+distribution-validation item is independent third-party end-to-end build and
+installation verification from a fresh public clone.
 
 ## Third-party software and license
 
