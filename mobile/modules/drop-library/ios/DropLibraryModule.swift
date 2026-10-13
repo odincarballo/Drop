@@ -81,6 +81,21 @@ public final class DropLibraryModule: Module {
   public func definition() -> ModuleDefinition {
     Name("DropLibrary")
 
+    AsyncFunction("normalizeCollectionName") { (raw: String) -> [String: String] in
+      do {
+        let result = try DropCollectionNamePolicy.normalize(raw)
+        return ["name": result.name, "normalizedName": result.normalizedName]
+      } catch let error as DropCollectionNameError {
+        return ["error": error.rawValue]
+      } catch {
+        return ["error": "invalid"]
+      }
+    }
+
+    Function("newCollectionId") { () -> String in
+      DropCollectionNamePolicy.newID()
+    }
+
     AsyncFunction("prepare") { () throws -> [String: String] in
       let storage = try DropLibraryStorage()
       let root = try DropLibraryDatabase.prepare(

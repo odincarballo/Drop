@@ -38,9 +38,13 @@ type NativeLibrary = {
   ): Promise<{ uri: string; sizeBytes: number }>;
 };
 
-type Row = Omit<LibraryItem, 'uri' | 'artworkUri' | 'thumbnailUrl'> & {
+export type LibraryRow = Omit<
+  LibraryItem,
+  'uri' | 'artworkUri' | 'thumbnailUrl'
+> & {
   sourceCacheRelativePath: string | null;
 };
+type Row = LibraryRow;
 
 let startup: Promise<void> | null = null;
 const leases = new Map<string, number>();
@@ -243,13 +247,10 @@ async function attach(row: Row): Promise<LibraryItem | null> {
   };
 }
 
-export async function listLibrary(): Promise<LibraryItem[]> {
-  await initializeLibrary();
-  const rows = await (
-    await openLibraryDatabase()
-  ).getAllAsync<Row>(
-    `SELECT * FROM library_items WHERE lifecycle = 'ready' ORDER BY downloadedAt DESC, id DESC`,
-  );
+/** Hydrate SQL rows through Biblioteca's existing physical-media validation. */
+export async function hydrateLibraryRows(
+  rows: LibraryRow[],
+): Promise<LibraryItem[]> {
   const items = await Promise.all(
     rows.map(async (row) => {
       try {
@@ -261,6 +262,16 @@ export async function listLibrary(): Promise<LibraryItem[]> {
     }),
   );
   return items.filter((item): item is LibraryItem => item !== null);
+}
+
+export async function listLibrary(): Promise<LibraryItem[]> {
+  await initializeLibrary();
+  const rows = await (
+    await openLibraryDatabase()
+  ).getAllAsync<Row>(
+    `SELECT * FROM library_items WHERE lifecycle = 'ready' ORDER BY downloadedAt DESC, id DESC`,
+  );
+  return hydrateLibraryRows(rows);
 }
 
 export async function getLibraryItem(id: string): Promise<LibraryItem | null> {
