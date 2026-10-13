@@ -1,4 +1,7 @@
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
+jest.mock('@/services/libraryDatabase', () => ({
+  openLibraryDatabase: jest.fn(),
+}));
 
 type Row = Record<string, unknown> & {
   id: string;
@@ -208,8 +211,10 @@ beforeEach(() => {
   expo.requireOptionalNativeModule.mockImplementation((name: string) =>
     name === 'DropPlayback' ? playbackNative : native,
   );
-  const sqlite = require('expo-sqlite') as { openDatabaseAsync: jest.Mock };
-  sqlite.openDatabaseAsync.mockResolvedValue(db);
+  const database = require('@/services/libraryDatabase') as {
+    openLibraryDatabase: jest.Mock;
+  };
+  database.openLibraryDatabase.mockResolvedValue(db);
   jest.clearAllMocks();
 });
 
@@ -227,13 +232,12 @@ test('YouTube completion moves once, confirms ready, and keeps safe paths', asyn
   expect(media.size).toBe(1);
   expect((await library.listLibrary())[0]?.title).toBe('../../otro.mp4');
   expect(
-    (require('expo-sqlite') as { openDatabaseAsync: jest.Mock })
-      .openDatabaseAsync,
-  ).toHaveBeenCalledWith(
-    'library.sqlite',
-    {},
-    'file:///app/Library/Application%20Support/Drop/',
-  );
+    (
+      require('@/services/libraryDatabase') as {
+        openLibraryDatabase: jest.Mock;
+      }
+    ).openLibraryDatabase,
+  ).toHaveBeenCalled();
   expect(await library.librarySpaceUsed()).toBe(457_001_000);
 });
 
@@ -251,8 +255,8 @@ test('direct media promotes without a second media copy and survives service res
     name === 'DropPlayback' ? playbackNative : native,
   );
   (
-    require('expo-sqlite') as { openDatabaseAsync: jest.Mock }
-  ).openDatabaseAsync.mockResolvedValue(db);
+    require('@/services/libraryDatabase') as { openLibraryDatabase: jest.Mock }
+  ).openLibraryDatabase.mockResolvedValue(db);
   library = service();
   expect((await library.listLibrary())[0]?.sizeBytes).toBe(20_000_000);
   expect(native.movePrepared).toHaveBeenCalledTimes(1);
@@ -286,8 +290,8 @@ test('restart finalizes a move interrupted before ready', async () => {
     name === 'DropPlayback' ? playbackNative : native,
   );
   (
-    require('expo-sqlite') as { openDatabaseAsync: jest.Mock }
-  ).openDatabaseAsync.mockResolvedValue(db);
+    require('@/services/libraryDatabase') as { openLibraryDatabase: jest.Mock }
+  ).openLibraryDatabase.mockResolvedValue(db);
   library = service();
   expect((await library.listLibrary())[0]?.lifecycle).toBe('ready');
 });

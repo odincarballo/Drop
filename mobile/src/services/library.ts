@@ -1,7 +1,7 @@
 import { requireOptionalNativeModule } from 'expo';
-import * as SQLite from 'expo-sqlite';
 
 import type { LibraryItem, LibraryMetadata } from '@/models/library';
+import { openLibraryDatabase } from '@/services/libraryDatabase';
 import {
   beginPlaybackDeletion,
   endPlaybackDeletion,
@@ -42,8 +42,6 @@ type Row = Omit<LibraryItem, 'uri' | 'artworkUri' | 'thumbnailUrl'> & {
   sourceCacheRelativePath: string | null;
 };
 
-const SCHEMA_VERSION = 1;
-let opening: Promise<SQLite.SQLiteDatabase> | null = null;
 let startup: Promise<void> | null = null;
 const leases = new Map<string, number>();
 const pendingDeletion = new Set<string>();
@@ -64,62 +62,6 @@ function changed() {
 export function observeLibrary(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
-}
-
-async function database(): Promise<SQLite.SQLiteDatabase> {
-  if (!opening) {
-    opening = (async () => {
-      const { databaseDirectoryURL } = await native().prepare();
-      const db = await SQLite.openDatabaseAsync(
-        'library.sqlite',
-        {},
-        databaseDirectoryURL,
-      );
-      await db.execAsync(
-        'PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;',
-      );
-      const version = await db.getFirstAsync<{ user_version: number }>(
-        'PRAGMA user_version',
-      );
-      if ((version?.user_version ?? 0) > SCHEMA_VERSION)
-        throw new Error('La Biblioteca usa una versión de datos más reciente.');
-      if ((version?.user_version ?? 0) === 0) {
-        await db.execAsync(`
-          CREATE TABLE IF NOT EXISTS library_items (
-            id TEXT PRIMARY KEY NOT NULL,
-            sourceKind TEXT NOT NULL CHECK(sourceKind IN ('youtube','direct')),
-            sourceVideoId TEXT,
-            title TEXT NOT NULL,
-            mediaType TEXT NOT NULL CHECK(mediaType IN ('video','audio')),
-            relativeMediaPath TEXT NOT NULL UNIQUE,
-            relativeArtworkPath TEXT,
-            sourceCacheRelativePath TEXT,
-            durationSeconds REAL,
-            sizeBytes INTEGER NOT NULL,
-            artworkSizeBytes INTEGER NOT NULL DEFAULT 0,
-            resolution TEXT,
-            height INTEGER,
-            fps REAL,
-            videoCodec TEXT,
-            audioCodec TEXT,
-            container TEXT,
-            downloadedAt TEXT NOT NULL,
-            playbackPositionSeconds REAL NOT NULL DEFAULT 0,
-            completedAt TEXT,
-            lifecycle TEXT NOT NULL CHECK(lifecycle IN ('pending','ready','deleting'))
-          );
-          CREATE INDEX IF NOT EXISTS library_items_recent
-            ON library_items(lifecycle, downloadedAt DESC);
-          PRAGMA user_version = 1;
-        `);
-      }
-      return db;
-    })().catch((error: unknown) => {
-      opening = null;
-      throw error;
-    });
-  }
-  return opening;
 }
 
 function mediaRelative(id: string, ext: string) {
@@ -151,7 +93,7 @@ function validatedMetadata(meta: LibraryMetadata): LibraryMetadata {
 async function rowFor(id: string): Promise<Row | null> {
   return (
     (await (
-      await database()
+      await openLibraryDatabase()
     ).getFirstAsync<Row>('SELECT * FROM library_items WHERE id = ?', id)) ??
     null
   );
@@ -168,7 +110,7 @@ async function finishDeletion(row: Row): Promise<void> {
     await storage.removeMedia(row.relativeMediaPath);
     await storage.removeArtwork(row.id);
     await (
-      await database()
+      await openLibraryDatabase()
     ).runAsync('DELETE FROM library_items WHERE id = ?', row.id);
     pendingDeletion.delete(row.id);
     changed();
@@ -178,7 +120,7 @@ async function finishDeletion(row: Row): Promise<void> {
 }
 
 async function reconcile(): Promise<void> {
-  const db = await database();
+  const db = await openLibraryDatabase();
   const storage = native();
   const rows = await db.getAllAsync<Row>('SELECT * FROM library_items');
   for (const row of rows) {
@@ -304,7 +246,7 @@ async function attach(row: Row): Promise<LibraryItem | null> {
 export async function listLibrary(): Promise<LibraryItem[]> {
   await initializeLibrary();
   const rows = await (
-    await database()
+    await openLibraryDatabase()
   ).getAllAsync<Row>(
     `SELECT * FROM library_items WHERE lifecycle = 'ready' ORDER BY downloadedAt DESC, id DESC`,
   );
@@ -341,7 +283,7 @@ export async function promoteToLibrary(
 ): Promise<LibraryItem> {
   await initializeLibrary();
   const storage = native();
-  const db = await database();
+  const db = await openLibraryDatabase();
   const prepared = await storage.inspectSource(uri);
   const relative = mediaRelative(prepared.id, prepared.extension);
   const safe = validatedMetadata(metadata);
@@ -462,7 +404,7 @@ async function performDeletion(id: string): Promise<void> {
   await initializeLibrary();
   await beginPlaybackDeletion(id);
   try {
-    const db = await database();
+    const db = await openLibraryDatabase();
     await db.runAsync(
       "UPDATE library_items SET lifecycle = 'deleting' WHERE id = ? AND lifecycle = 'ready'",
       id,
