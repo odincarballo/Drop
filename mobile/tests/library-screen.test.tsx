@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -17,13 +18,38 @@ import {
   listLibrary,
   withLibraryLease,
 } from '@/services/library';
+import {
+  countUncollectedItems,
+  createCollection,
+  deleteCollection,
+  listCollections,
+  observeCollections,
+  renameCollection,
+} from '@/services/collections';
 
 const mockPush = jest.fn();
+const mockSetParams = jest.fn();
+let mockSection = 'downloads';
 
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: mockPush, replace: jest.fn() }),
+  useRouter: () => ({
+    push: mockPush,
+    replace: jest.fn(),
+    setParams: mockSetParams,
+  }),
+  useLocalSearchParams: () => ({ section: mockSection }),
   useFocusEffect: (callback: () => void) =>
-    require('react').useEffect(callback, []),
+    require('react').useEffect(callback, [callback]),
+}));
+jest.mock('@/services/collections', () => ({
+  listCollections: jest.fn(),
+  countUncollectedItems: jest.fn(),
+  createCollection: jest.fn(),
+  renameCollection: jest.fn(),
+  deleteCollection: jest.fn(),
+  listItemCollectionIds: jest.fn(async () => []),
+  setItemCollections: jest.fn(),
+  observeCollections: jest.fn(() => jest.fn()),
 }));
 jest.mock('@/services/library', () => ({
   listLibrary: jest.fn(),
@@ -74,10 +100,138 @@ const item = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockSection = 'downloads';
   jest.mocked(listLibrary).mockResolvedValue([item] as never);
+  jest.mocked(listCollections).mockResolvedValue([]);
+  jest.mocked(countUncollectedItems).mockResolvedValue(1);
+  jest.mocked(createCollection).mockResolvedValue({
+    id: 'c',
+    name: 'Cursos',
+    createdAt: 'now',
+    updatedAt: 'now',
+  });
+  jest.mocked(renameCollection).mockResolvedValue({
+    id: 'c',
+    name: 'Renombrada',
+    createdAt: 'now',
+    updatedAt: 'now',
+  });
+  jest.mocked(deleteCollection).mockResolvedValue(undefined);
   jest.mocked(saveLocalFileToFiles).mockResolvedValue('saved');
   jest.mocked(shareLocalFile).mockResolvedValue(undefined);
   jest.mocked(deleteLibraryItem).mockResolvedValue(undefined);
+});
+
+test('Descargas is initial and switching preserves filters and opens Collections', async () => {
+  const view = await render(<LibraryScreen />);
+  expect(
+    screen.getByRole('tab', { name: 'Descargas' }).props.accessibilityState
+      .selected,
+  ).toBe(true);
+  expect(screen.getByRole('button', { name: 'Todos' })).toBeTruthy();
+  await fireEvent.press(screen.getByRole('tab', { name: 'Colecciones' }));
+  expect(mockSetParams).toHaveBeenCalledWith({ section: 'collections' });
+  mockSection = 'collections';
+  await view.rerender(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Sin colección')).toBeTruthy());
+  expect(screen.getByText('1 elemento · Vista automática')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('tab', { name: 'Descargas' }));
+  mockSection = 'downloads';
+  await view.rerender(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+});
+
+test('Collections include empty rows, create, rename and delete without deleting media', async () => {
+  mockSection = 'collections';
+  jest.mocked(listCollections).mockResolvedValue([
+    {
+      id: 'c',
+      name: 'Cursos',
+      createdAt: 'now',
+      updatedAt: 'now',
+      itemCount: 0,
+    },
+  ]);
+  const prompt = jest
+    .spyOn(Alert, 'prompt')
+    .mockImplementation(() => undefined);
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Cursos')).toBeTruthy());
+  expect(screen.getByText('0 elementos')).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Crear colección' }),
+  );
+  const createButtons = prompt.mock.calls[0]?.[2];
+  if (Array.isArray(createButtons))
+    (createButtons[1]?.onPress as ((name: string) => void) | undefined)?.(
+      'Nueva',
+    );
+  await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Nueva'));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Renombrar Cursos' }),
+  );
+  const renameButtons = prompt.mock.calls[1]?.[2];
+  if (Array.isArray(renameButtons))
+    (renameButtons[1]?.onPress as ((name: string) => void) | undefined)?.(
+      'Renombrada',
+    );
+  await waitFor(() =>
+    expect(renameCollection).toHaveBeenCalledWith('c', 'Renombrada'),
+  );
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Eliminar colección Cursos' }),
+  );
+  expect(alert.mock.calls[0]?.[1]).toContain('permanecerán');
+  const deleteButtons = alert.mock.calls[0]?.[2];
+  if (Array.isArray(deleteButtons)) deleteButtons[1]?.onPress?.();
+  await waitFor(() => expect(deleteCollection).toHaveBeenCalledWith('c'));
+  expect(deleteLibraryItem).not.toHaveBeenCalled();
+  prompt.mockRestore();
+  alert.mockRestore();
+});
+
+test('older Collections refresh cannot overwrite a newer observer result', async () => {
+  mockSection = 'collections';
+  let resolveOld!: (rows: Awaited<ReturnType<typeof listCollections>>) => void;
+  let refresh!: () => void;
+  jest
+    .mocked(listCollections)
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        }),
+    )
+    .mockResolvedValueOnce([
+      {
+        id: 'new',
+        name: 'Actual',
+        itemCount: 0,
+        createdAt: 'now',
+        updatedAt: 'now',
+      },
+    ]);
+  jest.mocked(observeCollections).mockImplementation((listener) => {
+    refresh = listener;
+    return jest.fn();
+  });
+  await render(<LibraryScreen />);
+  await act(async () => refresh());
+  await waitFor(() => expect(screen.getByText('Actual')).toBeTruthy());
+  await act(async () =>
+    resolveOld([
+      {
+        id: 'old',
+        name: 'Obsoleta',
+        itemCount: 0,
+        createdAt: 'now',
+        updatedAt: 'now',
+      },
+    ]),
+  );
+  expect(screen.queryByText('Obsoleta')).toBeNull();
+  expect(screen.getByText('Actual')).toBeTruthy();
 });
 
 test('library lists offline item, real space, and filters', async () => {

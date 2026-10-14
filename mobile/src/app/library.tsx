@@ -1,110 +1,171 @@
 import { useCallback, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import { useFocusEffect, useRouter, type Href } from 'expo-router';
+import {
+  useFocusEffect,
+  useLocalSearchParams,
+  useRouter,
+  type Href,
+} from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CollectionPicker } from '@/components/CollectionPicker';
+import { LibraryItemRow } from '@/components/LibraryItemRow';
+import { useLibraryItemActions } from '@/hooks/useLibraryItemActions';
+import type { CollectionSummary } from '@/models/collections';
 import type { LibraryItem } from '@/models/library';
 import {
-  saveLocalFileToFiles,
-  withNamedLibraryFile,
-} from '@/services/fileExport';
-import { shareLocalFile } from '@/services/jobs';
-import {
-  deleteLibraryItem,
-  listLibrary,
-  observeLibrary,
-  withLibraryLease,
-} from '@/services/library';
+  countUncollectedItems,
+  createCollection,
+  deleteCollection,
+  listCollections,
+  observeCollections,
+  renameCollection,
+} from '@/services/collections';
+import { listLibrary, observeLibrary } from '@/services/library';
 import { useTheme } from '@/theme';
+import { collectionErrorMessage } from '@/utils/collectionErrors';
 import { formatSize } from '@/utils/format';
 
 type Filter = 'all' | 'video' | 'audio';
+type Section = 'downloads' | 'collections';
+
+function itemCount(count: number): string {
+  return `${count} ${count === 1 ? 'elemento' : 'elementos'}`;
+}
 
 export default function LibraryScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ section?: string }>();
+  const section: Section =
+    params.section === 'collections' ? 'collections' : 'downloads';
   const { colors } = useTheme();
   const [items, setItems] = useState<LibraryItem[]>([]);
+  const [collections, setCollections] = useState<CollectionSummary[]>([]);
+  const [uncollectedCount, setUncollectedCount] = useState(0);
   const [filter, setFilter] = useState<Filter>('all');
   const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pickerItemId, setPickerItemId] = useState<string | null>(null);
+  const actions = useLibraryItemActions(setError);
 
-  const refresh = useCallback(() => {
-    void listLibrary()
-      .then(setItems)
-      .catch(() =>
-        setError('No se pudo abrir la Biblioteca. Inténtalo de nuevo.'),
-      );
-  }, []);
   useFocusEffect(
     useCallback(() => {
+      let active = true;
+      let generation = 0;
+      const refresh = () => {
+        const current = ++generation;
+        setLoading(true);
+        if (section === 'downloads') {
+          void listLibrary()
+            .then((found) => {
+              if (active && current === generation) setItems(found);
+            })
+            .catch(() => {
+              if (active && current === generation)
+                setError('No se pudo abrir la Biblioteca. Inténtalo de nuevo.');
+            })
+            .finally(() => {
+              if (active && current === generation) setLoading(false);
+            });
+        } else {
+          void Promise.all([listCollections(), countUncollectedItems()])
+            .then(([found, count]) => {
+              if (!active || current !== generation) return;
+              setCollections(found);
+              setUncollectedCount(count);
+            })
+            .catch(() => {
+              if (active && current === generation)
+                setError('No se pudieron cargar las colecciones.');
+            })
+            .finally(() => {
+              if (active && current === generation) setLoading(false);
+            });
+        }
+      };
       refresh();
-      return observeLibrary(refresh);
-    }, [refresh]),
+      const unsubscribe =
+        section === 'downloads'
+          ? observeLibrary(refresh)
+          : observeCollections(refresh);
+      return () => {
+        active = false;
+        generation += 1;
+        unsubscribe();
+      };
+    }, [section]),
   );
 
-  async function run(
-    id: string,
-    action: (item: LibraryItem) => Promise<unknown>,
-  ) {
-    if (busyId) return;
-    setBusyId(id);
+  function chooseSection(next: Section) {
     setError(null);
-    try {
-      await withLibraryLease(id, action);
-    } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : 'No se pudo completar la acción.',
-      );
-    } finally {
-      setBusyId(null);
-    }
+    router.setParams({ section: next });
   }
 
-  function confirmDelete(item: LibraryItem) {
+  function promptCreate() {
+    Alert.prompt(
+      'Nueva colección',
+      'Escribe un nombre para la colección.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Crear',
+          onPress: (name?: string) => {
+            void createCollection(name ?? '').catch((failure) =>
+              setError(collectionErrorMessage(failure)),
+            );
+          },
+        },
+      ],
+      'plain-text',
+    );
+  }
+
+  function promptRename(entry: CollectionSummary) {
+    Alert.prompt(
+      'Renombrar colección',
+      undefined,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Guardar',
+          onPress: (name?: string) => {
+            void renameCollection(entry.id, name ?? '').catch((failure) =>
+              setError(collectionErrorMessage(failure)),
+            );
+          },
+        },
+      ],
+      'plain-text',
+      entry.name,
+    );
+  }
+
+  function confirmDeleteCollection(entry: CollectionSummary) {
     Alert.alert(
-      'Eliminar descarga',
-      `¿Eliminar «${item.title}» de Biblioteca?`,
+      `¿Eliminar la colección «${entry.name}»?`,
+      'Las descargas permanecerán en tu Biblioteca.',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Eliminar',
           style: 'destructive',
           onPress: () => {
-            void deleteLibraryItem(item.id).catch(() =>
-              setError(
-                'No se pudo eliminar el archivo. Drop lo intentará al reiniciar.',
-              ),
+            void deleteCollection(entry.id).catch((failure) =>
+              setError(collectionErrorMessage(failure)),
             );
           },
         },
       ],
     );
-  }
-
-  function openItem(item: LibraryItem) {
-    const extension = item.relativeMediaPath.split('.').at(-1)?.toLowerCase();
-    if (!(
-      (item.mediaType === 'video' && extension === 'mp4') ||
-      (item.mediaType === 'audio' && extension === 'm4a')
-    )) {
-      Alert.alert(
-        'Formato no compatible',
-        'Este archivo aún no se puede reproducir en Drop. Puedes guardarlo en Archivos o compartirlo.',
-      );
-      return;
-    }
-    router.push(`/player/${item.id}` as Href);
   }
 
   const visible = items.filter(
@@ -161,34 +222,31 @@ export default function LibraryScreen() {
           </Text>
         </View>
         <Text style={[styles.heading, { color: colors.text }]}>Biblioteca</Text>
-        <Text style={{ color: colors.secondary }}>
-          {formatSize(used)} utilizados
-        </Text>
-        <View style={styles.filters}>
+        <View style={styles.sections}>
           {(
             [
-              ['all', 'Todos'],
-              ['video', 'Videos'],
-              ['audio', 'Audio'],
+              ['downloads', 'Descargas'],
+              ['collections', 'Colecciones'],
             ] as const
           ).map(([value, label]) => (
             <Pressable
               key={value}
-              accessibilityRole="button"
-              accessibilityState={{ selected: filter === value }}
-              onPress={() => setFilter(value)}
+              accessibilityRole="tab"
+              accessibilityLabel={label}
+              accessibilityState={{ selected: section === value }}
+              onPress={() => chooseSection(value)}
               style={[
-                styles.filter,
+                styles.section,
                 {
-                  borderColor: colors.border,
-                  backgroundColor:
-                    filter === value ? colors.accent : colors.surface,
+                  borderBottomColor:
+                    section === value ? colors.accent : colors.border,
                 },
               ]}
             >
               <Text
                 style={{
-                  color: filter === value ? colors.onAccent : colors.text,
+                  color: section === value ? colors.text : colors.secondary,
+                  fontWeight: '600',
                 }}
               >
                 {label}
@@ -196,128 +254,173 @@ export default function LibraryScreen() {
             </Pressable>
           ))}
         </View>
+        {section === 'downloads' ? (
+          <>
+            <Text style={{ color: colors.secondary }}>
+              {formatSize(used)} utilizados
+            </Text>
+            <View style={styles.filters}>
+              {(
+                [
+                  ['all', 'Todos'],
+                  ['video', 'Videos'],
+                  ['audio', 'Audio'],
+                ] as const
+              ).map(([value, label]) => (
+                <Pressable
+                  key={value}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: filter === value }}
+                  onPress={() => setFilter(value)}
+                  style={[
+                    styles.filter,
+                    {
+                      borderColor: colors.border,
+                      backgroundColor:
+                        filter === value ? colors.accent : colors.surface,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: filter === value ? colors.onAccent : colors.text,
+                    }}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </>
+        ) : (
+          <View style={styles.collectionsHeader}>
+            <Text style={{ color: colors.secondary }}>
+              Organiza tus descargas
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Crear colección"
+              onPress={promptCreate}
+              style={styles.add}
+            >
+              <Text style={{ color: colors.text, fontSize: 26 }}>+</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
       {error && (
         <Text
           accessibilityRole="alert"
-          style={{ color: colors.error, paddingHorizontal: 22 }}
+          style={[styles.error, { color: colors.error }]}
         >
           {error}
         </Text>
       )}
-      <FlatList
-        data={visible}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <Text style={{ color: colors.secondary }}>
-            Todavía no hay descargas en esta sección.
-          </Text>
-        }
-        renderItem={({ item }) => (
-          <View style={[styles.item, { borderBottomColor: colors.border }]}>
+      {loading && (
+        <ActivityIndicator accessibilityLabel="Cargando Biblioteca" />
+      )}
+      {section === 'downloads' ? (
+        <FlatList
+          data={visible}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            loading ? null : (
+              <Text style={{ color: colors.secondary }}>
+                Todavía no hay descargas en esta sección.
+              </Text>
+            )
+          }
+          renderItem={({ item }) => (
+            <LibraryItemRow
+              item={item}
+              busy={actions.busyId === item.id}
+              onOpen={actions.open}
+              onSave={actions.save}
+              onShare={actions.share}
+              onDelete={actions.confirmDelete}
+              onCollections={(selected) => setPickerItemId(selected.id)}
+            />
+          )}
+        />
+      ) : (
+        <FlatList
+          data={collections}
+          keyExtractor={(entry) => entry.id}
+          contentContainerStyle={styles.list}
+          ListHeaderComponent={
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Reproducir ${item.title}`}
-              onPress={() => openItem(item)}
-              style={styles.playableRow}
+              accessibilityLabel="Sin colección"
+              onPress={() => router.push('/collections/uncollected' as Href)}
+              style={[
+                styles.collectionRow,
+                { borderBottomColor: colors.border },
+              ]}
             >
-              <View
-                style={[styles.artwork, { backgroundColor: colors.subtle }]}
+              <Text style={[styles.collectionName, { color: colors.text }]}>
+                Sin colección
+              </Text>
+              <Text style={{ color: colors.secondary }}>
+                {itemCount(uncollectedCount)} · Vista automática
+              </Text>
+            </Pressable>
+          }
+          ListEmptyComponent={
+            loading ? null : (
+              <Text style={{ color: colors.secondary, paddingTop: 20 }}>
+                No hay colecciones todavía.
+              </Text>
+            )
+          }
+          renderItem={({ item }) => (
+            <View
+              style={[
+                styles.collectionRow,
+                { borderBottomColor: colors.border },
+              ]}
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Abrir colección ${item.name}`}
+                onPress={() => router.push(`/collections/${item.id}` as Href)}
+                style={styles.collectionOpen}
               >
-                {item.artworkUri ? (
-                  <Image
-                    source={{ uri: item.artworkUri }}
-                    style={styles.image}
-                    accessibilityLabel="Portada descargada"
-                  />
-                ) : (
-                  <Image
-                    source={require('../../assets/icon.png')}
-                    style={styles.image}
-                    accessibilityLabel="Portada de Drop"
-                  />
-                )}
-              </View>
-              <View style={styles.itemBody}>
-                <Text
-                  numberOfLines={2}
-                  style={[styles.itemTitle, { color: colors.text }]}
-                >
-                  {item.title}
+                <Text style={[styles.collectionName, { color: colors.text }]}>
+                  {item.name}
                 </Text>
                 <Text style={{ color: colors.secondary }}>
-                  {item.mediaType === 'video' ? 'Video' : 'Audio'}
-                  {item.resolution ? ` · ${item.resolution}` : ''} ·{' '}
-                  {formatSize(item.sizeBytes)}
+                  {itemCount(item.itemCount)}
                 </Text>
-                <Text style={{ color: colors.secondary, fontSize: 12 }}>
-                  {new Date(item.downloadedAt).toLocaleDateString()}
-                </Text>
-                <View
-                  style={[
-                    styles.progressTrack,
-                    { backgroundColor: colors.progressTrack },
-                  ]}
+              </Pressable>
+              <View style={styles.collectionActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Renombrar ${item.name}`}
+                  onPress={() => promptRename(item)}
+                  style={styles.action}
                 >
-                  <View
-                    style={[
-                      styles.progress,
-                      {
-                        backgroundColor: colors.accent,
-                        width: `${
-                          item.completedAt
-                            ? 100
-                            : item.durationSeconds
-                              ? Math.min(
-                                  100,
-                                  (100 * item.playbackPositionSeconds) /
-                                    item.durationSeconds,
-                                )
-                              : 0
-                        }%`,
-                      },
-                    ]}
-                  />
-                </View>
+                  <Text style={{ color: colors.text }}>Renombrar</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Eliminar colección ${item.name}`}
+                  onPress={() => confirmDeleteCollection(item)}
+                  style={styles.action}
+                >
+                  <Text style={{ color: colors.error }}>
+                    Eliminar colección
+                  </Text>
+                </Pressable>
               </View>
-            </Pressable>
-            <View style={styles.actions}>
-              <Pressable
-                accessibilityRole="button"
-                disabled={busyId === item.id}
-                onPress={() =>
-                  void run(item.id, (file) =>
-                    withNamedLibraryFile(file, saveLocalFileToFiles),
-                  )
-                }
-                style={styles.action}
-              >
-                <Text style={{ color: colors.text }}>Guardar en Archivos</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                disabled={busyId === item.id}
-                onPress={() =>
-                  void run(item.id, (file) =>
-                    withNamedLibraryFile(file, shareLocalFile),
-                  )
-                }
-                style={styles.action}
-              >
-                <Text style={{ color: colors.text }}>Compartir</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                disabled={busyId === item.id}
-                onPress={() => confirmDelete(item)}
-                style={styles.action}
-              >
-                <Text style={{ color: colors.error }}>Eliminar</Text>
-              </Pressable>
             </View>
-          </View>
-        )}
+          )}
+        />
+      )}
+      <CollectionPicker
+        visible={pickerItemId !== null}
+        itemId={pickerItemId}
+        onClose={() => setPickerItemId(null)}
       />
     </SafeAreaView>
   );
@@ -341,6 +444,8 @@ const styles = StyleSheet.create({
   navigation: { flexDirection: 'row', gap: 20, alignItems: 'center' },
   tab: { minHeight: 44, justifyContent: 'center' },
   heading: { fontSize: 25, fontWeight: '700' },
+  sections: { flexDirection: 'row', gap: 20, marginTop: 4 },
+  section: { minHeight: 44, justifyContent: 'center', borderBottomWidth: 2 },
   filters: { flexDirection: 'row', gap: 8, paddingVertical: 8 },
   filter: {
     minHeight: 40,
@@ -349,23 +454,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     justifyContent: 'center',
   },
+  collectionsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  add: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   list: { paddingHorizontal: 22, paddingBottom: 24 },
-  item: {
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-  },
-  playableRow: { flexDirection: 'row', gap: 12, minHeight: 80 },
-  artwork: { width: 76, height: 76, borderRadius: 10, overflow: 'hidden' },
-  image: { width: '100%', height: '100%' },
-  itemBody: { flex: 1, gap: 5 },
-  itemTitle: { fontSize: 16, fontWeight: '600' },
-  progressTrack: {
-    width: '100%',
-    height: 3,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progress: { height: 3 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14 },
-  action: { minHeight: 40, justifyContent: 'center' },
+  error: { paddingHorizontal: 22 },
+  collectionRow: { borderBottomWidth: 1, paddingVertical: 16, minHeight: 74 },
+  collectionOpen: { minHeight: 48, justifyContent: 'center' },
+  collectionName: { fontSize: 17, fontWeight: '600' },
+  collectionActions: { flexDirection: 'row', gap: 20 },
+  action: { minHeight: 44, justifyContent: 'center' },
 });

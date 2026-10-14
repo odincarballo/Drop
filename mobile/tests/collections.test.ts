@@ -287,11 +287,15 @@ test('Sin colección is virtual and changes with the last membership', async () 
   await seedItem('new', 'ready', '2026-10-13T10:00:00.000Z');
   const a = await service.createCollection('A');
   const b = await service.createCollection('B');
+  expect(await service.countUncollectedItems()).toBe(2);
+  expect(await service.listItemCollectionIds('new')).toEqual([]);
   expect((await service.listUncollectedItems()).map((item) => item.id)).toEqual(
     ['new', 'old'],
   );
   await service.addItemToCollection(a.id, 'new');
   await service.addItemToCollection(b.id, 'new');
+  expect(await service.listItemCollectionIds('new')).toEqual([a.id, b.id]);
+  expect(await service.countUncollectedItems()).toBe(1);
   expect((await service.listUncollectedItems()).map((item) => item.id)).toEqual(
     ['old'],
   );
@@ -300,6 +304,7 @@ test('Sin colección is virtual and changes with the last membership', async () 
     ['old'],
   );
   await service.removeItemFromCollection(b.id, 'new');
+  expect(await service.countUncollectedItems()).toBe(2);
   expect((await service.listUncollectedItems()).map((item) => item.id)).toEqual(
     ['new', 'old'],
   );
@@ -308,6 +313,20 @@ test('Sin colección is virtual and changes with the last membership', async () 
       "SELECT COUNT(*) AS n FROM collections WHERE name = 'Sin colección'",
     ),
   ).toEqual({ n: 0 });
+});
+
+test('picker support queries use the real SQLite database and count only ready uncollected items', async () => {
+  await library.initializeLibrary();
+  await seedItem('ready');
+  await seedItem('pending', 'pending');
+  await seedItem('deleting', 'deleting');
+  expect(await service.countUncollectedItems()).toBe(1);
+  expect(await service.listItemCollectionIds('ready')).toEqual([]);
+  const c = await service.createCollection('Cursos');
+  await service.addItemToCollection(c.id, 'ready');
+  expect(await service.listItemCollectionIds('ready')).toEqual([c.id]);
+  expect(await service.countUncollectedItems()).toBe(0);
+  expect(await service.listItemCollectionIds('missing')).toEqual([]);
 });
 
 test('observers fire after commit and a throwing listener cannot turn success into failure', async () => {

@@ -201,6 +201,27 @@ export async function getCollection(id: string): Promise<Collection | null> {
   return row ? collection(row) : null;
 }
 
+export async function listItemCollectionIds(itemId: string): Promise<string[]> {
+  await initializeLibrary();
+  const db = await openLibraryDatabase();
+  const rows = await db.getAllAsync<{ collectionId: string }>(
+    'SELECT collectionId FROM collection_items WHERE itemId = ? ORDER BY collectionId',
+    itemId,
+  );
+  return rows.map((row) => row.collectionId);
+}
+
+export async function countUncollectedItems(): Promise<number> {
+  await initializeLibrary();
+  const db = await openLibraryDatabase();
+  const row = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM library_items l
+     WHERE l.lifecycle = 'ready'
+       AND NOT EXISTS (SELECT 1 FROM collection_items ci WHERE ci.itemId = l.id)`,
+  );
+  return row?.count ?? 0;
+}
+
 export async function listCollectionItems(
   collectionId: string,
 ): Promise<LibraryItem[]> {
