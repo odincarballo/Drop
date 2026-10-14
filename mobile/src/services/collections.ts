@@ -8,7 +8,10 @@ import {
   observeLibrary,
   type LibraryRow,
 } from '@/services/library';
-import { openLibraryDatabase } from '@/services/libraryDatabase';
+import {
+  openLibraryDatabase,
+  withLibraryForeignKeyTransaction,
+} from '@/services/libraryDatabase';
 
 type NativeNameResult =
   | { name: string; normalizedName: string; error?: never }
@@ -92,8 +95,7 @@ export async function createCollection(rawName: string): Promise<Collection> {
   const id = nativeNames().newCollectionId();
   const now = new Date().toISOString();
   try {
-    const db = await openLibraryDatabase();
-    await db.withExclusiveTransactionAsync(async (txn) => {
+    await withLibraryForeignKeyTransaction(async (txn) => {
       await txn.runAsync(
         `INSERT INTO collections (id, name, normalizedName, createdAt, updatedAt)
          VALUES (?, ?, ?, ?, ?)`,
@@ -120,8 +122,7 @@ export async function renameCollection(
   let result: Collection | null = null;
   let changed = false;
   try {
-    const db = await openLibraryDatabase();
-    await db.withExclusiveTransactionAsync(async (txn) => {
+    await withLibraryForeignKeyTransaction(async (txn) => {
       const previous = await txn.getFirstAsync<CollectionRow>(
         'SELECT * FROM collections WHERE id = ?',
         id,
@@ -161,10 +162,9 @@ export async function renameCollection(
 
 export async function deleteCollection(id: string): Promise<void> {
   await initializeLibrary();
-  const db = await openLibraryDatabase();
   let changed = false;
   try {
-    await db.withExclusiveTransactionAsync(async (txn) => {
+    await withLibraryForeignKeyTransaction(async (txn) => {
       const result = await txn.runAsync(
         'DELETE FROM collections WHERE id = ?',
         id,
@@ -291,10 +291,9 @@ export async function addItemToCollection(
   // Startup reconciliation removes physically missing rows. A file may still
   // disappear later; the next reconciliation will delete its row and cascade.
   await initializeLibrary();
-  const db = await openLibraryDatabase();
   let changed = false;
   try {
-    await db.withExclusiveTransactionAsync(async (txn) => {
+    await withLibraryForeignKeyTransaction(async (txn) => {
       await requireReadyItem(txn, itemId);
       await requireCollection(txn, collectionId);
       const result = await txn.runAsync(
@@ -317,10 +316,9 @@ export async function removeItemFromCollection(
   itemId: string,
 ): Promise<void> {
   await initializeLibrary();
-  const db = await openLibraryDatabase();
   let changed = false;
   try {
-    await db.withExclusiveTransactionAsync(async (txn) => {
+    await withLibraryForeignKeyTransaction(async (txn) => {
       const result = await txn.runAsync(
         'DELETE FROM collection_items WHERE collectionId = ? AND itemId = ?',
         collectionId,
@@ -340,10 +338,9 @@ export async function setItemCollections(
 ): Promise<void> {
   await initializeLibrary();
   const requested = new Set(collectionIds);
-  const db = await openLibraryDatabase();
   let changed = false;
   try {
-    await db.withExclusiveTransactionAsync(async (txn) => {
+    await withLibraryForeignKeyTransaction(async (txn) => {
       await requireReadyItem(txn, itemId);
       for (const id of requested) await requireCollection(txn, id);
       const existing = await txn.getAllAsync<{ collectionId: string }>(

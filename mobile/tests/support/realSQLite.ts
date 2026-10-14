@@ -6,12 +6,16 @@ type Param = string | number | null;
 export class RealSQLite {
   private readonly raw: DatabaseSync;
   readonly executed: string[] = [];
+  readonly exclusiveConnections: RealSQLite[] = [];
   closed = false;
   failAfterCollectionsTable = false;
   foreignKeysUnavailable = false;
 
-  constructor(path: string) {
+  constructor(private readonly path: string) {
     this.raw = new DatabaseSync(path);
+    // Node's sqlite wrapper may enable FKs by default; Expo's iOS connection
+    // does not. Model the device behavior before production code configures it.
+    this.raw.exec('PRAGMA foreign_keys = OFF');
   }
 
   async execAsync(sql: string): Promise<void> {
@@ -54,14 +58,22 @@ export class RealSQLite {
   async withExclusiveTransactionAsync<T>(
     action: (transaction: RealSQLite) => Promise<T>,
   ): Promise<T> {
-    this.raw.exec('BEGIN IMMEDIATE');
+    // Expo SQLite 57 creates a fresh connection and executes BEGIN before the
+    // callback. Connection-local PRAGMAs on the parent are not inherited.
+    const transaction = new RealSQLite(this.path);
+    transaction.failAfterCollectionsTable = this.failAfterCollectionsTable;
+    transaction.foreignKeysUnavailable = this.foreignKeysUnavailable;
+    this.exclusiveConnections.push(transaction);
+    await transaction.execAsync('BEGIN');
     try {
-      const result = await action(this);
-      this.raw.exec('COMMIT');
+      const result = await action(transaction);
+      await transaction.execAsync('COMMIT');
       return result;
     } catch (error) {
-      this.raw.exec('ROLLBACK');
+      await transaction.execAsync('ROLLBACK');
       throw error;
+    } finally {
+      await transaction.closeAsync();
     }
   }
 

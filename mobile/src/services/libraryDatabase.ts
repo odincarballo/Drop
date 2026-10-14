@@ -131,6 +131,7 @@ const MEMBERSHIP_COLUMNS: Column[] = [
 ];
 
 let opening: Promise<SQLite.SQLiteDatabase> | null = null;
+let preparedDirectoryURL: string | null = null;
 
 function invalidSchema(): never {
   throw new Error(
@@ -340,7 +341,10 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
 
     await validateStructure(db, version);
     await db.execAsync('PRAGMA journal_mode = WAL');
-    if (version === SCHEMA_VERSION) return db;
+    if (version === SCHEMA_VERSION) {
+      preparedDirectoryURL = databaseDirectoryURL;
+      return db;
+    }
     await db.withExclusiveTransactionAsync(async (txn) => {
       await validateStructure(txn, version);
       if (version === 0) await txn.execAsync(LIBRARY_SCHEMA);
@@ -352,8 +356,10 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       'PRAGMA user_version',
     );
     if (upgraded?.user_version !== SCHEMA_VERSION) invalidSchema();
+    preparedDirectoryURL = databaseDirectoryURL;
     return db;
   } catch (error) {
+    preparedDirectoryURL = null;
     try {
       await db.closeAsync();
     } catch {
@@ -371,4 +377,47 @@ export function openLibraryDatabase(): Promise<SQLite.SQLiteDatabase> {
     });
   }
   return opening;
+}
+
+/** Expo's exclusive transaction opens another SQLite connection and begins
+ * before its callback, so it cannot inherit or enable the main connection's
+ * foreign_keys setting. Configure a private connection before BEGIN instead.
+ */
+export async function withLibraryForeignKeyTransaction<T>(
+  action: (txn: SQLite.SQLiteDatabase) => Promise<T>,
+): Promise<T> {
+  await openLibraryDatabase();
+  if (!preparedDirectoryURL)
+    throw new Error('No se pudo preparar la integridad de la Biblioteca.');
+  const txn = await SQLite.openDatabaseAsync(
+    'library.sqlite',
+    { useNewConnection: true },
+    preparedDirectoryURL,
+  );
+  let inTransaction = false;
+  try {
+    await txn.execAsync('PRAGMA foreign_keys = ON');
+    const setting = await txn.getFirstAsync<{ foreign_keys: number }>(
+      'PRAGMA foreign_keys',
+    );
+    if (setting?.foreign_keys !== 1)
+      throw new Error('No se pudo activar la integridad de la Biblioteca.');
+    await txn.execAsync('BEGIN IMMEDIATE');
+    inTransaction = true;
+    const result = await action(txn);
+    await txn.execAsync('COMMIT');
+    inTransaction = false;
+    return result;
+  } catch (error) {
+    if (inTransaction) {
+      try {
+        await txn.execAsync('ROLLBACK');
+      } catch {
+        // Preserve the original failure; never report a failed write as valid.
+      }
+    }
+    throw error;
+  } finally {
+    await txn.closeAsync();
+  }
 }

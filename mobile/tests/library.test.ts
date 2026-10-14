@@ -1,6 +1,7 @@
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/libraryDatabase', () => ({
   openLibraryDatabase: jest.fn(),
+  withLibraryForeignKeyTransaction: jest.fn(),
 }));
 
 type Row = Record<string, unknown> & {
@@ -196,6 +197,17 @@ function service(): typeof import('@/services/library') {
   return require('@/services/library') as typeof import('@/services/library');
 }
 
+function mockDatabase(): void {
+  const database = require('@/services/libraryDatabase') as {
+    openLibraryDatabase: jest.Mock;
+    withLibraryForeignKeyTransaction: jest.Mock;
+  };
+  database.openLibraryDatabase.mockResolvedValue(db);
+  database.withLibraryForeignKeyTransaction.mockImplementation(
+    async (action: (txn: typeof db) => Promise<unknown>) => action(db),
+  );
+}
+
 beforeEach(() => {
   jest.resetModules();
   rows.clear();
@@ -211,10 +223,7 @@ beforeEach(() => {
   expo.requireOptionalNativeModule.mockImplementation((name: string) =>
     name === 'DropPlayback' ? playbackNative : native,
   );
-  const database = require('@/services/libraryDatabase') as {
-    openLibraryDatabase: jest.Mock;
-  };
-  database.openLibraryDatabase.mockResolvedValue(db);
+  mockDatabase();
   jest.clearAllMocks();
 });
 
@@ -254,9 +263,7 @@ test('direct media promotes without a second media copy and survives service res
   ).requireOptionalNativeModule.mockImplementation((name: string) =>
     name === 'DropPlayback' ? playbackNative : native,
   );
-  (
-    require('@/services/libraryDatabase') as { openLibraryDatabase: jest.Mock }
-  ).openLibraryDatabase.mockResolvedValue(db);
+  mockDatabase();
   library = service();
   expect((await library.listLibrary())[0]?.sizeBytes).toBe(20_000_000);
   expect(native.movePrepared).toHaveBeenCalledTimes(1);
@@ -289,9 +296,7 @@ test('restart finalizes a move interrupted before ready', async () => {
   ).requireOptionalNativeModule.mockImplementation((name: string) =>
     name === 'DropPlayback' ? playbackNative : native,
   );
-  (
-    require('@/services/libraryDatabase') as { openLibraryDatabase: jest.Mock }
-  ).openLibraryDatabase.mockResolvedValue(db);
+  mockDatabase();
   library = service();
   expect((await library.listLibrary())[0]?.lifecycle).toBe('ready');
 });

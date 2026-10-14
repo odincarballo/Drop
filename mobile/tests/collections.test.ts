@@ -226,6 +226,7 @@ test('membership then Delete cascades; deleting first rejects membership', async
   await service.addItemToCollection(c.id, 'i');
   await library.deleteLibraryItem('i');
   expect(await memberships('i')).toEqual([]);
+  expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
   expect(await service.getCollection(c.id)).not.toBeNull();
   await seedItem('j');
   await db.runAsync(
@@ -244,9 +245,14 @@ test('membership then Delete cascades; deleting first rejects membership', async
 test('deleting Collection cascades memberships but preserves media and LibraryItem', async () => {
   await seedItem('i');
   const c = await service.createCollection('C');
+  expect(await service.countUncollectedItems()).toBe(1);
   await service.addItemToCollection(c.id, 'i');
+  expect(await service.countUncollectedItems()).toBe(0);
   await service.deleteCollection(c.id);
+  expect(await service.getCollection(c.id)).toBeNull();
   expect(await memberships('i')).toEqual([]);
+  expect(await service.countUncollectedItems()).toBe(1);
+  expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
   expect(
     await db.getFirstAsync('SELECT COUNT(*) AS n FROM library_items'),
   ).toEqual({ n: 1 });
@@ -392,5 +398,6 @@ test('startup reconciliation removes missing ready item and cascades membership'
   service = require('@/services/collections') as CollectionsService;
   await service.listCollections();
   expect(await memberships('i')).toEqual([]);
+  expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
   expect((await service.listCollections())[0]?.itemCount).toBe(0);
 });

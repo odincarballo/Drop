@@ -173,6 +173,42 @@ test('clean v0 becomes complete v2 with foreign keys and WAL', async () => {
   ).toEqual({ count: 0 });
 });
 
+test('Expo exclusive transaction has a new connection without parent foreign keys', async () => {
+  const db = await openProduction();
+  expect(await db.getFirstAsync('PRAGMA foreign_keys')).toEqual({
+    foreign_keys: 1,
+  });
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    expect(await txn.getFirstAsync('PRAGMA foreign_keys')).toEqual({
+      foreign_keys: 0,
+    });
+    await txn.execAsync('PRAGMA foreign_keys = ON');
+    expect(await txn.getFirstAsync('PRAGMA foreign_keys')).toEqual({
+      foreign_keys: 0,
+    });
+  });
+});
+
+test('foreign-key transaction fails closed if its own connection cannot enable FKs', async () => {
+  const module =
+    require('@/services/libraryDatabase') as typeof import('@/services/libraryDatabase');
+  const db = await module.openLibraryDatabase();
+  await db.execAsync(
+    "INSERT INTO library_items (id, sourceKind, title, mediaType, relativeMediaPath, sizeBytes, downloadedAt, lifecycle) VALUES ('i', 'direct', 'i', 'video', 'Media/i.mp4', 100, 'now', 'ready')",
+  );
+  unavailableForeignKeys = true;
+  await expect(
+    module.withLibraryForeignKeyTransaction(async (txn) => {
+      await txn.runAsync("DELETE FROM library_items WHERE id = 'i'");
+    }),
+  ).rejects.toThrow('integridad');
+  expect(
+    await db.getFirstAsync(
+      "SELECT COUNT(*) AS count FROM library_items WHERE id = 'i'",
+    ),
+  ).toEqual({ count: 1 });
+});
+
 test('v1 migration preserves every library field and starts with no memberships', async () => {
   seedV1();
   const before = snapshot();

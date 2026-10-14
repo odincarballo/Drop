@@ -1,7 +1,10 @@
 import { requireOptionalNativeModule } from 'expo';
 
 import type { LibraryItem, LibraryMetadata } from '@/models/library';
-import { openLibraryDatabase } from '@/services/libraryDatabase';
+import {
+  openLibraryDatabase,
+  withLibraryForeignKeyTransaction,
+} from '@/services/libraryDatabase';
 import {
   beginPlaybackDeletion,
   endPlaybackDeletion,
@@ -103,6 +106,12 @@ async function rowFor(id: string): Promise<Row | null> {
   );
 }
 
+async function deleteLibraryRow(id: string): Promise<void> {
+  await withLibraryForeignKeyTransaction(async (txn) => {
+    await txn.runAsync('DELETE FROM library_items WHERE id = ?', id);
+  });
+}
+
 async function finishDeletion(row: Row): Promise<void> {
   if ((leases.get(row.id) ?? 0) > 0) {
     pendingDeletion.add(row.id);
@@ -113,9 +122,7 @@ async function finishDeletion(row: Row): Promise<void> {
     const storage = native();
     await storage.removeMedia(row.relativeMediaPath);
     await storage.removeArtwork(row.id);
-    await (
-      await openLibraryDatabase()
-    ).runAsync('DELETE FROM library_items WHERE id = ?', row.id);
+    await deleteLibraryRow(row.id);
     pendingDeletion.delete(row.id);
     changed();
   } finally {
@@ -154,7 +161,7 @@ async function reconcile(): Promise<void> {
         stat.sizeBytes <= 0 ||
         (row.sizeBytes > 0 && row.sizeBytes !== stat.sizeBytes)
       ) {
-        await db.runAsync('DELETE FROM library_items WHERE id = ?', row.id);
+        await deleteLibraryRow(row.id);
         if (stat.exists) await storage.removeMedia(row.relativeMediaPath);
         await storage.removeArtwork(row.id);
         continue;
@@ -338,13 +345,13 @@ export async function promoteToLibrary(
       } catch (cleanupError) {
         console.warn('[Drop library] Failed source cleanup', cleanupError);
       }
-      await db.runAsync('DELETE FROM library_items WHERE id = ?', prepared.id);
+      await deleteLibraryRow(prepared.id);
     }
     throw error;
   }
   if (moved.sizeBytes !== prepared.sizeBytes) {
     await storage.removeMedia(relative);
-    await db.runAsync('DELETE FROM library_items WHERE id = ?', prepared.id);
+    await deleteLibraryRow(prepared.id);
     throw new Error('El archivo cambió antes de entrar en Biblioteca.');
   }
   await db.runAsync(
