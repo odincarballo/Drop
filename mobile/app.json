@@ -2,14 +2,14 @@
   "expo": {
     "name": "Drop",
     "slug": "mediadrop",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "scheme": "mediadrop",
     "icon": "./assets/icon.png",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "platforms": ["ios"],
     "ios": {
-      "buildNumber": "3",
+      "buildNumber": "4",
       "supportsTablet": false,
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
