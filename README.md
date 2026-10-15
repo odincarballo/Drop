@@ -2,7 +2,7 @@
 
 Drop is an iPhone app for downloading authorized media and keeping it in an
 offline library. The repository and the iPhone app are both named **Drop**.
-The current tagged app is v1.1.0.
+The current app version is v1.2.0.
 
 Drop is designed for public or otherwise authorized content. It does not
 support DRM bypass, private accounts, memberships, paywalls, login cookies,
@@ -28,6 +28,8 @@ are separate from Drop's managed library.
   supported by iOS.
 - Persistent offline library with local artwork, metadata, storage usage,
   deletion, sharing, and friendly export filenames.
+- Persistent local Collections organize Library items without duplicating media;
+  an item can belong to multiple Collections or appear in Uncollected.
 - YouTube range downloads with bounded retries, integrity checks, a narrowly
   scoped audio-403 URL refresh, and dynamic iPhone storage preflight.
 
