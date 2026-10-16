@@ -7,7 +7,9 @@ enum DropPiPPolicy {
     "pipStarting", "pip", "pipStopping", "restoringUI"
   ]
 
-  static func retainOnRouteExit(_ presentation: String) -> Bool {
+  // This controls retention of the inline PiP source, not the playback session.
+  // Route navigation retains the service's AVPlayerItem in every presentation.
+  static func isActiveOrTransitioning(_ presentation: String) -> Bool {
     active.contains(presentation)
   }
 

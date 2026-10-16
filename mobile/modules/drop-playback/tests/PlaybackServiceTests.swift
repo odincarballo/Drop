@@ -154,9 +154,24 @@ struct PlaybackServiceTests {
     try check(service.snapshot()["rate"] as? Double == 1.75)
     try check(system.activations == 1)
     try check(system.updates.last?.1 == 1.75)
+    let firstItem = service.player.currentItem
+    let clearsBeforeLeave = system.clears
+    let writesBeforeLeave = repository.writes.count
+    _ = try await service.leavePlayerScreen(first)
+    try check(service.snapshot()["status"] as? String == "playing")
+    try check(service.snapshot()["rate"] as? Double == 1.75)
+    try check(service.player.currentItem === firstItem)
+    try check(service.isRetaining(first) && system.clears == clearsBeforeLeave)
+    try check(repository.writes.count > writesBeforeLeave)
+    _ = try await service.leavePlayerScreen(second) // A stale route cannot retire this item.
+    try check(service.player.currentItem === firstItem && service.isRetaining(first))
     await system.send(.pause)
     try check(service.snapshot()["status"] as? String == "paused")
     try check(system.updates.last?.1 == 0)
+    _ = try await service.leavePlayerScreen(first)
+    try check(service.snapshot()["status"] as? String == "paused")
+    try check(service.player.currentItem === firstItem && service.isRetaining(first))
+    try check(system.clears == clearsBeforeLeave)
     await system.send(.play)
     try check(service.snapshot()["status"] as? String == "playing")
     try check(service.snapshot()["rate"] as? Double == 1.75)
@@ -224,8 +239,14 @@ struct PlaybackServiceTests {
     try check(ObjectIdentifier(service.player) == onePlayer)
     try check(service.isRetaining(third))
     try check(service.snapshot()["status"] as? String == "ready")
+    _ = try await service.play()
+    let videoItem = service.player.currentItem
+    _ = try await service.leavePlayerScreen(third)
+    try check(service.snapshot()["status"] as? String == "playing")
+    try check(service.player.currentItem === videoItem && service.isRetaining(third))
     _ = try await service.close()
     try check(!service.isRetaining(third))
+    try check(service.player.currentItem == nil)
 
     repository.records[first] = PlaybackRecord(id: first,
       relativeMediaPath: "Media/\(first).m4a", mediaType: "audio",

@@ -53,8 +53,9 @@ La velocidad seleccionada se guarda en el servicio aparte de `AVPlayer.rate`:
 pausado, `AVPlayer.rate` es cero, pero la UI conserva 0.75–2× y Play reanuda
 con la selección. La barra muestra posición aproximadamente cada segundo;
 durante arrastre solo actualiza la vista y al soltar emite un único seek. Al
-abandonar realmente la ruta sin PiP se llama `close()` una sola vez; con PiP
-activo, C1 conserva player, item y lease hasta restauración o cierre. Biblioteca
+abandonar realmente la ruta llama `leavePlayerScreen(libraryId)`, que guarda
+progreso y conserva el player, item y lease con o sin PiP. `close()`, el cambio
+de item y Delete siguen retirando la sesión cuando corresponde. Biblioteca
 se refresca al recuperar foco. Abrir no reproduce automáticamente. Un elemento
 terminado se prepara en cero y ofrece “Reproducir de nuevo”.
 

@@ -17,7 +17,7 @@ struct PiPPolicyTests {
         supported: true, possible: true, ready: true))
     }
     for presentation in ["pipStarting", "pip", "pipStopping", "restoringUI"] {
-      precondition(DropPiPPolicy.retainOnRouteExit(presentation))
+      precondition(DropPiPPolicy.isActiveOrTransitioning(presentation))
     }
     var visualPresentation = "inline"
     var fullscreenTransfers = 0
@@ -54,7 +54,7 @@ struct PiPPolicyTests {
     precondition(DropPiPPolicy.canStartInline(presentation: visualPresentation,
       supported: true, possible: true, ready: true))
     for presentation in ["inline", "fullscreen", "backgroundAudio", "closed"] {
-      precondition(!DropPiPPolicy.retainOnRouteExit(presentation))
+      precondition(!DropPiPPolicy.isActiveOrTransitioning(presentation))
     }
     precondition(!DropPiPPolicy.closeAfterStop(reason: "restore"))
     for reason in ["systemStop", "delete", "itemEnded", "replacement", "failure"] {

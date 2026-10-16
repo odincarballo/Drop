@@ -739,12 +739,27 @@ final class DropPlaybackService {
     updateNowPlaying()
   }
 
-  func leavePlayerScreen(_ id: String) async throws -> [String: Any] {
-    guard activeID == id else { return snapshot() }
-    if pip.isActiveOrTransitioning { return snapshot() }
-    return try await close()
-  }
   #endif
+
+  func leavePlayerScreen(_ id: String) async throws -> [String: Any] {
+    guard activeID == id, player.currentItem != nil else { return snapshot() }
+    // The route owns only its controls and video surface. Keep the item, lease,
+    // transport and Now Playing alive; an explicit close/replacement/Delete
+    // remains responsible for retiring the session.
+    #if canImport(UIKit)
+    pip.updateAutomaticStart(playing: state == "playing", inlineVisible: false)
+    #endif
+    let token = generation
+    position = safeCurrentPosition()
+    dirty = true
+    if let pendingSave { await pendingSave.value }
+    guard token == generation, activeID == id, player.currentItem != nil else {
+      return snapshot()
+    }
+    try await persist()
+    if token == generation, activeID == id { lastSave = Date() }
+    return snapshot()
+  }
 
   func close() async throws -> [String: Any] {
     generation &+= 1

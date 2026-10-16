@@ -27,8 +27,9 @@ en segundo plano.
 
 Durante PiP inline el layer de origen permanece retenido incluso si React
 desmonta su vista. Se libera tras la parada confirmada y no sobrevive al close
-definitivo. Salir de la ruta llama a `leavePlayerScreen(libraryId)`: sin PiP
-cierra como antes; con PiP conserva player/item/lease. El callback oficial de
+definitivo. Salir de la ruta llama a `leavePlayerScreen(libraryId)`, que guarda
+progreso y conserva player/item/lease con o sin PiP. `close()`, reemplazo y
+Delete siguen cerrando la sesión explícitamente. El callback oficial de
 restauración solicita la ruta por `libraryId`; esa ruta adopta el item activo
 sin otro `open()`, confirma a AVKit y reconecta la superficie. La confirmación
 de restauración tiene plazo acotado; un fallo termina de forma conservadora.

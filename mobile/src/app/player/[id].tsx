@@ -143,8 +143,8 @@ export default function PlayerScreen() {
         isScrubbing.current = false;
         unsubscribe();
         appSubscription.remove();
-        // Ordered after an in-flight open. The route's focus cleanup, not a
-        // component rerender, owns this one close and its native progress flush.
+        // Ordered after an in-flight open. Leaving detaches this route and
+        // flushes progress; the native session survives navigation.
         void playback.leavePlayerScreen(id).catch(() => undefined);
       };
     }, [id]),

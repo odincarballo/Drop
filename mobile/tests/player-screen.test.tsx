@@ -147,10 +147,9 @@ beforeEach(() => {
   jest
     .mocked(playback.close)
     .mockResolvedValue({ ...mockState, status: 'idle' });
-  jest.mocked(playback.leavePlayerScreen).mockResolvedValue({
-    ...mockState,
-    status: 'idle',
-  });
+  jest
+    .mocked(playback.leavePlayerScreen)
+    .mockImplementation(async () => mockState);
   jest.mocked(playback.startPiP).mockResolvedValue({
     ...mockState,
     pipPresentation: 'pipStarting',
@@ -344,15 +343,49 @@ test('unsupported local format does not invoke native open and keeps back naviga
   ).toBeTruthy();
 });
 
-test('rerender does not close; leaving route unsubscribes and closes once', async () => {
+test('rerender does not detach; leaving route detaches UI without closing playback', async () => {
   const rendered = await render(<PlayerScreen />);
   await waitFor(() => expect(playback.open).toHaveBeenCalledTimes(1));
   await rendered.rerender(<PlayerScreen />);
+  expect(playback.leavePlayerScreen).not.toHaveBeenCalled();
   expect(playback.close).not.toHaveBeenCalled();
   await rendered.unmount();
   expect(playback.leavePlayerScreen).toHaveBeenCalledTimes(1);
+  expect(playback.close).not.toHaveBeenCalled();
   expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
   expect(mockRemoveAppState).toHaveBeenCalledTimes(1);
+});
+
+test.each(['playing', 'paused'] as const)(
+  'returning to the same %s audio session adopts it without another open',
+  async (status) => {
+    mockState = { ...mockState, status, position: 77, rate: 1.5 };
+    jest.mocked(playback.getState).mockImplementation(async () => mockState);
+    const first = await render(<PlayerScreen />);
+    await waitFor(() => expect(screen.getByText('1:17')).toBeTruthy());
+    expect(playback.open).not.toHaveBeenCalled();
+    await first.unmount();
+    expect(playback.leavePlayerScreen).toHaveBeenCalledWith(mockId);
+    expect(playback.close).not.toHaveBeenCalled();
+    await render(<PlayerScreen />);
+    await waitFor(() => expect(screen.getByText('1:17')).toBeTruthy());
+    expect(playback.open).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: 'Velocidad 1.5×' }).props
+        .accessibilityState.selected,
+    ).toBe(true);
+  },
+);
+
+test('leaving a playing video route preserves the native session contract', async () => {
+  jest.mocked(getLibraryItem).mockResolvedValue(video as never);
+  mockState = { ...mockState, status: 'playing' };
+  jest.mocked(playback.getState).mockImplementation(async () => mockState);
+  const rendered = await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByTestId('video-surface')).toBeTruthy());
+  await rendered.unmount();
+  expect(playback.leavePlayerScreen).toHaveBeenCalledWith(mockId);
+  expect(playback.close).not.toHaveBeenCalled();
 });
 
 test('background keeps native item; foreground adopts actual position and selected rate', async () => {

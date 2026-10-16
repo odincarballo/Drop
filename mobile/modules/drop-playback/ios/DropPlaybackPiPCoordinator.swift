@@ -42,7 +42,7 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
   var onFullscreenDismiss: (() -> Void)?
 
   var isActiveOrTransitioning: Bool {
-    DropPiPPolicy.retainOnRouteExit(presentation.rawValue)
+    DropPiPPolicy.isActiveOrTransitioning(presentation.rawValue)
   }
   var canStartInline: Bool {
     DropPiPPolicy.canStartInline(presentation: presentation.rawValue,
