@@ -481,6 +481,10 @@ test('a route containing an active PiP item adopts it and delegates exit to nati
   await waitFor(() => expect(screen.getByText('Video local')).toBeTruthy());
   expect(screen.getByText('Video en Picture in Picture')).toBeTruthy();
   expect(playback.open).not.toHaveBeenCalled();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Volver a Biblioteca' }),
+  );
+  expect(mockBack).toHaveBeenCalledTimes(1);
   await rendered.unmount();
   expect(playback.leavePlayerScreen).toHaveBeenCalledWith(mockId);
   expect(playback.close).not.toHaveBeenCalled();

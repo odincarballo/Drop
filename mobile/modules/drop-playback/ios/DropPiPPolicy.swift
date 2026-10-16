@@ -13,6 +13,13 @@ enum DropPiPPolicy {
     active.contains(presentation)
   }
 
+  // AVKit needs the source view in a UIWindow, not merely a retained layer.
+  // A React route detach must park only the current inline source during PiP.
+  static func shouldParkSource(presentation: String, sameSource: Bool,
+                               fullscreenOwner: Bool) -> Bool {
+    sameSource && !fullscreenOwner && isActiveOrTransitioning(presentation)
+  }
+
   static func canStartInline(presentation: String, supported: Bool,
                              possible: Bool, ready: Bool) -> Bool {
     presentation == "inline" && supported && possible && ready

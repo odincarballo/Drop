@@ -19,6 +19,8 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
 
   private(set) var presentation: Presentation = .closed
   private(set) var sourceLayer: AVPlayerLayer?
+  private var sourceSurface: UIView?
+  private var sourceHost: UIView?
   private weak var visibleLayer: AVPlayerLayer?
   private weak var player: AVPlayer?
   private var inlineController: AVPictureInPictureController?
@@ -58,18 +60,23 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
     self.player = player
     presentation = mediaType == "video" ? .inline : .closed
     stopReason = .systemStop
-    if mediaType == "video", let visibleLayer { attach(visibleLayer, player: player) }
+    if mediaType == "video", let visibleSurface { attach(visibleSurface, player: player) }
     onChange?()
   }
 
-  func attach(_ layer: AVPlayerLayer, player: AVPlayer) {
+  private weak var visibleSurface: UIView?
+
+  func attach(_ surface: UIView, player: AVPlayer) {
+    guard let layer = surface.layer as? AVPlayerLayer else { return }
     self.player = player
+    visibleSurface = surface
     visibleLayer = layer
     guard presentation == .inline,
           DropPiPPolicy.canReconnectInline(
             fullscreenHasPlayer: fullscreenController?.player != nil) else { return }
     if sourceLayer !== layer {
       discardInline()
+      sourceSurface = surface
       sourceLayer = layer
       layer.player = player
       if isSupported,
@@ -89,11 +96,34 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
     onChange?()
   }
 
-  func detach(_ layer: AVPlayerLayer) {
+  func detach(_ surface: UIView) {
+    guard let layer = surface.layer as? AVPlayerLayer else { return }
+    if visibleSurface === surface { visibleSurface = nil }
     if visibleLayer === layer { visibleLayer = nil }
-    // PiP continues to render from this layer even after React unmounts it.
-    guard sourceLayer === layer, !isActiveOrTransitioning else { return }
+    guard sourceLayer === layer else { return }
+    if DropPiPPolicy.shouldParkSource(presentation: presentation.rawValue,
+      sameSource: true, fullscreenOwner: owner == "fullscreen") {
+      parkSourceSurface()
+      return
+    }
     discardInline()
+  }
+
+  private func parkSourceSurface() {
+    guard let surface = sourceSurface, sourceHost == nil,
+          let window = surface.window else { return }
+    // Keep the AVPlayerLayer's UIView in a real UIWindow after its ExpoView
+    // disappears. The host sits behind the app root; it is not a React screen
+    // or another player. It lives only until PiP stops/replaces the item.
+    let frame = surface.convert(surface.bounds, to: window)
+    let host = UIView(frame: frame)
+    host.isUserInteractionEnabled = false
+    host.accessibilityElementsHidden = true
+    host.backgroundColor = .clear
+    window.insertSubview(host, at: 0)
+    host.addSubview(surface)
+    surface.frame = host.bounds
+    sourceHost = host
   }
 
   func updateAutomaticStart(playing: Bool, inlineVisible: Bool) {
@@ -142,8 +172,8 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
     fullscreenController = nil
     owner = "inline"
     if presentation == .fullscreen { presentation = .inline }
-    if presentation == .inline, let visibleLayer, let player {
-      attach(visibleLayer, player: player)
+    if presentation == .inline, let visibleSurface, let player {
+      attach(visibleSurface, player: player)
     }
     onChange?()
   }
@@ -227,6 +257,12 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
     inlineController = nil
     sourceLayer?.player = nil
     sourceLayer = nil
+    if let sourceSurface, sourceSurface.superview === sourceHost {
+      sourceSurface.removeFromSuperview()
+    }
+    sourceSurface = nil
+    sourceHost?.removeFromSuperview()
+    sourceHost = nil
   }
 
   private func finishStop() {
@@ -246,9 +282,9 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
       presentation = .backgroundAudio
       onSystemStop?(previousToken, reason)
     }
-    if let visibleLayer, let player,
-       presentation == .inline, sourceLayer !== visibleLayer {
-      attach(visibleLayer, player: player)
+    if let visibleSurface, let player,
+       presentation == .inline, sourceSurface !== visibleSurface {
+      attach(visibleSurface, player: player)
     } else if visibleLayer == nil && !isActiveOrTransitioning {
       discardInline()
     }
@@ -276,6 +312,7 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
     guard isActiveOrTransitioning else { return }
     if presentation == .pipStarting {
       presentation = owner == "fullscreen" ? .fullscreen : .inline
+      if visibleSurface == nil { discardInline() }
       onChange?()
       return // A failed start must not stop ordinary video/background audio.
     }

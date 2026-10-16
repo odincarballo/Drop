@@ -695,12 +695,12 @@ final class DropPlaybackService {
   #endif
 
   #if canImport(UIKit)
-  func attachVideoLayer(_ layer: AVPlayerLayer) {
-    pip.attach(layer, player: player)
+  func attachVideoSurface(_ surface: UIView) {
+    pip.attach(surface, player: player)
     pip.updateAutomaticStart(playing: state == "playing", inlineVisible: true)
   }
 
-  func detachVideoLayer(_ layer: AVPlayerLayer) { pip.detach(layer) }
+  func detachVideoSurface(_ surface: UIView) { pip.detach(surface) }
 
   func startPiP() throws -> [String: Any] {
     guard activeMediaType == "video", player.currentItem != nil else {

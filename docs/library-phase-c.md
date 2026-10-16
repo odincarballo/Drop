@@ -25,8 +25,16 @@ reproduciéndose y visible; no se simula desde AppState. La configuración de
 background audio de `app.json` permanece; no se añade entitlement ni descarga
 en segundo plano.
 
-Durante PiP inline el layer de origen permanece retenido incluso si React
-desmonta su vista. Se libera tras la parada confirmada y no sobrevive al close
+Durante PiP inline la vista nativa mínima que contiene el layer de origen se
+mantiene dentro de la jerarquía de `UIWindow` aunque React desmonte la ruta.
+El coordinador la aparca detrás de la interfaz de Drop, sin otro `AVPlayer` ni
+pantalla React invisible, y la libera al detener/reemplazar PiP. Retener solo
+el `AVPlayerLayer` fuera de la jerarquía no basta: AVKit puede cerrar la
+presentación PiP al navegar a Biblioteca.
+Este ajuste de Block A requiere retest físico específico; los tests de
+política y el typecheck iOS no sustituyen la validación de AVKit en dispositivo.
+
+La fuente se libera tras la parada confirmada y no sobrevive al close
 definitivo. Salir de la ruta llama a `leavePlayerScreen(libraryId)`, que guarda
 progreso y conserva player/item/lease con o sin PiP. `close()`, reemplazo y
 Delete siguen cerrando la sesión explícitamente. El callback oficial de

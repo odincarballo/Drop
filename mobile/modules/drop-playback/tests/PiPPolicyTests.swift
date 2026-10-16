@@ -18,6 +18,18 @@ struct PiPPolicyTests {
     }
     for presentation in ["pipStarting", "pip", "pipStopping", "restoringUI"] {
       precondition(DropPiPPolicy.isActiveOrTransitioning(presentation))
+      precondition(DropPiPPolicy.shouldParkSource(presentation: presentation,
+        sameSource: true, fullscreenOwner: false))
+      precondition(!DropPiPPolicy.shouldParkSource(presentation: presentation,
+        sameSource: false, fullscreenOwner: false))
+      precondition(!DropPiPPolicy.shouldParkSource(presentation: presentation,
+        sameSource: true, fullscreenOwner: true))
+    }
+    // Route navigation cannot retire the native PiP source; regular inline
+    // navigation can release it, and fullscreen AVKit owns its own source.
+    for presentation in ["inline", "fullscreen", "backgroundAudio", "closed"] {
+      precondition(!DropPiPPolicy.shouldParkSource(presentation: presentation,
+        sameSource: true, fullscreenOwner: false))
     }
     var visualPresentation = "inline"
     var fullscreenTransfers = 0
