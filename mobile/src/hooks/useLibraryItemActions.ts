@@ -9,6 +9,11 @@ import {
 } from '@/services/fileExport';
 import { shareLocalFile } from '@/services/jobs';
 import { deleteLibraryItem, withLibraryLease } from '@/services/library';
+import { playback } from '@/services/playback';
+import {
+  isPlayableLibraryItem,
+  playbackContextFromVisibleItems,
+} from '@/utils/playbackContext';
 
 export function useLibraryItemActions(
   setError: (message: string | null) => void,
@@ -17,19 +22,27 @@ export function useLibraryItemActions(
   const busy = useRef<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  function open(item: LibraryItem) {
-    const extension = item.relativeMediaPath.split('.').at(-1)?.toLowerCase();
-    if (!(
-      (item.mediaType === 'video' && extension === 'mp4') ||
-      (item.mediaType === 'audio' && extension === 'm4a')
-    )) {
+  function open(item: LibraryItem, visibleItems: readonly LibraryItem[]) {
+    if (!isPlayableLibraryItem(item)) {
       Alert.alert(
         'Formato no compatible',
         'Este archivo aún no se puede reproducir en Drop. Puedes guardarlo en Archivos o compartirlo.',
       );
       return;
     }
-    router.push(`/player/${item.id}` as Href);
+    if (busy.current) return;
+    busy.current = item.id;
+    setBusyId(item.id);
+    setError(null);
+    const context = playbackContextFromVisibleItems(visibleItems);
+    void playback
+      .startInContext(item.id, context.orderedIds)
+      .then(() => router.push(`/player/${item.id}` as Href))
+      .catch(() => setError('No se pudo iniciar la reproducción.'))
+      .finally(() => {
+        busy.current = null;
+        setBusyId(null);
+      });
   }
 
   async function run(

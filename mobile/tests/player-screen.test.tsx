@@ -13,9 +13,10 @@ import { playback, type PlaybackState } from '@/services/playback';
 
 const mockId = '00000000-0000-0000-0000-000000000001';
 const mockBack = jest.fn();
+const mockReplace = jest.fn();
 
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ back: mockBack }),
+  useRouter: () => ({ back: mockBack, replace: mockReplace }),
   useLocalSearchParams: () => ({ id: mockId }),
   useFocusEffect: (callback: () => void | (() => void)) =>
     require('react').useEffect(callback, []),
@@ -172,6 +173,27 @@ beforeEach(() => {
   jest
     .mocked(playback.enterFullscreen)
     .mockImplementation(async () => ({ ...mockState, fullscreen: true }));
+});
+
+test('native auto-next navigates to the new active item without reopening it', async () => {
+  const currentState = AppState.currentState;
+  Object.defineProperty(AppState, 'currentState', {
+    configurable: true,
+    value: 'active',
+  });
+  jest.mocked(playback.getState).mockResolvedValue(mockState);
+  await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast local')).toBeTruthy());
+  const nextId = '00000000-0000-0000-0000-000000000002';
+  await act(async () => {
+    mockEmit?.({ ...mockState, libraryId: nextId, status: 'playing' });
+  });
+  expect(mockReplace).toHaveBeenCalledWith(`/player/${nextId}`);
+  expect(playback.open).not.toHaveBeenCalled();
+  Object.defineProperty(AppState, 'currentState', {
+    configurable: true,
+    value: currentState,
+  });
 });
 
 afterEach(() => {

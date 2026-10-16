@@ -339,7 +339,140 @@ struct PlaybackServiceTests {
     try check(failingService.snapshot()["status"] as? String == "failed")
     try check(!failingService.isRetaining(first))
 
+    // No JS subscriber or PlayerScreen is involved in these native transitions.
+    let sequenceSystem = FakePlaybackSystemBridge()
+    let sequence = DropPlaybackService(storage: DropLibraryStorage(root: root),
+      repository: repository, system: sequenceSystem)
+    _ = try await sequence.startInContext(id: first,
+      orderedIds: [first, fourth, fifth, second])
+    try await playing(sequence, id: first)
+    try check(sequenceSystem.activations > 0) // A row tap starts immediately.
+    try check(sequence.isRetaining(first))
+    let sequencePlayer = ObjectIdentifier(sequence.player)
+    let firstSequenceItem = sequence.player.currentItem
+    _ = try sequence.setRate(1.5)
+    _ = try await sequence.leavePlayerScreen(first)
+    try check(sequence.player.currentItem === firstSequenceItem)
+    try await naturalEnd(sequence)
+    try await playing(sequence, id: second)
+    try check(ObjectIdentifier(sequence.player) == sequencePlayer)
+    try check(sequence.player.currentItem !== firstSequenceItem)
+    try check(!sequence.isRetaining(first) && sequence.isRetaining(second))
+    try check(sequence.snapshot()["rate"] as? Double == 1.5)
+    try check(sequence.snapshot()["completed"] as? Bool == false)
+    try check((sequence.snapshot()["position"] as? Double ?? -1) < 0.25)
+    try check(sequenceSystem.metadata.last?.1 == "Podcast Dos")
+    try check(repository.writes.contains(where: { $0.0 == first && $0.2 != nil }))
+    try await naturalEnd(sequence)
+    try await ended(sequence)
+    try check(sequence.isRetaining(second))
+    try check(sequenceSystem.metadata.last?.1 == "Podcast Dos") // No wrap.
+    _ = try await sequence.close()
+    try check(!sequence.isRetaining(second))
+
+    // A partial next item resumes its saved position rather than starting at zero.
+    repository.records[first] = PlaybackRecord(id: first,
+      relativeMediaPath: "Media/\(first).m4a", mediaType: "audio",
+      sizeBytes: size, position: 0.4, completedAt: nil, title: "Podcast Uno")
+    _ = try await sequence.startInContext(id: third, orderedIds: [third, first])
+    try await playing(sequence, id: third)
+    try await naturalEnd(sequence)
+    try await playing(sequence, id: first)
+    try check(abs((sequence.snapshot()["position"] as? Double ?? 0) - 0.4) < 0.1)
+    _ = try await sequence.close()
+
+    // A later manual selection replaces both the current item and old context.
+    _ = try await sequence.startInContext(id: first, orderedIds: [first, second])
+    try await playing(sequence, id: first)
+    _ = try await sequence.startInContext(id: second, orderedIds: [second, first])
+    try await playing(sequence, id: second)
+    try check(!sequence.isRetaining(first) && sequence.isRetaining(second))
+    try await naturalEnd(sequence)
+    try await playing(sequence, id: first)
+    _ = try await sequence.close()
+
+    repository.pauseNextLoad = true
+    let staleStart = Task {
+      try? await sequence.startInContext(id: first, orderedIds: [first, second])
+    }
+    for _ in 0..<100 {
+      if repository.resumeLoad != nil { break }
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    try check(repository.resumeLoad != nil)
+    _ = try await sequence.startInContext(id: second, orderedIds: [second])
+    try await playing(sequence, id: second)
+    repository.resumeLoad?.resume()
+    repository.resumeLoad = nil
+    _ = await staleStart.value
+    try check(sequence.snapshot()["libraryId"] as? String == second)
+    try await naturalEnd(sequence)
+    try await ended(sequence) // Stale start must not install its old context.
+    _ = try await sequence.close()
+
+    // A future item blocked by Delete is skipped without disturbing the active lease.
+    _ = try await sequence.startInContext(id: first,
+      orderedIds: [first, second, third])
+    try await playing(sequence, id: first)
+    try await sequence.beginDelete(second)
+    try check(sequence.isRetaining(first))
+    try await naturalEnd(sequence)
+    try await playing(sequence, id: third)
+    try check(sequence.isRetaining(third) && !sequence.isRetaining(second))
+    sequence.endDelete(second)
+    try await sequence.beginDelete(third)
+    try check(sequence.player.currentItem == nil && !sequence.isRetaining(third))
+    try check(sequenceSystem.clears > 0)
+    sequence.endDelete(third)
+    _ = try await sequence.close()
+
+    // Explicit close invalidates the context: a stale end notification cannot advance.
+    _ = try await sequence.startInContext(id: first, orderedIds: [first, second])
+    try await playing(sequence, id: first)
+    let staleItem = sequence.player.currentItem
+    _ = try await sequence.close()
+    NotificationCenter.default.post(name: AVPlayerItem.didPlayToEndTimeNotification,
+      object: staleItem)
+    try await Task.sleep(nanoseconds: 100_000_000)
+    try check(sequence.snapshot()["status"] as? String == "idle")
+    try check(sequence.player.currentItem == nil)
+
+    _ = try await sequence.startInContext(id: first,
+      orderedIds: [first, fourth, fifth])
+    try await playing(sequence, id: first)
+    try await naturalEnd(sequence)
+    try await ended(sequence)
+    try check(sequence.snapshot()["playable"] as? Bool == false)
+    try check(!sequence.isRetaining(first))
+    try check(sequence.player.currentItem == nil)
+    _ = try await sequence.close()
+
     print("PlaybackServiceTests: passed")
+  }
+
+  private static func playing(_ service: DropPlaybackService, id: String) async throws {
+    for _ in 0..<150 {
+      let snapshot = service.snapshot()
+      if snapshot["libraryId"] as? String == id,
+         snapshot["status"] as? String == "playing" { return }
+      try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    fatalError("Context item did not start playing")
+  }
+
+  private static func ended(_ service: DropPlaybackService) async throws {
+    for _ in 0..<150 {
+      if service.snapshot()["status"] as? String == "ended" { return }
+      try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    fatalError("Context did not end")
+  }
+
+  private static func naturalEnd(_ service: DropPlaybackService) async throws {
+    guard let item = service.player.currentItem else { fatalError("No current item") }
+    NotificationCenter.default.post(name: AVPlayerItem.didPlayToEndTimeNotification,
+      object: item)
+    try await Task.sleep(nanoseconds: 20_000_000)
   }
 
   private static func ready(_ service: DropPlaybackService) async throws {

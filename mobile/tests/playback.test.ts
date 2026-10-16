@@ -21,6 +21,7 @@ let eventListener: ((value: unknown) => void) | null = null;
 const remove = jest.fn();
 const native = {
   open: jest.fn(async () => state),
+  startInContext: jest.fn(async () => ({ ...state, status: 'loading' })),
   play: jest.fn(async () => ({ ...state, status: 'playing' })),
   pause: jest.fn(async () => ({ ...state, status: 'paused' })),
   seek: jest.fn(async () => state),
@@ -80,6 +81,59 @@ test('arbitrary paths and URLs cannot cross the playback bridge', async () => {
     playback.open('https://example.com/video.mp4'),
   ).rejects.toThrow();
   expect(native.open).not.toHaveBeenCalled();
+});
+
+test('context start sends only ordered IDs, then starts before route navigation', async () => {
+  const { playback } =
+    require('@/services/playback') as typeof import('@/services/playback');
+  const next = '00000000-0000-0000-0000-000000000002';
+  const result = await playback.startInContext(id, [id, next]);
+  expect(native.startInContext).toHaveBeenCalledWith(id, [id, next]);
+  expect(result.status).toBe('loading');
+  expect(JSON.stringify(result)).not.toContain('file://');
+  await expect(playback.startInContext(id, [next])).rejects.toThrow();
+  await expect(playback.startInContext(id, [id, id])).rejects.toThrow();
+  await expect(
+    playback.startInContext(id, [id, 'file:///private/secret.mp4']),
+  ).rejects.toThrow();
+});
+
+test('context IDs are snapshotted before the serialized native call', async () => {
+  const { playback } =
+    require('@/services/playback') as typeof import('@/services/playback');
+  const next = '00000000-0000-0000-0000-000000000002';
+  const ids = [id, next];
+  const started = playback.startInContext(id, ids);
+  ids.reverse();
+  await started;
+  expect(native.startInContext).toHaveBeenCalledWith(id, [id, next]);
+});
+
+test('context start is serialized with explicit close', async () => {
+  const calls: string[] = [];
+  let release!: () => void;
+  native.startInContext.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => {
+          calls.push('start');
+          resolve(state);
+        };
+      }),
+  );
+  native.close.mockImplementationOnce(async () => {
+    calls.push('close');
+    return { ...state, status: 'idle' };
+  });
+  const { playback } =
+    require('@/services/playback') as typeof import('@/services/playback');
+  const started = playback.startInContext(id, [id]);
+  const closed = playback.close();
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(calls).toEqual([]);
+  release();
+  await Promise.all([started, closed]);
+  expect(calls).toEqual(['start', 'close']);
 });
 
 test('commands are serialized, including delete barrier', async () => {

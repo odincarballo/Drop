@@ -17,6 +17,7 @@ import {
 import { deleteLibraryItem, withLibraryLease } from '@/services/library';
 import { saveLocalFileToFiles } from '@/services/fileExport';
 import { shareLocalFile } from '@/services/jobs';
+import { playback } from '@/services/playback';
 
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
@@ -57,6 +58,9 @@ jest.mock('@/services/fileExport', () => ({
   ),
 }));
 jest.mock('@/services/jobs', () => ({ shareLocalFile: jest.fn() }));
+jest.mock('@/services/playback', () => ({
+  playback: { startInContext: jest.fn() },
+}));
 jest.mock(
   'react-native-safe-area-context',
   () => require('react-native-safe-area-context/jest/mock').default,
@@ -84,6 +88,7 @@ const collection = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(playback.startInContext).mockResolvedValue({} as never);
   jest.mocked(getCollection).mockResolvedValue(collection);
   jest.mocked(listCollectionItems).mockResolvedValue([item] as never);
   jest.mocked(listUncollectedItems).mockResolvedValue([item] as never);
@@ -100,7 +105,8 @@ test('detail reuses player, export, share, remove and delete flows', async () =>
   await fireEvent.press(
     screen.getByRole('button', { name: 'Reproducir Podcast' }),
   );
-  expect(mockPush).toHaveBeenCalledWith('/player/item');
+  await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/player/item'));
+  expect(playback.startInContext).toHaveBeenCalledWith('item', ['item']);
   await fireEvent.press(screen.getByText('Guardar en Archivos'));
   await waitFor(() => expect(saveLocalFileToFiles).toHaveBeenCalled());
   await fireEvent.press(screen.getByText('Compartir'));
@@ -127,6 +133,34 @@ test('detail reuses player, export, share, remove and delete flows', async () =>
   expect(mockReplace).toHaveBeenCalledWith('/library?section=collections');
   alert.mockRestore();
 });
+
+test.each(['collection', 'uncollected'] as const)(
+  '%s sends its rendered item order as the playback snapshot',
+  async (kind) => {
+    const next = { ...item, id: 'next', title: 'Podcast siguiente' };
+    const rows = [next, item];
+    jest.mocked(listCollectionItems).mockResolvedValue(rows as never);
+    jest.mocked(listUncollectedItems).mockResolvedValue(rows as never);
+    await render(
+      kind === 'collection' ? (
+        <CollectionItemsView kind="collection" collectionId="c" />
+      ) : (
+        <CollectionItemsView kind="uncollected" />
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByText('Podcast siguiente')).toBeTruthy(),
+    );
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Reproducir Podcast' }),
+    );
+    await waitFor(() => expect(playback.startInContext).toHaveBeenCalled());
+    expect(playback.startInContext).toHaveBeenCalledWith('item', [
+      'next',
+      'item',
+    ]);
+  },
+);
 
 test('empty and missing collection are controlled', async () => {
   jest.mocked(listCollectionItems).mockResolvedValue([]);

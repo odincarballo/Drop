@@ -37,6 +37,7 @@ export type PlaybackState = {
 
 type NativePlayback = {
   open(id: string): Promise<unknown>;
+  startInContext(id: string, orderedIds: string[]): Promise<unknown>;
   play(): Promise<unknown>;
   pause(): Promise<unknown>;
   seek(seconds: number): Promise<unknown>;
@@ -153,6 +154,23 @@ export const playback = {
         new Error('El elemento de Biblioteca no es válido.'),
       );
     return ordered(async (module) => safeState(await module.open(libraryId)));
+  },
+  startInContext: (libraryId: string, orderedIds: string[]) => {
+    // Freeze the visible order at the tap, before another queued command runs.
+    const ids = [...orderedIds];
+    if (
+      !libraryIdPattern.test(libraryId) ||
+      ids.length === 0 ||
+      new Set(ids).size !== ids.length ||
+      !ids.includes(libraryId) ||
+      !ids.every((id) => libraryIdPattern.test(id))
+    )
+      return Promise.reject(
+        new Error('El contexto de reproducción no es válido.'),
+      );
+    return ordered(async (module) =>
+      safeState(await module.startInContext(libraryId, ids)),
+    );
   },
   play: () => ordered(async (module) => safeState(await module.play())),
   pause: () => ordered(async (module) => safeState(await module.pause())),

@@ -17,6 +17,7 @@ import type { LibraryItem } from '@/models/library';
 import { getLibraryItem } from '@/services/library';
 import { playback, type PlaybackState } from '@/services/playback';
 import { useTheme } from '@/theme';
+import { isPlayableLibraryItem } from '@/utils/playbackContext';
 
 const rates = [0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 
@@ -28,14 +29,6 @@ function clock(seconds: number | null): string {
   if (total >= 3600)
     return `${Math.floor(total / 3600)}:${String(minutes % 60).padStart(2, '0')}:${remaining}`;
   return `${minutes}:${remaining}`;
-}
-
-function playable(item: LibraryItem): boolean {
-  const extension = item.relativeMediaPath.split('.').at(-1)?.toLowerCase();
-  return (
-    (item.mediaType === 'video' && extension === 'mp4') ||
-    (item.mediaType === 'audio' && extension === 'm4a')
-  );
 }
 
 function message(code: string | null): string {
@@ -59,6 +52,10 @@ export default function PlayerScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const id = typeof params.id === 'string' ? params.id : '';
   const router = useRouter();
+  const routerRef = useRef(router);
+  useEffect(() => {
+    routerRef.current = router;
+  }, [router]);
   const { colors } = useTheme();
   const [item, setItem] = useState<LibraryItem | null>(null);
   const [state, setState] = useState<PlaybackState | null>(null);
@@ -83,6 +80,16 @@ export default function PlayerScreen() {
     useCallback(() => {
       let active = true;
       const unsubscribe = playback.subscribe((next) => {
+        if (
+          active &&
+          next.libraryId &&
+          next.libraryId !== id &&
+          ['ready', 'paused', 'playing'].includes(next.status) &&
+          AppState.currentState === 'active'
+        ) {
+          routerRef.current.replace(`/player/${next.libraryId}`);
+          return;
+        }
         if (active && (next.libraryId === id || next.status === 'idle')) {
           setState((previous) =>
             isScrubbing.current && previous?.libraryId === next.libraryId
@@ -98,6 +105,15 @@ export default function PlayerScreen() {
         void playback
           .getState()
           .then((latest) => {
+            if (
+              active &&
+              latest.libraryId &&
+              latest.libraryId !== id &&
+              ['ready', 'paused', 'playing'].includes(latest.status)
+            ) {
+              routerRef.current.replace(`/player/${latest.libraryId}`);
+              return;
+            }
             if (active && (latest.libraryId === id || latest.status === 'idle'))
               setState(latest);
           })
@@ -117,7 +133,7 @@ export default function PlayerScreen() {
             return;
           }
           setItem(found);
-          if (!playable(found)) {
+          if (!isPlayableLibraryItem(found)) {
             setError(
               'Este formato aún no se puede reproducir en Drop. Puedes exportarlo desde Biblioteca.',
             );
@@ -199,7 +215,7 @@ export default function PlayerScreen() {
           <Text style={{ color: colors.text }}>‹ Biblioteca</Text>
         </Pressable>
         {item?.mediaType === 'video' &&
-        playable(item) &&
+        isPlayableLibraryItem(item) &&
         !['pipStarting', 'pip', 'pipStopping'].includes(
           state?.pipPresentation ?? '',
         ) ? (

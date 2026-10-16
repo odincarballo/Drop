@@ -335,7 +335,7 @@ export default function LibraryScreen() {
             <LibraryItemRow
               item={item}
               busy={actions.busyId === item.id}
-              onOpen={actions.open}
+              onOpen={(selected) => actions.open(selected, visible)}
               onSave={actions.save}
               onShare={actions.share}
               onDelete={actions.confirmDelete}

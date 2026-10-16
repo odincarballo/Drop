@@ -35,6 +35,11 @@ public final class DropPlaybackModule: Module {
     AsyncFunction("open") { (id: String, promise: Promise) in
       self.run(promise) { try await DropPlaybackService.shared.open(id: id) }
     }
+    AsyncFunction("startInContext") { (id: String, orderedIds: [String], promise: Promise) in
+      self.run(promise) {
+        try await DropPlaybackService.shared.startInContext(id: id, orderedIds: orderedIds)
+      }
+    }
     AsyncFunction("play") { (promise: Promise) in
       self.run(promise) { try await DropPlaybackService.shared.play() }
     }

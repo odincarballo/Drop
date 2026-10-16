@@ -26,6 +26,7 @@ import {
   observeCollections,
   renameCollection,
 } from '@/services/collections';
+import { playback } from '@/services/playback';
 
 const mockPush = jest.fn();
 const mockSetParams = jest.fn();
@@ -66,6 +67,9 @@ jest.mock('@/services/fileExport', () => ({
   ),
 }));
 jest.mock('@/services/jobs', () => ({ shareLocalFile: jest.fn() }));
+jest.mock('@/services/playback', () => ({
+  playback: { startInContext: jest.fn() },
+}));
 jest.mock('expo-symbols', () => ({ SymbolView: () => null }));
 jest.mock(
   'react-native-safe-area-context',
@@ -100,6 +104,7 @@ const item = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(playback.startInContext).mockResolvedValue({} as never);
   mockSection = 'downloads';
   jest.mocked(listLibrary).mockResolvedValue([item] as never);
   jest.mocked(listCollections).mockResolvedValue([]);
@@ -294,12 +299,55 @@ test('compatible audio and video open only by library ID', async () => {
   await fireEvent.press(
     screen.getByRole('button', { name: 'Reproducir Podcast largo' }),
   );
+  await waitFor(() => expect(mockPush).toHaveBeenCalledTimes(1));
   await fireEvent.press(
     screen.getByRole('button', { name: 'Reproducir Video local' }),
   );
+  await waitFor(() => expect(mockPush).toHaveBeenCalledTimes(2));
+  expect(playback.startInContext).toHaveBeenNthCalledWith(1, item.id, [
+    item.id,
+    video.id,
+  ]);
+  expect(playback.startInContext).toHaveBeenNthCalledWith(2, video.id, [
+    item.id,
+    video.id,
+  ]);
   expect(mockPush).toHaveBeenNthCalledWith(1, `/player/${item.id}`);
   expect(mockPush).toHaveBeenNthCalledWith(2, `/player/${video.id}`);
   expect(JSON.stringify(mockPush.mock.calls)).not.toContain('file://');
+});
+
+test('Videos and Audio taps send only the currently visible filtered order', async () => {
+  const videoA = {
+    ...item,
+    id: '00000000-0000-0000-0000-000000000002',
+    title: 'Video A',
+    mediaType: 'video',
+    relativeMediaPath: 'Media/a.mp4',
+  };
+  const videoB = {
+    ...videoA,
+    id: '00000000-0000-0000-0000-000000000003',
+    title: 'Video B',
+  };
+  jest.mocked(listLibrary).mockResolvedValue([videoA, item, videoB] as never);
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Video B')).toBeTruthy());
+  await fireEvent.press(screen.getByRole('button', { name: 'Videos' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reproducir Video A' }),
+  );
+  await waitFor(() => expect(playback.startInContext).toHaveBeenCalledTimes(1));
+  expect(playback.startInContext).toHaveBeenCalledWith(videoA.id, [
+    videoA.id,
+    videoB.id,
+  ]);
+  await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reproducir Podcast largo' }),
+  );
+  await waitFor(() => expect(playback.startInContext).toHaveBeenCalledTimes(2));
+  expect(playback.startInContext).toHaveBeenLastCalledWith(item.id, [item.id]);
 });
 
 test('unsupported format retains export/share/delete but does not navigate', async () => {
