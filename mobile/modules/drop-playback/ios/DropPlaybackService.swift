@@ -9,6 +9,36 @@ import DropLibrary
 #endif
 import Foundation
 
+@MainActor
+protocol PlaybackBackgroundHandoff: AnyObject {
+  func begin(expiration: @escaping @MainActor () -> Void)
+  func end()
+}
+
+@MainActor
+final class IOSPlaybackBackgroundHandoff: PlaybackBackgroundHandoff {
+  #if os(iOS)
+  private var identifier: UIBackgroundTaskIdentifier = .invalid
+  #endif
+
+  func begin(expiration: @escaping @MainActor () -> Void) {
+    end()
+    #if os(iOS)
+    identifier = UIApplication.shared.beginBackgroundTask(withName: "Drop auto-next") {
+      Task { @MainActor in expiration() }
+    }
+    #endif
+  }
+
+  func end() {
+    #if os(iOS)
+    guard identifier != .invalid else { return }
+    UIApplication.shared.endBackgroundTask(identifier)
+    identifier = .invalid
+    #endif
+  }
+}
+
 enum DropPlaybackError: Error {
   case invalidID
   case unavailable
@@ -63,11 +93,14 @@ final class DropPlaybackService {
   private var repository: PlaybackProgressRepository?
   private var storage: DropLibraryStorage?
   private let system: PlaybackSystemBridge
+  private let backgroundHandoff: PlaybackBackgroundHandoff
   private var generation: UInt64 = 0
   private var playbackContext: PlaybackContext?
   private var contextEpoch: UInt64 = 0
   private var pendingAutoplayToken: UInt64?
   private var autoNextCandidateToken: UInt64?
+  private var handoffEpoch: UInt64?
+  private var handoffSerial: UInt64 = 0
   private let leases = PlaybackLeaseCoordinator()
   private var activeID: String?
   private var activeMediaType: String?
@@ -158,6 +191,7 @@ final class DropPlaybackService {
   private var lastSave = Date()
   private var errorCode: String?
   private var statusObservation: NSKeyValueObservation?
+  private var timeControlObservation: NSKeyValueObservation?
   private var endObservation: NSObjectProtocol?
   private var failureObservation: NSObjectProtocol?
   private var timeObserver: Any?
@@ -170,14 +204,28 @@ final class DropPlaybackService {
 
   init(player: AVPlayer = AVPlayer(), storage: DropLibraryStorage? = nil,
        repository: PlaybackProgressRepository? = nil,
-       system: PlaybackSystemBridge? = nil) {
+       system: PlaybackSystemBridge? = nil,
+       backgroundHandoff: PlaybackBackgroundHandoff? = nil) {
     self.player = player
     self.storage = storage
     self.repository = repository
     self.system = system ?? IOSPlaybackSystemBridge()
+    self.backgroundHandoff = backgroundHandoff ?? IOSPlaybackBackgroundHandoff()
     #if os(iOS)
     player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
     #endif
+    timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) {
+      [weak self] player, _ in
+      let observedItem = player.currentItem
+      Task { @MainActor [weak self] in
+        guard let self, let observedItem,
+              self.player.currentItem === observedItem,
+              player.timeControlStatus == .playing,
+              self.autoNextCandidateToken == self.generation else { return }
+        self.autoNextCandidateToken = nil
+        self.finishHandoff()
+      }
+    }
     #if canImport(UIKit)
     defaultRateObservation = player.observe(\.defaultRate, options: [.new]) {
       [weak self] player, _ in
@@ -271,6 +319,7 @@ final class DropPlaybackService {
   }
 
   func open(id: String) async throws -> [String: Any] {
+    finishHandoff()
     contextEpoch &+= 1
     playbackContext = nil
     return try await openManaged(id: id)
@@ -280,6 +329,7 @@ final class DropPlaybackService {
     let newContext: PlaybackContext
     do { newContext = try PlaybackContext(startID: id, orderedIds: orderedIds) }
     catch { throw DropPlaybackError.invalidID }
+    finishHandoff()
     contextEpoch &+= 1
     let epoch = contextEpoch
     playbackContext = nil
@@ -298,7 +348,7 @@ final class DropPlaybackService {
     return try await requestAutoplay(token: generation)
   }
 
-  private func openManaged(id: String) async throws -> [String: Any] {
+  private func openManaged(id: String, contextualHandoff: Bool = false) async throws -> [String: Any] {
     guard let uuid = UUID(uuidString: id), uuid.uuidString.lowercased() == id else {
       throw DropPlaybackError.invalidID
     }
@@ -311,7 +361,10 @@ final class DropPlaybackService {
     fullscreenDismissIntent = nil
     #endif
     let token = generation
-    try await retireCurrent()
+    // An initial AVPlayerItem failure may arrive before openManaged returns.
+    // Mark the candidate now so that a failed item still advances the context.
+    if contextualHandoff { autoNextCandidateToken = token }
+    try await retireCurrent(preservingSystem: contextualHandoff)
     guard token == generation, !leases.isDeleting(id) else {
       throw DropPlaybackError.superseded
     }
@@ -381,7 +434,7 @@ final class DropPlaybackService {
       return snapshot()
     } catch {
       if token == generation {
-        try? await retireCurrent()
+        try? await retireCurrent(preservingSystem: contextualHandoff)
         state = "failed"
         errorCode = (error as? DropPlaybackError)?.code ?? "OPEN_FAILED"
         emit()
@@ -435,10 +488,16 @@ final class DropPlaybackService {
         self.dirty = true
         self.emit()
         self.updateNowPlaying()
+        if self.playbackContext?.currentID == self.activeID {
+          self.beginHandoff(epoch: self.contextEpoch)
+        }
         if let pendingSave = self.pendingSave { await pendingSave.value }
         guard token == self.generation else { return }
         do { try await self.persist() }
-        catch { self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit(); return }
+        catch {
+          self.finishHandoff()
+          self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit(); return
+        }
         guard token == self.generation else { return }
         if self.playbackContext?.currentID == self.activeID {
           await self.advanceInContext(epoch: self.contextEpoch)
@@ -541,11 +600,47 @@ final class DropPlaybackService {
     return try await play()
   }
 
+  private func beginHandoff(epoch: UInt64) {
+    guard handoffEpoch == nil, epoch == contextEpoch,
+          let context = playbackContext,
+          context.currentIndex + 1 < context.orderedIds.count else { return }
+    handoffEpoch = epoch
+    handoffSerial &+= 1
+    let serial = handoffSerial
+    backgroundHandoff.begin { [weak self] in
+      guard let self, self.handoffEpoch == epoch,
+            self.handoffSerial == serial, self.contextEpoch == epoch else { return }
+      // Do not let suspended or stale database work start a later item after
+      // iOS has exhausted the finite transition allowance.
+      self.finishHandoff()
+      self.contextEpoch &+= 1
+      self.playbackContext = nil
+      self.pendingAutoplayToken = nil
+      self.autoNextCandidateToken = nil
+      self.generation &+= 1
+      let expiredGeneration = self.generation
+      Task { @MainActor [weak self] in
+        guard let self, self.generation == expiredGeneration else { return }
+        try? await self.retireCurrent()
+        if self.generation == expiredGeneration {
+          self.state = "ended"
+          self.emit()
+        }
+      }
+    }
+  }
+
+  private func finishHandoff() {
+    guard handoffEpoch != nil else { return }
+    handoffEpoch = nil
+    backgroundHandoff.end()
+  }
+
   private func advanceInContext(epoch: UInt64) async {
     guard epoch == contextEpoch else { return }
     while epoch == contextEpoch, let nextID = playbackContext?.takeNextID() {
       do {
-        _ = try await openManaged(id: nextID)
+        _ = try await openManaged(id: nextID, contextualHandoff: true)
         guard epoch == contextEpoch, activeID == nextID else { return }
         let token = generation
         autoNextCandidateToken = token
@@ -561,6 +656,10 @@ final class DropPlaybackService {
       }
     }
     guard epoch == contextEpoch else { return }
+    finishHandoff()
+    // All candidates failed: there is no current item to advertise. A context
+    // with no successor keeps its naturally ended item as before.
+    if player.currentItem == nil { system.clear() }
     pendingAutoplayToken = nil
     autoNextCandidateToken = nil
     state = "ended"
@@ -594,6 +693,12 @@ final class DropPlaybackService {
     lastSave = Date()
     emit()
     updateNowPlaying()
+    // The finite handoff guard ends only when AVPlayer is effectively playing,
+    // not merely when playImmediately(atRate:) has been requested.
+    if autoNextCandidateToken == token && player.timeControlStatus == .playing {
+      autoNextCandidateToken = nil
+      finishHandoff()
+    }
     #if canImport(UIKit)
     pip.updateAutomaticStart(playing: true,
       inlineVisible: fullscreenController == nil && pip.sourceLayer != nil)
@@ -604,6 +709,10 @@ final class DropPlaybackService {
   func pause() async throws -> [String: Any] {
     guard player.currentItem != nil else { throw DropPlaybackError.notReady }
     let token = generation
+    if autoNextCandidateToken == token {
+      autoNextCandidateToken = nil
+      finishHandoff()
+    }
     #if canImport(UIKit)
     transportEpoch &+= 1
     pipRestoreIntent = nil
@@ -853,6 +962,7 @@ final class DropPlaybackService {
   }
 
   func close() async throws -> [String: Any] {
+    finishHandoff()
     contextEpoch &+= 1
     playbackContext = nil
     pendingAutoplayToken = nil
@@ -873,6 +983,7 @@ final class DropPlaybackService {
   func beginDelete(_ id: String) async throws {
     guard UUID(uuidString: id) != nil else { throw DropPlaybackError.invalidID }
     if leases.beginDelete(id) {
+      finishHandoff()
       contextEpoch &+= 1
       playbackContext = nil
       pendingAutoplayToken = nil
@@ -928,6 +1039,10 @@ final class DropPlaybackService {
     case .seek(let seconds):
       _ = try? await seek(seconds)
     case .interruptionBegan:
+      if autoNextCandidateToken == token {
+        autoNextCandidateToken = nil
+        finishHandoff()
+      }
       #if canImport(UIKit)
       transportEpoch &+= 1
       pipRestoreIntent = nil
@@ -963,7 +1078,7 @@ final class DropPlaybackService {
     }
   }
 
-  private func retireCurrent() async throws {
+  private func retireCurrent(preservingSystem: Bool = false) async throws {
     #if canImport(UIKit)
     let stopReason: DropPiPStopReason = leases.isDeleting(activeID ?? "")
       ? .delete : pendingPiPStopReason
@@ -987,7 +1102,8 @@ final class DropPlaybackService {
     timeObserver = nil
     player.pause()
     player.replaceCurrentItem(with: nil)
-    system.clear()
+    if preservingSystem { system.suspendItemForHandoff() }
+    else { system.clear() }
     wasPlayingBeforeInterruption = false
     position = finalPosition
     if id != nil { dirty = dirty || state == "playing" || state == "paused" }
@@ -1012,7 +1128,7 @@ final class DropPlaybackService {
     pendingAutoplayToken = nil
     autoNextCandidateToken = nil
     generation &+= 1
-    try? await retireCurrent()
+    try? await retireCurrent(preservingSystem: retryNext)
     state = "failed"
     errorCode = error.code
     emit()

@@ -18,6 +18,8 @@ protocol PlaybackSystemBridge: AnyObject {
                position: Double, rate: Double,
                onEvent: @escaping @MainActor (UInt64, PlaybackSystemEvent) async -> Void)
   func update(position: Double, rate: Double)
+  // Retire per-item handlers without ending the audio session or Now Playing.
+  func suspendItemForHandoff()
   func clear()
 }
 
@@ -30,6 +32,7 @@ import UIKit
 @MainActor
 final class IOSPlaybackSystemBridge: PlaybackSystemBridge {
   private var active = false
+  private var receivingRemoteEvents = false
   private var token: UInt64?
   private var onEvent: (@MainActor (UInt64, PlaybackSystemEvent) async -> Void)?
   private var commandTargets: [(MPRemoteCommand, Any)] = []
@@ -47,18 +50,27 @@ final class IOSPlaybackSystemBridge: PlaybackSystemBridge {
   func setItem(token: UInt64, title: String, artworkURL: URL?, duration: Double,
                position: Double, rate: Double,
                onEvent: @escaping @MainActor (UInt64, PlaybackSystemEvent) async -> Void) {
-    clear()
+    removeItemHandlers()
     self.token = token
     self.onEvent = onEvent
     info = [MPMediaItemPropertyTitle: title,
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
             MPNowPlayingInfoPropertyPlaybackRate: rate]
-    UIApplication.shared.beginReceivingRemoteControlEvents()
+    if !receivingRemoteEvents {
+      UIApplication.shared.beginReceivingRemoteControlEvents()
+      receivingRemoteEvents = true
+    }
     installCommands(token: token)
     installNotifications(token: token)
     setArtwork(fallbackArtwork())
     if let artworkURL { loadArtwork(at: artworkURL, token: token) }
+  }
+
+  func suspendItemForHandoff() {
+    removeItemHandlers()
+    // Keep the active session and current Now Playing record until its replacement
+    // is installed atomically. The old commands cannot target a retired item.
   }
 
   func update(position: Double, rate: Double) {
@@ -69,6 +81,20 @@ final class IOSPlaybackSystemBridge: PlaybackSystemBridge {
   }
 
   func clear() {
+    removeItemHandlers()
+    info.removeAll()
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    if receivingRemoteEvents {
+      UIApplication.shared.endReceivingRemoteControlEvents()
+      receivingRemoteEvents = false
+    }
+    if active {
+      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      active = false
+    }
+  }
+
+  private func removeItemHandlers() {
     token = nil
     onEvent = nil
     for (command, target) in commandTargets { command.removeTarget(target) }
@@ -85,13 +111,6 @@ final class IOSPlaybackSystemBridge: PlaybackSystemBridge {
     commands.previousTrackCommand.isEnabled = false
     commands.changeShuffleModeCommand.isEnabled = false
     commands.changeRepeatModeCommand.isEnabled = false
-    info.removeAll()
-    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-    UIApplication.shared.endReceivingRemoteControlEvents()
-    if active {
-      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-      active = false
-    }
   }
 
   private func add(_ command: MPRemoteCommand, token: UInt64,
@@ -196,6 +215,7 @@ final class IOSPlaybackSystemBridge: PlaybackSystemBridge {
                position: Double, rate: Double,
                onEvent: @escaping @MainActor (UInt64, PlaybackSystemEvent) async -> Void) {}
   func update(position: Double, rate: Double) {}
+  func suspendItemForHandoff() {}
   func clear() {}
 }
 #endif

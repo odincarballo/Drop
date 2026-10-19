@@ -31,6 +31,8 @@ final class DropLibraryStorage {
 final class FakePlaybackSystemBridge: PlaybackSystemBridge {
   var activations = 0
   var clears = 0
+  var suspends = 0
+  var activeHandlers = 0
   var metadata: [(UInt64, String, URL?, Double, Double, Double)] = []
   var updates: [(Double, Double)] = []
   var failActivation = false
@@ -46,10 +48,24 @@ final class FakePlaybackSystemBridge: PlaybackSystemBridge {
                onEvent: @escaping @MainActor (UInt64, PlaybackSystemEvent) async -> Void) {
     metadata.append((token, title, artworkURL, duration, position, rate))
     handler = onEvent
+    activeHandlers = 1
   }
   func update(position: Double, rate: Double) { updates.append((position, rate)) }
-  func clear() { clears += 1; handler = nil }
+  func suspendItemForHandoff() { suspends += 1; handler = nil; activeHandlers = 0 }
+  func clear() { clears += 1; handler = nil; activeHandlers = 0 }
   func send(_ event: PlaybackSystemEvent) async { await handler?(token, event) }
+}
+
+@MainActor
+final class FakeBackgroundHandoff: PlaybackBackgroundHandoff {
+  var begins = 0
+  var ends = 0
+  var expiration: (@MainActor () -> Void)?
+  func begin(expiration: @escaping @MainActor () -> Void) {
+    begins += 1
+    self.expiration = expiration
+  }
+  func end() { ends += 1; expiration = nil }
 }
 
 final class FakeProgressRepository: PlaybackProgressRepository {
@@ -341,8 +357,9 @@ struct PlaybackServiceTests {
 
     // No JS subscriber or PlayerScreen is involved in these native transitions.
     let sequenceSystem = FakePlaybackSystemBridge()
+    let sequenceBackground = FakeBackgroundHandoff()
     let sequence = DropPlaybackService(storage: DropLibraryStorage(root: root),
-      repository: repository, system: sequenceSystem)
+      repository: repository, system: sequenceSystem, backgroundHandoff: sequenceBackground)
     _ = try await sequence.startInContext(id: first,
       orderedIds: [first, fourth, fifth, second])
     try await playing(sequence, id: first)
@@ -353,8 +370,19 @@ struct PlaybackServiceTests {
     _ = try sequence.setRate(1.5)
     _ = try await sequence.leavePlayerScreen(first)
     try check(sequence.player.currentItem === firstSequenceItem)
+    let clearsBeforeHandoff = sequenceSystem.clears
+    let writesBeforeHandoff = repository.writes.count
     try await naturalEnd(sequence)
     try await playing(sequence, id: second)
+    try check(sequenceSystem.clears == clearsBeforeHandoff)
+    try check(sequenceSystem.suspends > 0)
+    try check(sequenceSystem.activeHandlers == 1)
+    for _ in 0..<100 {
+      if sequenceBackground.ends == 1 { break }
+      try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    try check(sequenceBackground.begins == 1 && sequenceBackground.ends == 1)
+    try check(repository.writes.count > writesBeforeHandoff)
     try check(ObjectIdentifier(sequence.player) == sequencePlayer)
     try check(sequence.player.currentItem !== firstSequenceItem)
     try check(!sequence.isRetaining(first) && sequence.isRetaining(second))
@@ -365,10 +393,62 @@ struct PlaybackServiceTests {
     try check(repository.writes.contains(where: { $0.0 == first && $0.2 != nil }))
     try await naturalEnd(sequence)
     try await ended(sequence)
+    try check(sequenceBackground.begins == 1 && sequenceBackground.ends == 1)
     try check(sequence.isRetaining(second))
     try check(sequenceSystem.metadata.last?.1 == "Podcast Dos") // No wrap.
     _ = try await sequence.close()
     try check(!sequence.isRetaining(second))
+    try check(sequenceSystem.clears > clearsBeforeHandoff)
+
+    // A finite background transition is cancelled safely if iOS expires it
+    // while the next database row is still loading. Stale work cannot play B.
+    let expiringSystem = FakePlaybackSystemBridge()
+    let expiringBackground = FakeBackgroundHandoff()
+    let expiring = DropPlaybackService(storage: DropLibraryStorage(root: root),
+      repository: repository, system: expiringSystem,
+      backgroundHandoff: expiringBackground)
+    _ = try await expiring.startInContext(id: first, orderedIds: [first, second])
+    try await playing(expiring, id: first)
+    repository.pauseNextLoad = true
+    try await naturalEnd(expiring)
+    for _ in 0..<100 {
+      if repository.resumeLoad != nil { break }
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    try check(repository.resumeLoad != nil && expiringBackground.begins == 1)
+    expiringBackground.expiration?()
+    repository.resumeLoad?.resume()
+    repository.resumeLoad = nil
+    try await Task.sleep(nanoseconds: 100_000_000)
+    try check(expiringBackground.ends == 1)
+    try check(expiring.player.currentItem == nil && !expiring.isRetaining(first))
+    try check(!expiring.isRetaining(second) && expiringSystem.clears > 0)
+    try check(expiring.snapshot()["status"] as? String == "ended")
+    _ = try await expiring.close()
+
+    // A user selecting another context supersedes an in-flight auto-next.
+    let replacingBackground = FakeBackgroundHandoff()
+    let replacing = DropPlaybackService(storage: DropLibraryStorage(root: root),
+      repository: repository, system: FakePlaybackSystemBridge(),
+      backgroundHandoff: replacingBackground)
+    _ = try await replacing.startInContext(id: first, orderedIds: [first, second])
+    try await playing(replacing, id: first)
+    repository.pauseNextLoad = true
+    try await naturalEnd(replacing)
+    for _ in 0..<100 {
+      if repository.resumeLoad != nil { break }
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    try check(repository.resumeLoad != nil && replacingBackground.begins == 1)
+    _ = try await replacing.startInContext(id: third, orderedIds: [third])
+    try await playing(replacing, id: third)
+    repository.resumeLoad?.resume()
+    repository.resumeLoad = nil
+    try await Task.sleep(nanoseconds: 100_000_000)
+    try check(replacingBackground.ends == 1)
+    try check(replacing.snapshot()["libraryId"] as? String == third)
+    try check(!replacing.isRetaining(second) && replacing.isRetaining(third))
+    _ = try await replacing.close()
 
     // A partial next item resumes its saved position rather than starting at zero.
     repository.records[first] = PlaybackRecord(id: first,
