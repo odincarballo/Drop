@@ -8,6 +8,10 @@ struct PlaybackContextTests {
     let c = "00000000-0000-0000-0000-000000000003"
     var context = try PlaybackContext(startID: b, orderedIds: [a, b, c])
     precondition(context.currentID == b)
+    precondition(context.promote(c))
+    precondition(context.currentID == c)
+    precondition(!context.promote(a))
+    context = try PlaybackContext(startID: b, orderedIds: [a, b, c])
     precondition(context.takeNextID() == c)
     precondition(context.takeNextID() == nil) // No rewind, wrap or repeat.
     precondition(context.takeNextID() == nil)

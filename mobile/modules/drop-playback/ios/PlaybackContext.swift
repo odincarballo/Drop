@@ -20,6 +20,12 @@ struct PlaybackContext {
 
   var currentID: String { orderedIds[currentIndex] }
 
+  mutating func promote(_ id: String) -> Bool {
+    guard let index = orderedIds.firstIndex(of: id), index > currentIndex else { return false }
+    currentIndex = index
+    return true
+  }
+
   mutating func takeNextID() -> String? {
     guard currentIndex + 1 < orderedIds.count else { return nil }
     currentIndex += 1

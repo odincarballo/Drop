@@ -56,10 +56,19 @@ final class DropPlaybackPiPCoordinator: NSObject, AVPictureInPictureControllerDe
   var ownsFullscreenPiP: Bool { owner == "fullscreen" && isActiveOrTransitioning }
 
   func configure(token: UInt64, mediaType: String, player: AVPlayer) {
+    // A queued video may become current while AVKit owns PiP. Rebinding the
+    // same player must not turn an active PiP presentation back into inline.
+    if mediaType == "video", isActiveOrTransitioning {
+      self.token = token
+      self.player = player
+      onChange?()
+      return
+    }
     self.token = token
     self.player = player
     presentation = mediaType == "video" ? .inline : .closed
     stopReason = .systemStop
+    if mediaType != "video" { discardInline() }
     if mediaType == "video", let visibleSurface { attach(visibleSurface, player: player) }
     onChange?()
   }

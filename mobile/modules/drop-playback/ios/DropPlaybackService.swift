@@ -9,36 +9,6 @@ import DropLibrary
 #endif
 import Foundation
 
-@MainActor
-protocol PlaybackBackgroundHandoff: AnyObject {
-  func begin(expiration: @escaping @MainActor () -> Void)
-  func end()
-}
-
-@MainActor
-final class IOSPlaybackBackgroundHandoff: PlaybackBackgroundHandoff {
-  #if os(iOS)
-  private var identifier: UIBackgroundTaskIdentifier = .invalid
-  #endif
-
-  func begin(expiration: @escaping @MainActor () -> Void) {
-    end()
-    #if os(iOS)
-    identifier = UIApplication.shared.beginBackgroundTask(withName: "Drop auto-next") {
-      Task { @MainActor in expiration() }
-    }
-    #endif
-  }
-
-  func end() {
-    #if os(iOS)
-    guard identifier != .invalid else { return }
-    UIApplication.shared.endBackgroundTask(identifier)
-    identifier = .invalid
-    #endif
-  }
-}
-
 enum DropPlaybackError: Error {
   case invalidID
   case unavailable
@@ -86,21 +56,38 @@ enum DropPlaybackError: Error {
 final class DropPlaybackService {
   static let shared = DropPlaybackService()
 
-  // Exactly one AVPlayer exists for the app's native playback service.
-  let player: AVPlayer
+  // AVQueuePlayer is an AVPlayer: every inline, fullscreen and PiP surface
+  // keeps using this one transport object.
+  let player: AVQueuePlayer
   var onState: (([String: Any]) -> Void)?
 
   private var repository: PlaybackProgressRepository?
   private var storage: DropLibraryStorage?
   private let system: PlaybackSystemBridge
-  private let backgroundHandoff: PlaybackBackgroundHandoff
   private var generation: UInt64 = 0
   private var playbackContext: PlaybackContext?
   private var contextEpoch: UInt64 = 0
   private var pendingAutoplayToken: UInt64?
-  private var autoNextCandidateToken: UInt64?
-  private var handoffEpoch: UInt64?
-  private var handoffSerial: UInt64 = 0
+  private struct PreparedNext {
+    let id: String
+    let item: AVPlayerItem
+    let mediaType: String
+    let duration: Double
+    let position: Double
+    let completedAt: String?
+    let title: String
+    let artworkURL: URL?
+  }
+  private var preparedNext: PreparedNext?
+  private var preparingItem: AVPlayerItem?
+  private var preparedStatusObservation: NSKeyValueObservation?
+  private var preparationTask: Task<Void, Never>?
+  private var preparationSerial: UInt64 = 0
+  private var nextCandidateIndex = 0
+  private var completionScheduled = false
+  private var completionWrites: [String: (UUID, Task<Void, Never>)] = [:]
+  private var queuedAdvanceAt = Date.distantPast
+  private var currentItemObservation: NSKeyValueObservation?
   private let leases = PlaybackLeaseCoordinator()
   private var activeID: String?
   private var activeMediaType: String?
@@ -191,7 +178,6 @@ final class DropPlaybackService {
   private var lastSave = Date()
   private var errorCode: String?
   private var statusObservation: NSKeyValueObservation?
-  private var timeControlObservation: NSKeyValueObservation?
   private var endObservation: NSObjectProtocol?
   private var failureObservation: NSObjectProtocol?
   private var timeObserver: Any?
@@ -202,28 +188,24 @@ final class DropPlaybackService {
   #endif
   private var pendingSave: Task<Void, Never>?
 
-  init(player: AVPlayer = AVPlayer(), storage: DropLibraryStorage? = nil,
+  init(player: AVQueuePlayer = AVQueuePlayer(), storage: DropLibraryStorage? = nil,
        repository: PlaybackProgressRepository? = nil,
-       system: PlaybackSystemBridge? = nil,
-       backgroundHandoff: PlaybackBackgroundHandoff? = nil) {
+       system: PlaybackSystemBridge? = nil) {
     self.player = player
     self.storage = storage
     self.repository = repository
     self.system = system ?? IOSPlaybackSystemBridge()
-    self.backgroundHandoff = backgroundHandoff ?? IOSPlaybackBackgroundHandoff()
+    player.actionAtItemEnd = .advance
     #if os(iOS)
     player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
     #endif
-    timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) {
-      [weak self] player, _ in
-      let observedItem = player.currentItem
+    currentItemObservation = player.observe(\.currentItem, options: [.new]) {
+      [weak self] queue, _ in
+      let observedItem = queue.currentItem
       Task { @MainActor [weak self] in
         guard let self, let observedItem,
-              self.player.currentItem === observedItem,
-              player.timeControlStatus == .playing,
-              self.autoNextCandidateToken == self.generation else { return }
-        self.autoNextCandidateToken = nil
-        self.finishHandoff()
+              self.player.currentItem === observedItem else { return }
+        self.adoptQueuedItem(observedItem)
       }
     }
     #if canImport(UIKit)
@@ -246,6 +228,7 @@ final class DropPlaybackService {
         guard let self,
               let observedItem,
               self.player.currentItem === observedItem else { return }
+        self.reconcileQueuedItem()
         if player.rate > 0 {
           let selected = Double(player.rate)
           if PlaybackPolicy.rates.contains(selected) {
@@ -264,15 +247,18 @@ final class DropPlaybackService {
           self.updateNowPlaying()
           self.pip.updateAutomaticStart(playing: true,
             inlineVisible: self.fullscreenController == nil && self.pip.sourceLayer != nil)
-        } else if self.state == "playing" {
-          self.state = "paused"
-          self.position = self.safeCurrentPosition()
-          self.dirty = true
-          self.emit()
-          self.updateNowPlaying()
+        } else if self.state == "playing" && player.timeControlStatus == .paused {
+          // AVQueuePlayer can briefly report rate zero while advancing to a
+          // prequeued item. A real pause still settles and is observed below.
+          if Date().timeIntervalSince(self.queuedAdvanceAt) < 0.25 {
+            Task { @MainActor [weak self] in
+              try? await Task.sleep(nanoseconds: 300_000_000)
+              self?.reconcileEffectivePause(item: observedItem)
+            }
+            return
+          }
+          self.reconcileEffectivePause(item: observedItem)
           self.pip.updateAutomaticStart(playing: false, inlineVisible: false)
-          do { try await self.persist() }
-          catch { self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit() }
         }
       }
     }
@@ -305,7 +291,7 @@ final class DropPlaybackService {
     #endif
   }
 
-  func isRetaining(_ id: String) -> Bool { leases.currentID == id }
+  func isRetaining(_ id: String) -> Bool { leases.retains(id) }
 
   private func resources() throws -> (DropLibraryStorage, PlaybackProgressRepository) {
     if storage == nil {
@@ -319,24 +305,30 @@ final class DropPlaybackService {
   }
 
   func open(id: String) async throws -> [String: Any] {
-    finishHandoff()
+    reconcileQueuedItem()
     contextEpoch &+= 1
     playbackContext = nil
+    cancelPreparation()
+    await drainPreparation()
     return try await openManaged(id: id)
   }
 
   func startInContext(id: String, orderedIds: [String]) async throws -> [String: Any] {
+    reconcileQueuedItem()
     let newContext: PlaybackContext
     do { newContext = try PlaybackContext(startID: id, orderedIds: orderedIds) }
     catch { throw DropPlaybackError.invalidID }
-    finishHandoff()
     contextEpoch &+= 1
     let epoch = contextEpoch
     playbackContext = nil
-    autoNextCandidateToken = nil
+    cancelPreparation()
+    await drainPreparation()
+    guard epoch == contextEpoch else { throw DropPlaybackError.superseded }
     if activeID == id, player.currentItem != nil,
        ["loading", "ready", "paused", "playing", "ended"].contains(state) {
       playbackContext = newContext
+      nextCandidateIndex = newContext.currentIndex + 1
+      scheduleNextPreparation()
       if state == "playing" { return snapshot() }
       return try await requestAutoplay(token: generation)
     }
@@ -345,26 +337,24 @@ final class DropPlaybackService {
       throw DropPlaybackError.superseded
     }
     playbackContext = newContext
+    nextCandidateIndex = newContext.currentIndex + 1
+    scheduleNextPreparation()
     return try await requestAutoplay(token: generation)
   }
 
-  private func openManaged(id: String, contextualHandoff: Bool = false) async throws -> [String: Any] {
+  private func openManaged(id: String) async throws -> [String: Any] {
     guard let uuid = UUID(uuidString: id), uuid.uuidString.lowercased() == id else {
       throw DropPlaybackError.invalidID
     }
     guard !leases.isDeleting(id) else { throw DropPlaybackError.unavailable }
     pendingAutoplayToken = nil
-    autoNextCandidateToken = nil
     generation &+= 1
     #if canImport(UIKit)
     pipRestoreIntent = nil
     fullscreenDismissIntent = nil
     #endif
     let token = generation
-    // An initial AVPlayerItem failure may arrive before openManaged returns.
-    // Mark the candidate now so that a failed item still advances the context.
-    if contextualHandoff { autoNextCandidateToken = token }
-    try await retireCurrent(preservingSystem: contextualHandoff)
+    try await retireCurrent()
     guard token == generation, !leases.isDeleting(id) else {
       throw DropPlaybackError.superseded
     }
@@ -382,6 +372,10 @@ final class DropPlaybackService {
     emit()
     do {
       let (storage, repository) = try resources()
+      // A just-completed item can be manually selected again immediately.
+      // Its asynchronous final write must finish before loading its progress.
+      if let write = completionWrites[id] { await write.1.value }
+      try current(token, id: id)
       let record = try await repository.load(id: id)
       try current(token, id: id)
       let relative = record.relativeMediaPath
@@ -414,10 +408,12 @@ final class DropPlaybackService {
       pip.configure(token: token, mediaType: record.mediaType, player: player)
       #endif
       completedAt = record.completedAt
+      completionScheduled = false
       position = PlaybackPolicy.restored(position: record.position, duration: seconds,
         wasCompleted: record.completedAt != nil)
       let item = AVPlayerItem(asset: asset)
-      player.replaceCurrentItem(with: item)
+      guard player.canInsert(item, after: nil) else { throw DropPlaybackError.invalidMedia }
+      player.insert(item, after: nil)
       let artworkURL: URL?
       if record.relativeArtworkPath == "Artwork/\(id).jpg" {
         artworkURL = (try? storage.managedArtwork(id: id))?.0
@@ -434,7 +430,7 @@ final class DropPlaybackService {
       return snapshot()
     } catch {
       if token == generation {
-        try? await retireCurrent(preservingSystem: contextualHandoff)
+        try? await retireCurrent()
         state = "failed"
         errorCode = (error as? DropPlaybackError)?.code ?? "OPEN_FAILED"
         emit()
@@ -481,28 +477,19 @@ final class DropPlaybackService {
     ) { [weak self] _ in
       Task { @MainActor [weak self] in
         guard let self, token == self.generation,
-              self.player.currentItem === item else { return }
-        self.position = self.duration ?? self.position
+              let id = self.activeID, let duration = self.duration else { return }
+        // AVQueuePlayer advances to a prepared successor itself. This callback
+        // never opens or plays the next item. If one is queued, its adoption
+        // schedules this save only after AVFoundation has advanced to it.
+        guard self.preparedNext == nil else { return }
+        self.scheduleCompletedSave(id: id, duration: duration)
+        self.cancelPreparation()
+        self.position = duration
         self.completedAt = ISO8601DateFormatter().string(from: Date())
         self.state = "ended"
-        self.dirty = true
+        self.dirty = false
         self.emit()
         self.updateNowPlaying()
-        if self.playbackContext?.currentID == self.activeID {
-          self.beginHandoff(epoch: self.contextEpoch)
-        }
-        if let pendingSave = self.pendingSave { await pendingSave.value }
-        guard token == self.generation else { return }
-        do { try await self.persist() }
-        catch {
-          self.finishHandoff()
-          self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit(); return
-        }
-        guard token == self.generation else { return }
-        if self.playbackContext?.currentID == self.activeID {
-          await self.advanceInContext(epoch: self.contextEpoch)
-          return
-        }
         #if canImport(UIKit)
         if self.activeMediaType == "video", self.pip.isActiveOrTransitioning {
           self.pendingPiPStopReason = .itemEnded
@@ -547,6 +534,7 @@ final class DropPlaybackService {
     ) { [weak self] time in
       Task { @MainActor [weak self] in
         guard let self, token == self.generation,
+              self.player.currentItem === item,
               self.state == "playing", let duration = self.duration else { return }
         let value = CMTimeGetSeconds(time)
         guard let bounded = PlaybackPolicy.clamped(value, duration: duration) else { return }
@@ -581,6 +569,20 @@ final class DropPlaybackService {
     }
   }
 
+  private func clearItemObservers() {
+    statusObservation = nil
+    if let endObservation { NotificationCenter.default.removeObserver(endObservation) }
+    endObservation = nil
+    if let failureObservation { NotificationCenter.default.removeObserver(failureObservation) }
+    failureObservation = nil
+    #if canImport(UIKit)
+    if let timeJumpObservation { NotificationCenter.default.removeObserver(timeJumpObservation) }
+    timeJumpObservation = nil
+    #endif
+    if let timeObserver { player.removeTimeObserver(timeObserver) }
+    timeObserver = nil
+  }
+
   private func seekPlayer(to seconds: Double, token: UInt64) async {
     await withCheckedContinuation { continuation in
       player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
@@ -600,73 +602,238 @@ final class DropPlaybackService {
     return try await play()
   }
 
-  private func beginHandoff(epoch: UInt64) {
-    guard handoffEpoch == nil, epoch == contextEpoch,
+  private func cancelPreparation() {
+    preparationSerial &+= 1
+    preparationTask?.cancel()
+    preparingItem?.cancelPendingSeeks()
+    if let preparedNext {
+      if player.currentItem !== preparedNext.item { player.remove(preparedNext.item) }
+      leases.release(preparedNext.id)
+      self.preparedNext = nil
+    }
+    preparedStatusObservation = nil
+  }
+
+  private func drainPreparation() async {
+    if let task = preparationTask { await task.value }
+    preparationTask = nil
+  }
+
+  private func scheduleNextPreparation() {
+    guard preparedNext == nil, preparationTask == nil,
+          playbackContext != nil, player.currentItem != nil,
+          state != "ended" else { return }
+    let epoch = contextEpoch
+    let token = generation
+    let serial = preparationSerial
+    preparationTask = Task { @MainActor [weak self] in
+      await self?.prepareNext(epoch: epoch, token: token, serial: serial)
+    }
+  }
+
+  private func preparationIsCurrent(epoch: UInt64, token: UInt64, serial: UInt64,
+                                    source: AVPlayerItem) -> Bool {
+    epoch == contextEpoch && token == generation && serial == preparationSerial &&
+      !Task.isCancelled && player.currentItem === source && state != "ended"
+  }
+
+  private func prepareNext(epoch: UInt64, token: UInt64, serial: UInt64) async {
+    defer { if serial == preparationSerial { preparationTask = nil } }
+    guard let source = player.currentItem else { return }
+    while preparationIsCurrent(epoch: epoch, token: token, serial: serial, source: source),
           let context = playbackContext,
-          context.currentIndex + 1 < context.orderedIds.count else { return }
-    handoffEpoch = epoch
-    handoffSerial &+= 1
-    let serial = handoffSerial
-    backgroundHandoff.begin { [weak self] in
-      guard let self, self.handoffEpoch == epoch,
-            self.handoffSerial == serial, self.contextEpoch == epoch else { return }
-      // Do not let suspended or stale database work start a later item after
-      // iOS has exhausted the finite transition allowance.
-      self.finishHandoff()
-      self.contextEpoch &+= 1
-      self.playbackContext = nil
-      self.pendingAutoplayToken = nil
-      self.autoNextCandidateToken = nil
-      self.generation &+= 1
-      let expiredGeneration = self.generation
-      Task { @MainActor [weak self] in
-        guard let self, self.generation == expiredGeneration else { return }
-        try? await self.retireCurrent()
-        if self.generation == expiredGeneration {
-          self.state = "ended"
+          nextCandidateIndex < context.orderedIds.count {
+      let id = context.orderedIds[nextCandidateIndex]
+      nextCandidateIndex += 1 // Each candidate is attempted at most once.
+      guard leases.reservePrepared(id) else { continue }
+      do {
+        let next = try await validatedNext(id: id)
+        guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
+                                   source: source), leases.ownsPrepared(id) else {
+          leases.release(id)
+          return
+        }
+        // AVPlayerItem.seek is independent of the player. Complete the restore
+        // before enqueueing, so AVFoundation never starts B audibly at zero.
+        if next.position > 0 {
+          let target = CMTime(seconds: next.position, preferredTimescale: 600)
+          preparingItem = next.item
+          let restored = await next.item.seek(to: target, toleranceBefore: .zero,
+                                              toleranceAfter: .zero)
+          if preparingItem === next.item { preparingItem = nil }
+          guard restored else {
+            throw DropPlaybackError.invalidMedia
+          }
+        }
+        guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
+                                   source: source), leases.ownsPrepared(id) else {
+          leases.release(id)
+          return
+        }
+        guard player.canInsert(next.item, after: source) else {
+          throw DropPlaybackError.invalidMedia
+        }
+        preparedNext = next
+        preparedStatusObservation = next.item.observe(\.status, options: [.new]) {
+          [weak self] item, _ in
+          Task { @MainActor [weak self] in
+            guard let self, self.preparedNext?.item === item,
+                  item.status == .failed,
+                  self.player.currentItem !== item else { return }
+            self.cancelPreparation()
+            self.preparationTask = nil
+            self.scheduleNextPreparation()
+          }
+        }
+        player.insert(next.item, after: source)
+        return
+      } catch {
+        leases.release(id)
+      }
+    }
+  }
+
+  private func validatedNext(id: String) async throws -> PreparedNext {
+    let (storage, repository) = try resources()
+    if let write = completionWrites[id] { await write.1.value }
+    let record = try await repository.load(id: id)
+    let relative = record.relativeMediaPath
+    let ext = URL(fileURLWithPath: relative).pathExtension.lowercased()
+    guard PlaybackPolicy.supported(extension: ext, mediaType: record.mediaType) else {
+      throw DropPlaybackError.unsupported
+    }
+    guard URL(fileURLWithPath: relative).deletingPathExtension().lastPathComponent == id,
+          let (url, size) = try storage.managedMedia(relative: relative),
+          size == record.sizeBytes, size > 0 else { throw DropPlaybackError.unavailable }
+    let asset = AVURLAsset(url: url)
+    let seconds = CMTimeGetSeconds(try await asset.load(.duration))
+    let playable = try await asset.load(.isPlayable)
+    let tracks = try await asset.loadTracks(withMediaType:
+      record.mediaType == "video" ? .video : .audio)
+    guard playable, !tracks.isEmpty, PlaybackPolicy.validDuration(seconds) else {
+      throw DropPlaybackError.invalidMedia
+    }
+    if record.mediaType == "audio" {
+      let descriptions = try await tracks[0].load(.formatDescriptions)
+      guard descriptions.contains(where: {
+        CMFormatDescriptionGetMediaSubType($0) == kAudioFormatMPEG4AAC
+      }) else { throw DropPlaybackError.unsupported }
+    }
+    let artworkURL = record.relativeArtworkPath == "Artwork/\(id).jpg"
+      ? (try? storage.managedArtwork(id: id))?.0 : nil
+    return PreparedNext(id: id, item: AVPlayerItem(asset: asset),
+      mediaType: record.mediaType, duration: seconds,
+      position: PlaybackPolicy.restored(position: record.position, duration: seconds,
+        wasCompleted: record.completedAt != nil), completedAt: record.completedAt,
+      title: String(record.title.prefix(240)).trimmingCharacters(in: .whitespacesAndNewlines),
+      artworkURL: artworkURL)
+  }
+
+  private func scheduleCompletedSave(id: String, duration: Double) {
+    guard !completionScheduled, let repository else { return }
+    completionScheduled = true
+    let priorSave = pendingSave
+    pendingSave = nil // The old item's task must not suppress B's 12-second saves.
+    let previousCompletion = completionWrites[id]?.1
+    let completed = ISO8601DateFormatter().string(from: Date())
+    let writeToken = UUID()
+    let write = Task { @MainActor [weak self] in
+      if let priorSave { await priorSave.value }
+      if let previousCompletion { await previousCompletion.value }
+      do { try await repository.save(id: id, position: duration, completedAt: completed) }
+      catch {
+        if let self, self.activeID == id {
+          self.errorCode = "PROGRESS_SAVE_FAILED"
           self.emit()
         }
       }
-    }
-  }
-
-  private func finishHandoff() {
-    guard handoffEpoch != nil else { return }
-    handoffEpoch = nil
-    backgroundHandoff.end()
-  }
-
-  private func advanceInContext(epoch: UInt64) async {
-    guard epoch == contextEpoch else { return }
-    while epoch == contextEpoch, let nextID = playbackContext?.takeNextID() {
-      do {
-        _ = try await openManaged(id: nextID, contextualHandoff: true)
-        guard epoch == contextEpoch, activeID == nextID else { return }
-        let token = generation
-        autoNextCandidateToken = token
-        do { _ = try await requestAutoplay(token: token) }
-        catch {
-          if token == generation { await failCurrent(.invalidMedia, token: token) }
-        }
-        return // A later item-status failure continues from this index.
-      } catch {
-        // Each candidate is attempted at most once; open revalidates the DB,
-        // managed path, format and media before acquiring the next session.
-        continue
+      if self?.completionWrites[id]?.0 == writeToken {
+        self?.completionWrites.removeValue(forKey: id)
       }
     }
-    guard epoch == contextEpoch else { return }
-    finishHandoff()
-    // All candidates failed: there is no current item to advertise. A context
-    // with no successor keeps its naturally ended item as before.
-    if player.currentItem == nil { system.clear() }
-    pendingAutoplayToken = nil
-    autoNextCandidateToken = nil
-    state = "ended"
+    completionWrites[id] = (writeToken, write)
+  }
+
+  private func adoptQueuedItem(_ item: AVPlayerItem) {
+    guard let next = preparedNext, next.item === item,
+          let priorID = activeID, let priorDuration = duration,
+          playbackContext?.currentID == priorID,
+          leases.promotePrepared(next.id) == priorID else { return }
+    scheduleCompletedSave(id: priorID, duration: priorDuration)
+    clearItemObservers()
+    preparedStatusObservation = nil
+    preparedNext = nil
+    preparationSerial &+= 1
+    preparationTask = nil
+    _ = playbackContext?.promote(next.id)
+    nextCandidateIndex = (playbackContext?.currentIndex ?? 0) + 1
+    generation &+= 1
+    let token = generation
+    activeID = next.id
+    activeMediaType = next.mediaType
+    duration = next.duration
+    position = next.position
+    // A completed item is replayed from zero; its completion marker is cleared
+    // only after playback actually begins, never merely by prequeueing it.
+    completedAt = next.completedAt
+    completionScheduled = false
+    state = player.rate > 0 || state == "playing" ? "playing" : "paused"
+    queuedAdvanceAt = Date()
+    lastSave = Date()
+    wasPlayingBeforeInterruption = false
+    if state == "playing" && completedAt != nil {
+      completedAt = nil
+      dirty = true
+    } else { dirty = false }
+    errorCode = nil
+    #if canImport(UIKit)
+    if next.mediaType == "audio", pip.isActiveOrTransitioning {
+      // An audio-only successor keeps playing, but its old video PiP window
+      // must finish before the coordinator returns to the closed presentation.
+      Task { @MainActor [weak self] in
+        guard let self, token == self.generation else { return }
+        do { try await self.pip.stop(reason: .replacement) }
+        catch {
+          if token == self.generation { self.errorCode = "PIP_UNAVAILABLE"; self.emit() }
+          return
+        }
+        guard token == self.generation else { return }
+        self.pip.configure(token: token, mediaType: next.mediaType, player: self.player)
+      }
+    } else {
+      pip.configure(token: token, mediaType: next.mediaType, player: player)
+    }
+    #endif
+    system.setItem(token: token, title: next.title, artworkURL: next.artworkURL,
+      duration: next.duration, position: next.position,
+      rate: state == "playing" ? rate : 0) { [weak self] eventToken, event in
+        await self?.handleSystemEvent(token: eventToken, event: event)
+      }
+    observe(item: item, token: token, restorePosition: 0)
     emit()
+    updateNowPlaying()
+    scheduleNextPreparation()
+  }
+
+  private func reconcileEffectivePause(item: AVPlayerItem) {
+    guard player.currentItem === item, state == "playing", player.rate <= 0,
+          player.timeControlStatus == .paused else { return }
+    state = "paused"
+    position = safeCurrentPosition()
+    dirty = true
+    emit()
+    updateNowPlaying()
+    let token = generation
+    Task { @MainActor [weak self] in
+      guard let self, token == self.generation,
+            self.player.currentItem === item else { return }
+      do { try await self.persist() }
+      catch { self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit() }
+    }
   }
 
   func play() async throws -> [String: Any] {
+    reconcileQueuedItem()
     guard player.currentItem != nil,
           ["ready", "paused", "ended", "interrupted"].contains(state) else {
       throw DropPlaybackError.notReady
@@ -693,12 +860,6 @@ final class DropPlaybackService {
     lastSave = Date()
     emit()
     updateNowPlaying()
-    // The finite handoff guard ends only when AVPlayer is effectively playing,
-    // not merely when playImmediately(atRate:) has been requested.
-    if autoNextCandidateToken == token && player.timeControlStatus == .playing {
-      autoNextCandidateToken = nil
-      finishHandoff()
-    }
     #if canImport(UIKit)
     pip.updateAutomaticStart(playing: true,
       inlineVisible: fullscreenController == nil && pip.sourceLayer != nil)
@@ -707,12 +868,9 @@ final class DropPlaybackService {
   }
 
   func pause() async throws -> [String: Any] {
+    reconcileQueuedItem()
     guard player.currentItem != nil else { throw DropPlaybackError.notReady }
     let token = generation
-    if autoNextCandidateToken == token {
-      autoNextCandidateToken = nil
-      finishHandoff()
-    }
     #if canImport(UIKit)
     transportEpoch &+= 1
     pipRestoreIntent = nil
@@ -735,6 +893,7 @@ final class DropPlaybackService {
   }
 
   func seek(_ requested: Double) async throws -> [String: Any] {
+    reconcileQueuedItem()
     guard let duration, player.currentItem != nil else { throw DropPlaybackError.notReady }
     guard let target = PlaybackPolicy.clamped(requested, duration: duration) else {
       throw DropPlaybackError.invalidPosition
@@ -942,6 +1101,7 @@ final class DropPlaybackService {
   #endif
 
   func leavePlayerScreen(_ id: String) async throws -> [String: Any] {
+    reconcileQueuedItem()
     guard activeID == id, player.currentItem != nil else { return snapshot() }
     // The route owns only its controls and video surface. Keep the item, lease,
     // transport and Now Playing alive; an explicit close/replacement/Delete
@@ -962,11 +1122,12 @@ final class DropPlaybackService {
   }
 
   func close() async throws -> [String: Any] {
-    finishHandoff()
+    reconcileQueuedItem()
     contextEpoch &+= 1
     playbackContext = nil
     pendingAutoplayToken = nil
-    autoNextCandidateToken = nil
+    cancelPreparation()
+    await drainPreparation()
     generation &+= 1
     #if canImport(UIKit)
     transportEpoch &+= 1
@@ -982,12 +1143,19 @@ final class DropPlaybackService {
 
   func beginDelete(_ id: String) async throws {
     guard UUID(uuidString: id) != nil else { throw DropPlaybackError.invalidID }
+    reconcileQueuedItem()
     if leases.beginDelete(id) {
-      finishHandoff()
+      if leases.preparedID == id {
+        cancelPreparation()
+        await drainPreparation()
+        scheduleNextPreparation()
+        return
+      }
       contextEpoch &+= 1
       playbackContext = nil
       pendingAutoplayToken = nil
-      autoNextCandidateToken = nil
+      cancelPreparation()
+      await drainPreparation()
       generation &+= 1
       #if canImport(UIKit)
       transportEpoch &+= 1
@@ -1026,6 +1194,7 @@ final class DropPlaybackService {
   }
 
   func handleSystemEvent(token: UInt64, event: PlaybackSystemEvent) async {
+    reconcileQueuedItem()
     guard token == generation, activeID != nil, player.currentItem != nil else { return }
     switch event {
     case .play:
@@ -1039,10 +1208,6 @@ final class DropPlaybackService {
     case .seek(let seconds):
       _ = try? await seek(seconds)
     case .interruptionBegan:
-      if autoNextCandidateToken == token {
-        autoNextCandidateToken = nil
-        finishHandoff()
-      }
       #if canImport(UIKit)
       transportEpoch &+= 1
       pipRestoreIntent = nil
@@ -1078,7 +1243,10 @@ final class DropPlaybackService {
     }
   }
 
-  private func retireCurrent(preservingSystem: Bool = false) async throws {
+  private func retireCurrent() async throws {
+    reconcileQueuedItem()
+    cancelPreparation()
+    await drainPreparation()
     #if canImport(UIKit)
     let stopReason: DropPiPStopReason = leases.isDeleting(activeID ?? "")
       ? .delete : pendingPiPStopReason
@@ -1089,21 +1257,11 @@ final class DropPlaybackService {
     #endif
     let id = activeID
     let finalPosition = safeCurrentPosition()
-    statusObservation = nil
-    if let endObservation { NotificationCenter.default.removeObserver(endObservation) }
-    endObservation = nil
-    if let failureObservation { NotificationCenter.default.removeObserver(failureObservation) }
-    failureObservation = nil
-    #if canImport(UIKit)
-    if let timeJumpObservation { NotificationCenter.default.removeObserver(timeJumpObservation) }
-    timeJumpObservation = nil
-    #endif
-    if let timeObserver { player.removeTimeObserver(timeObserver) }
-    timeObserver = nil
+    clearItemObservers()
     player.pause()
-    player.replaceCurrentItem(with: nil)
-    if preservingSystem { system.suspendItemForHandoff() }
-    else { system.clear() }
+    player.removeAllItems()
+    system.clear()
+    completionScheduled = false
     wasPlayingBeforeInterruption = false
     position = finalPosition
     if id != nil { dirty = dirty || state == "playing" || state == "paused" }
@@ -1123,15 +1281,16 @@ final class DropPlaybackService {
 
   private func failCurrent(_ error: DropPlaybackError, token: UInt64) async {
     guard token == generation else { return }
-    let retryNext = autoNextCandidateToken == token
-    let epoch = contextEpoch
     pendingAutoplayToken = nil
-    autoNextCandidateToken = nil
     generation &+= 1
-    try? await retireCurrent(preservingSystem: retryNext)
+    try? await retireCurrent()
     state = "failed"
     errorCode = error.code
     emit()
-    if retryNext && epoch == contextEpoch { await advanceInContext(epoch: epoch) }
+  }
+
+  private func reconcileQueuedItem() {
+    guard let item = player.currentItem, preparedNext?.item === item else { return }
+    adoptQueuedItem(item)
   }
 }

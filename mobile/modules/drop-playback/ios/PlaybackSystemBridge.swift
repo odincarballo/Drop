@@ -18,8 +18,6 @@ protocol PlaybackSystemBridge: AnyObject {
                position: Double, rate: Double,
                onEvent: @escaping @MainActor (UInt64, PlaybackSystemEvent) async -> Void)
   func update(position: Double, rate: Double)
-  // Retire per-item handlers without ending the audio session or Now Playing.
-  func suspendItemForHandoff()
   func clear()
 }
 
@@ -65,12 +63,6 @@ final class IOSPlaybackSystemBridge: PlaybackSystemBridge {
     installNotifications(token: token)
     setArtwork(fallbackArtwork())
     if let artworkURL { loadArtwork(at: artworkURL, token: token) }
-  }
-
-  func suspendItemForHandoff() {
-    removeItemHandlers()
-    // Keep the active session and current Now Playing record until its replacement
-    // is installed atomically. The old commands cannot target a retired item.
   }
 
   func update(position: Double, rate: Double) {
@@ -215,7 +207,6 @@ final class IOSPlaybackSystemBridge: PlaybackSystemBridge {
                position: Double, rate: Double,
                onEvent: @escaping @MainActor (UInt64, PlaybackSystemEvent) async -> Void) {}
   func update(position: Double, rate: Double) {}
-  func suspendItemForHandoff() {}
   func clear() {}
 }
 #endif

@@ -7,21 +7,25 @@ Audio); una Collection usa `addedAt DESC, itemId DESC`; Sin colección usa
 `downloadedAt DESC, id DESC`. La siguiente selección manual reemplaza la
 instantánea. No hay cola editable ni persistencia del contexto entre procesos.
 
-`DropPlaybackService` conserva el contexto en memoria junto al único `AVPlayer`.
-Solo recibe IDs: para cada candidato vuelve a consultar SQLite, valida el
-registro `ready`, formato y archivo administrado antes de adquirir el player
-lease. Al recibir el fin natural del `AVPlayerItem`, persiste posición final y
-`completedAt`, avanza solo hacia adelante y reproduce el primer candidato
-disponible. Los candidatos eliminados, ausentes o no reproducibles se saltan a
-lo sumo una vez. El último item termina sin repetir ni volver al inicio. El
-siguiente item conserva la velocidad elegida, reanuda su progreso parcial o
-empieza en cero si estaba completado. Now Playing se reemplaza al cambiar de
-item. Esta secuencia, incluida la transición con pantalla bloqueada, es nativa:
-no necesita `PlayerScreen` ni listeners JavaScript activos.
+`DropPlaybackService` conserva el contexto en memoria junto a un único
+`AVQueuePlayer` (subclase de `AVPlayer`, compartida por inline, fullscreen y
+PiP). Su ventana interna tiene como máximo `CURRENT + NEXT`; no es una cola
+editable. Solo recibe IDs. Reserva un lease nativo para el siguiente candidato,
+consulta SQLite y valida el registro `ready`, formato y archivo administrado.
+Los candidatos inválidos se saltan una sola vez. Prepara el `AVPlayerItem` y su
+posición persistida antes de insertarlo detrás del actual; completed empieza en
+cero. `actionAtItemEnd = .advance` deja a AVFoundation iniciar el siguiente item
+sin esperar callbacks Swift, SQLite o JavaScript después del fin natural. El
+`currentItem` observado actualiza identidad, contexto, metadata/Now Playing y
+lease; la finalización de A se persiste mientras B ya reproduce. Luego se
+prepara C. El último item termina sin repetir. La velocidad seleccionada se
+conserva. No se usa `beginBackgroundTask` para sostener el cambio de item.
 
 Pausa, navegación a Biblioteca, background y cambios de salida no activan
 auto-next. `leavePlayerScreen` conserva item, lease y contexto; `close` y Delete
-del item activo lo invalidan. Un Delete futuro se salta al llegar a ese ID.
+del item activo retiran ambos slots y sus leases. Delete del NEXT preparado lo
+retira de AVQueuePlayer antes de liberar su lease y busca otro candidato. Un
+Delete futuro se salta al llegar a ese ID.
 La UI adopta el nuevo ID nativo al recuperar foco/foreground sin abrir un
 segundo player. La validación física de Block B está pendiente; los tests y
 typecheck no sustituyen una prueba en iPhone.
