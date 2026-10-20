@@ -204,7 +204,9 @@ test('audio opens by ID, displays local artwork, title, restored position and co
   await render(<PlayerScreen />);
   await waitFor(() => expect(screen.getByText('Podcast local')).toBeTruthy());
   expect(playback.open).toHaveBeenCalledWith(mockId);
-  expect(screen.getByLabelText('Portada descargada')).toBeTruthy();
+  const artwork = screen.getByLabelText('Portada descargada');
+  expect(artwork.props.resizeMode).toBe('contain');
+  expect(artwork.props.accessibilityLabel).toBe('Portada descargada');
   expect(screen.getByText('0:42')).toBeTruthy();
   expect(screen.getByText('2:00')).toBeTruthy();
   await fireEvent.press(screen.getByRole('button', { name: 'Reproducir' }));
@@ -221,6 +223,19 @@ test('audio opens by ID, displays local artwork, title, restored position and co
   expect(playback.skip).toHaveBeenNthCalledWith(2, 15);
   await fireEvent.press(screen.getByLabelText('Seek to 60'));
   expect(playback.seek).toHaveBeenCalledWith(60);
+});
+
+test('audio fallback icon keeps the same uncropped framing and accessibility label', async () => {
+  jest
+    .mocked(getLibraryItem)
+    .mockResolvedValue({ ...audio, artworkUri: null } as never);
+  await render(<PlayerScreen />);
+  const fallback = await screen.findByLabelText('Portada de Drop');
+  expect(fallback.props.resizeMode).toBe('contain');
+  expect(fallback.props.accessibilityLabel).toBe('Portada de Drop');
+  expect(playback.open).toHaveBeenCalledWith(mockId);
+  expect(playback.play).not.toHaveBeenCalled();
+  expect(playback.setRate).not.toHaveBeenCalled();
 });
 
 test('all rates remain selected when paused; video uses one native surface and fullscreen command', async () => {

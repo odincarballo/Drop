@@ -31,6 +31,13 @@ antes de abrir el primer item. Se conserva entre items manuales, auto-next,
 `PlaybackPolicy.rates`; ausencia o valor inválido vuelve a 1×. Un `rate = 0`
 transitorio por pausa, buffering o cambio de item no modifica la preferencia.
 
+## Block C2 — Encuadre de portada
+
+La portada estática del reproductor de audio usa `contain`: muestra la imagen
+completa, centrada y sin recorte ni deformación dentro del cuadro existente. El
+icono fallback sigue la misma política. Esto solo afecta la presentación de
+`PlayerScreen`; el archivo y el artwork de Now Playing no cambian.
+
 Pausa, navegación a Biblioteca, background y cambios de salida no activan
 auto-next. `leavePlayerScreen` conserva item, lease y contexto; `close` y Delete
 del item activo retiran ambos slots y sus leases. Delete del NEXT preparado lo

@@ -239,6 +239,7 @@ export default function PlayerScreen() {
                   ? { uri: item.artworkUri }
                   : require('../../../assets/icon.png')
               }
+              resizeMode="contain"
               accessibilityLabel={
                 item?.artworkUri ? 'Portada descargada' : 'Portada de Drop'
               }
