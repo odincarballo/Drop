@@ -84,6 +84,16 @@ final class FakeProgressRepository: PlaybackProgressRepository {
   }
 }
 
+@MainActor
+final class FakePlaybackRatePreference: PlaybackRatePreference {
+  var stored: Double?
+  var writes: [Double] = []
+
+  init(_ stored: Double? = nil) { self.stored = stored }
+  func load() -> Double? { stored }
+  func save(_ rate: Double) { stored = rate; writes.append(rate) }
+}
+
 @main
 @MainActor
 struct PlaybackServiceTests {
@@ -128,9 +138,34 @@ struct PlaybackServiceTests {
       relativeMediaPath: "Media/\(fifth).mp4", mediaType: "video",
       sizeBytes: 4, position: 0, completedAt: nil)
     let system = FakePlaybackSystemBridge()
+    let ratePreference = FakePlaybackRatePreference()
     let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
-      repository: repository, system: system)
+      repository: repository, system: system, ratePreference: ratePreference)
     let onePlayer = ObjectIdentifier(service.player)
+    try check(service.snapshot()["rate"] as? Double == 1)
+    try check(service.player.defaultRate == 1)
+    for invalid in [Double.nan, .infinity, 0, 3] {
+      let invalidPreference = FakePlaybackRatePreference(invalid)
+      let invalidService = DropPlaybackService(ratePreference: invalidPreference)
+      try check(invalidService.snapshot()["rate"] as? Double == 1)
+      try check(invalidService.player.defaultRate == 1)
+      try check(invalidPreference.writes.isEmpty)
+    }
+    let defaultsSuite = "DropPlaybackRateTests.\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: defaultsSuite) else {
+      fatalError("Cannot create isolated UserDefaults suite")
+    }
+    defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+    let storedPreference = UserDefaultsPlaybackRatePreference(defaults: defaults)
+    try check(storedPreference.load() == nil)
+    storedPreference.save(1.5)
+    try check(UserDefaultsPlaybackRatePreference(defaults: defaults).load() == 1.5)
+    storedPreference.save(3)
+    try check(storedPreference.load() == 1.5)
+    defaults.set(true, forKey: "drop.playback.selectedRate")
+    try check(storedPreference.load() == nil)
+    defaults.set("invalid", forKey: "drop.playback.selectedRate")
+    try check(storedPreference.load() == nil)
 
     _ = try await service.open(id: first)
     try check(service.isRetaining(first))
@@ -153,10 +188,16 @@ struct PlaybackServiceTests {
     try check(service.snapshot()["position"] as? Double == 0)
     _ = try service.setRate(1.75)
     try check(service.snapshot()["rate"] as? Double == 1.75)
+    try check(ratePreference.stored == 1.75 && ratePreference.writes == [1.75])
+    let relaunched = DropPlaybackService(ratePreference: ratePreference)
+    try check(relaunched.snapshot()["rate"] as? Double == 1.75)
+    try check(relaunched.player.defaultRate == 1.75)
     try check(service.player.rate == 0)
     do { _ = try service.setRate(3); fatalError("invalid rate") }
     catch DropPlaybackError.invalidRate {}
+    try check(ratePreference.writes == [1.75])
     _ = try await service.pause()
+    try check(ratePreference.writes == [1.75])
     try check(repository.writes.last?.0 == first)
     try check(service.snapshot()["rate"] as? Double == 1.75)
     try check(service.player.rate == 0)
@@ -215,6 +256,7 @@ struct PlaybackServiceTests {
     _ = try await service.pause()
 
     _ = try await service.open(id: second)
+    try check(service.snapshot()["rate"] as? Double == 1.75)
     try check(system.metadata.last?.1 == "Podcast Dos")
     try check(system.metadata.last?.2 == nil)
     let oldToken = system.metadata[0].0
@@ -231,11 +273,13 @@ struct PlaybackServiceTests {
     try check(service.snapshot()["completed"] as? Bool == false)
     _ = try await service.pause()
     try check(repository.writes.last?.2 == nil)
+    try check(ratePreference.stored == 1.75)
 
     try await service.beginDelete(second)
     try check(system.clears > 0)
     try check(!service.isRetaining(second))
     try check(service.snapshot()["status"] as? String == "idle")
+    try check(ratePreference.stored == 1.75)
     do { _ = try await service.open(id: second); fatalError("deleting item opened") }
     catch DropPlaybackError.unavailable {}
     service.endDelete(second)
@@ -243,12 +287,15 @@ struct PlaybackServiceTests {
     _ = try await service.close()
     _ = try await service.close()
     try check(service.snapshot()["status"] as? String == "idle")
+    try check(ratePreference.stored == 1.75)
 
     _ = try await service.open(id: third)
     try await ready(service)
     try check(ObjectIdentifier(service.player) == onePlayer)
     try check(service.isRetaining(third))
     try check(service.snapshot()["status"] as? String == "ready")
+    try check(service.snapshot()["rate"] as? Double == 1.75)
+    try check(service.player.defaultRate == 1.75)
     _ = try await service.play()
     let videoItem = service.player.currentItem
     _ = try await service.leavePlayerScreen(third)
@@ -257,6 +304,19 @@ struct PlaybackServiceTests {
     _ = try await service.close()
     try check(!service.isRetaining(third))
     try check(service.player.currentItem == nil)
+
+    // A fresh native service (simulated process relaunch) starts at the stored
+    // rate without a transient 1× play call or a JavaScript restoration step.
+    let newSession = DropPlaybackService(storage: DropLibraryStorage(root: root),
+      repository: repository, system: FakePlaybackSystemBridge(),
+      ratePreference: ratePreference)
+    _ = try await newSession.open(id: first)
+    try await ready(newSession)
+    try check(newSession.player.defaultRate == 1.75)
+    _ = try await newSession.play()
+    try await effectiveRate(newSession, expected: 1.75)
+    _ = try await newSession.close()
+    try check(ratePreference.stored == 1.75)
 
     repository.records[first] = PlaybackRecord(id: first,
       relativeMediaPath: "Media/\(first).m4a", mediaType: "audio",
@@ -341,7 +401,8 @@ struct PlaybackServiceTests {
     let failingSystem = FakePlaybackSystemBridge()
     failingSystem.failActivation = true
     let failingService = DropPlaybackService(storage: DropLibraryStorage(root: root),
-      repository: repository, system: failingSystem)
+      repository: repository, system: failingSystem,
+      ratePreference: FakePlaybackRatePreference())
     _ = try await failingService.open(id: first)
     try await ready(failingService)
     do { _ = try await failingService.play(); fatalError("audio session failure ignored") }
@@ -360,8 +421,9 @@ struct PlaybackServiceTests {
     size: Int64, videoSize: Int64) async throws {
     // No JS subscriber or PlayerScreen participates in native queue advancement.
     let system = FakePlaybackSystemBridge()
+    let ratePreference = FakePlaybackRatePreference()
     let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
-      repository: repository, system: system)
+      repository: repository, system: system, ratePreference: ratePreference)
     let queuePlayer: AVPlayer = service.player
     try check(queuePlayer === service.player)
     try check(service.player.actionAtItemEnd == .advance)
@@ -375,6 +437,7 @@ struct PlaybackServiceTests {
     try check(service.isRetaining(first) && service.isRetaining(second))
     try check(abs(CMTimeGetSeconds(nextItem.currentTime())) < 0.05) // completed -> zero
     _ = try service.setRate(1.5)
+    try check(ratePreference.stored == 1.5)
     _ = try await service.leavePlayerScreen(first)
     try check(service.player.currentItem === firstItem)
     let activations = system.activations
@@ -389,6 +452,7 @@ struct PlaybackServiceTests {
     try check(!service.isRetaining(first) && service.isRetaining(second))
     try check(service.snapshot()["rate"] as? Double == 1.5)
     try await effectiveRate(service, expected: 1.5)
+    try check(ratePreference.stored == 1.5)
     try check(system.metadata.last?.1 == "Podcast Dos")
     for _ in 0..<100 {
       if repository.resumeSave != nil { break }
@@ -406,6 +470,7 @@ struct PlaybackServiceTests {
     try await ended(service) // Last item has no loop or synthetic successor.
     _ = try await service.close()
     try check(!service.isRetaining(second) && service.player.items().isEmpty)
+    try check(ratePreference.stored == 1.5)
 
     // The next item is sought before insertion, so the first audible sample
     // after native advancement is from its persisted position.
@@ -420,6 +485,7 @@ struct PlaybackServiceTests {
     // advances the queue for this audio/video boundary.
     try await playing(service, id: first)
     try await effectiveRate(service, expected: 1.5)
+    try check(ratePreference.stored == 1.5)
     try check(abs((service.snapshot()["position"] as? Double ?? 0) - 0.4) < 0.2)
     try await prepared(service, id: second) // B became current; C was queued.
     _ = try await service.close()
@@ -465,6 +531,7 @@ struct PlaybackServiceTests {
     try check(service.player.items().isEmpty && system.activeHandlers == 0)
     service.endDelete(first)
     _ = try await service.close()
+    try check(ratePreference.stored == 1.5)
 
     // All four media-type boundaries use the same transport and queue slot.
     let copiedVideo = root.appendingPathComponent("Media/\(fourth).mp4")

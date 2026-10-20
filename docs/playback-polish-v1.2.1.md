@@ -21,6 +21,16 @@ lease; la finalización de A se persiste mientras B ya reproduce. Luego se
 prepara C. El último item termina sin repetir. La velocidad seleccionada se
 conserva. No se usa `beginBackgroundTask` para sostener el cambio de item.
 
+## Block C1 — Velocidad global
+
+La velocidad seleccionada es una preferencia global nativa, almacenada en
+`UserDefaults` mediante `PlaybackRatePreference`, no un campo de `LibraryItem`.
+El servicio la carga al inicializarse y configura `AVQueuePlayer.defaultRate`
+antes de abrir el primer item. Se conserva entre items manuales, auto-next,
+`close`, Delete y relanzamientos. Solo se guardan las velocidades admitidas por
+`PlaybackPolicy.rates`; ausencia o valor inválido vuelve a 1×. Un `rate = 0`
+transitorio por pausa, buffering o cambio de item no modifica la preferencia.
+
 Pausa, navegación a Biblioteca, background y cambios de salida no activan
 auto-next. `leavePlayerScreen` conserva item, lease y contexto; `close` y Delete
 del item activo retiran ambos slots y sus leases. Delete del NEXT preparado lo
@@ -33,5 +43,5 @@ typecheck no sustituyen una prueba en iPhone.
 Limitación visual P1 heredada de Block A: al navegar del reproductor a
 Biblioteca, la ventana PiP desaparece aunque el mismo AVPlayer continúa con
 audio y al regresar se adopta la sesión. Este bloque no cambia ese comportamiento.
-No incluye Queue, shuffle, repeat, mini-player, persistencia de contexto o
-velocidad global, ni el polish de artwork de Block C.
+No incluye Queue, shuffle, repeat, mini-player, persistencia de contexto ni el
+polish de artwork posterior a C1.

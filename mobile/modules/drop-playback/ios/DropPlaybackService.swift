@@ -64,6 +64,7 @@ final class DropPlaybackService {
   private var repository: PlaybackProgressRepository?
   private var storage: DropLibraryStorage?
   private let system: PlaybackSystemBridge
+  private let ratePreference: PlaybackRatePreference
   private var generation: UInt64 = 0
   private var playbackContext: PlaybackContext?
   private var contextEpoch: UInt64 = 0
@@ -190,11 +191,16 @@ final class DropPlaybackService {
 
   init(player: AVQueuePlayer = AVQueuePlayer(), storage: DropLibraryStorage? = nil,
        repository: PlaybackProgressRepository? = nil,
-       system: PlaybackSystemBridge? = nil) {
+       system: PlaybackSystemBridge? = nil,
+       ratePreference: PlaybackRatePreference? = nil) {
     self.player = player
     self.storage = storage
     self.repository = repository
     self.system = system ?? IOSPlaybackSystemBridge()
+    self.ratePreference = ratePreference ?? UserDefaultsPlaybackRatePreference()
+    let storedRate = self.ratePreference.load()
+    rate = storedRate.flatMap { PlaybackPolicy.rates.contains($0) ? $0 : nil } ?? 1
+    player.defaultRate = Float(rate)
     player.actionAtItemEnd = .advance
     #if os(iOS)
     player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
@@ -217,9 +223,14 @@ final class DropPlaybackService {
               self.player.currentItem === observedItem else { return }
         let selected = Double(player.defaultRate)
         guard PlaybackPolicy.rates.contains(selected), self.rate != selected else { return }
-        self.rate = selected
-        self.emit()
-        self.updateNowPlaying()
+        if self.preparedNext?.item === observedItem ||
+            Date().timeIntervalSince(self.queuedAdvanceAt) < 0.5 {
+          // AVQueuePlayer may reset defaultRate while advancing. The queued
+          // handoff is not a user preference change.
+          self.player.defaultRate = Float(self.rate)
+          return
+        }
+        self.selectRate(selected)
       }
     }
     rateObservation = player.observe(\.rate, options: [.new]) { [weak self] player, _ in
@@ -231,8 +242,9 @@ final class DropPlaybackService {
         self.reconcileQueuedItem()
         if player.rate > 0 {
           let selected = Double(player.rate)
-          if PlaybackPolicy.rates.contains(selected) {
-            self.rate = selected
+          if PlaybackPolicy.rates.contains(selected), self.rate != selected,
+             Date().timeIntervalSince(self.queuedAdvanceAt) >= 0.5 {
+            self.selectRate(selected)
             self.player.defaultRate = Float(selected)
           }
           do { try self.system.activate() }
@@ -282,6 +294,14 @@ final class DropPlaybackService {
   }
 
   private func emit() { onState?(snapshot()) }
+
+  private func selectRate(_ selected: Double) {
+    guard PlaybackPolicy.rates.contains(selected), rate != selected else { return }
+    rate = selected
+    ratePreference.save(selected)
+    emit()
+    updateNowPlaying()
+  }
 
   private var fullscreenActive: Bool {
     #if canImport(UIKit)
@@ -928,7 +948,7 @@ final class DropPlaybackService {
       fullscreenDismissIntent = nil
     }
     #endif
-    rate = value
+    selectRate(value)
     player.defaultRate = Float(value)
     if state == "playing" { player.rate = Float(value) }
     emit()
