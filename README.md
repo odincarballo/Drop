@@ -2,7 +2,7 @@
 
 Drop is an iPhone app for downloading authorized media and keeping it in an
 offline library. The repository and the iPhone app are both named **Drop**.
-The current app version is v1.2.0.
+The current app version is v1.2.1.
 
 Drop is designed for public or otherwise authorized content. It does not
 support DRM bypass, private accounts, memberships, paywalls, login cookies,
@@ -21,8 +21,8 @@ are separate from Drop's managed library.
 
 ## Features
 
-- Local MP4/M4A playback with seeking, ±15-second jumps, 0.75–2× speed,
-  persistent progress, resume, and fullscreen video.
+- Local MP4/M4A playback with seeking, ±15-second jumps, persistent global
+  0.75–2× speed, contextual auto-next, progress, resume, and fullscreen video.
 - Background audio, Lock Screen/Control Center metadata and controls,
   AirPods/Bluetooth transport controls, and video Picture in Picture where
   supported by iOS.
@@ -37,8 +37,9 @@ are separate from Drop's managed library.
 
 `mobile/` uses React Native, Expo Router, and Expo Modules. Versioned Swift
 modules implement the downloader, persistent library, file export, and one
-AVPlayer-based playback service. The library stores metadata in SQLite and
-media/artwork in the iOS app container. The on-device YouTube path embeds
+AVQueuePlayer-based playback service with a bounded current/next window. The
+library stores metadata in SQLite and media/artwork in the iOS app container.
+The on-device YouTube path embeds
 CPython, pinned yt-dlp, and QuickJS. The direct-media path is a separate
 FastAPI backend under `backend/`.
 
