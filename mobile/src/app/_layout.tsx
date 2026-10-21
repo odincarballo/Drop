@@ -4,6 +4,7 @@ import { Slot, usePathname, useRouter, type Href } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { MiniPlayer } from '@/components/MiniPlayer';
 import { cleanupAbandonedFilesAtStartup } from '@/services/fileExport';
 import { PlaybackProvider } from '@/providers/PlaybackProvider';
 import { initializeLibrary } from '@/services/library';
@@ -13,7 +14,7 @@ import { ThemeProvider, useTheme } from '@/theme';
 function ThemedRoutes() {
   const router = useRouter();
   const pathname = usePathname();
-  const { isDark, ready } = useTheme();
+  const { colors, isDark, ready } = useTheme();
   const [libraryReady, setLibraryReady] = useState(false);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -68,7 +69,12 @@ function ThemedRoutes() {
   return (
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
-      <Slot />
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <View style={{ flex: 1 }}>
+          <Slot />
+        </View>
+        <MiniPlayer />
+      </View>
     </>
   );
 }

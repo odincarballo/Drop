@@ -23,6 +23,20 @@ to the existing playback service; navigation remains with the consumer.
 
 `PlayerScreen` temporarily retains its route-local subscription for scrubbing,
 PiP restoration, and route replacement. It is not the global source of truth.
-Block B will use `usePlayback()` to render the persistent mini-player. Manual
-Queue and Playlist management, shuffle, repeat, and a mini-player UI are not
-part of Block A.
+
+## Block B: persistent mini-player
+
+`MiniPlayer` is mounted once beside the root route slot. The flex layout
+reserves space for it rather than overlaying screen content, and its bottom
+padding uses the current safe-area inset. It is visible on non-player routes
+when native playback has a usable session and matching Library metadata.
+Idle, failed, fullscreen, or an unresolved item hides it, so auto-next cannot
+briefly show the previous item's title or artwork. PiP may continue while the
+mini-player is visible on another Drop screen.
+
+The artwork, one-line title, and play/pause control consume `usePlayback()`.
+The separate transport button delegates to `togglePlayPause()` without
+navigating; the main area opens `/player/{libraryId}`. The native player,
+Playback Context, rate, and PiP ownership are unchanged. Manual Queue and
+Playlist management, manual next/previous, repeat, and shuffle remain outside
+the scope of v1.3.0 Blocks A and B.
