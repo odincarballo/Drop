@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { cleanupAbandonedFilesAtStartup } from '@/services/fileExport';
+import { PlaybackProvider } from '@/providers/PlaybackProvider';
 import { initializeLibrary } from '@/services/library';
 import { playback } from '@/services/playback';
 import { ThemeProvider, useTheme } from '@/theme';
@@ -76,7 +77,9 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <ThemedRoutes />
+        <PlaybackProvider>
+          <ThemedRoutes />
+        </PlaybackProvider>
       </ThemeProvider>
     </SafeAreaProvider>
   );
