@@ -40,3 +40,19 @@ navigating; the main area opens `/player/{libraryId}`. The native player,
 Playback Context, rate, and PiP ownership are unchanged. Manual Queue and
 Playlist management, manual next/previous, repeat, and shuffle remain outside
 the scope of v1.3.0 Blocks A and B.
+
+## Release-candidate scope
+
+v1.3.0 includes Blocks A and B. The shared state stays synchronized with native
+playback, resolves active Library metadata, follows auto-next, and reconciles
+on foreground. The mini-player persists across Home, Library, Collections,
+collection detail, Settings, and other non-player routes while a usable session
+exists. It shows local artwork and title, offers Play/Pause, and opens the
+active full player without restarting playback; it is hidden on `/player/*`.
+
+The functional Blocks A and B were physically checked in the separate test
+bundle, including Library navigation, mini-player controls, position
+continuity, auto-next metadata, and hiding on PlayerScreen. The version-bumped
+v1.3.0 build 6 release candidate has not yet been built or installed. This is
+not an App Store or TestFlight validation. Manual Queue, Playlist, manual
+Next/Previous, Repeat, and Shuffle remain out of scope.

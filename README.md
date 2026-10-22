@@ -2,7 +2,7 @@
 
 Drop is an iPhone app for downloading authorized media and keeping it in an
 offline library. The repository and the iPhone app are both named **Drop**.
-The current app version is v1.2.1.
+This branch prepares Drop v1.3.0 (build 6) as a release candidate.
 
 Drop is designed for public or otherwise authorized content. It does not
 support DRM bypass, private accounts, memberships, paywalls, login cookies,
@@ -23,6 +23,12 @@ are separate from Drop's managed library.
 
 - Local MP4/M4A playback with seeking, ±15-second jumps, persistent global
   0.75–2× speed, contextual auto-next, progress, resume, and fullscreen video.
+- Global Now Playing state follows the native playback session, resolves the
+  active title and local artwork from Library, reflects auto-next, and
+  reconciles when the app returns to the foreground.
+- A persistent mini-player shows artwork, title, and Play/Pause throughout
+  general navigation. Tapping its main area opens the active full player; it
+  stays hidden inside `/player/*` and fullscreen.
 - Background audio, Lock Screen/Control Center metadata and controls,
   AirPods/Bluetooth transport controls, and video Picture in Picture where
   supported by iOS.
@@ -39,6 +45,8 @@ are separate from Drop's managed library.
 modules implement the downloader, persistent library, file export, and one
 AVQueuePlayer-based playback service with a bounded current/next window. The
 library stores metadata in SQLite and media/artwork in the iOS app container.
+The root `PlaybackProvider` exposes native Now Playing state to the UI, while
+the mini-player consumes that shared state without creating another player.
 The on-device YouTube path embeds
 CPython, pinned yt-dlp, and QuickJS. The direct-media path is a separate
 FastAPI backend under `backend/`.
@@ -219,9 +227,10 @@ Support is deliberately scoped to compatible individual YouTube URLs and
 validated direct resources. Audio-only playback currently targets M4A/AAC;
 video playback targets compatible local MP4. The 1080p download policy remains
 more conservative than 360p/720p. Downloads do not continue in the background;
-background playback is separate. There is no sleep timer, playlist, cloud
-sync, or import of old Files exports. Source compatibility and available
-storage may vary by device and source.
+background playback is separate. v1.3.0 does not include a manual Queue,
+Playlist, manual Next/Previous, Repeat, Shuffle, sleep timer, cloud sync, or
+import of old Files exports. Source compatibility and available storage may
+vary by device and source.
 
 The repository is now public, and its publication security/distribution review
 and author fresh public-clone self-validation are complete. The remaining
