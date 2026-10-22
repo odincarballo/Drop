@@ -22,7 +22,7 @@ type ForeignKey = {
   on_delete: string;
 };
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const DROP_OBJECTS = [
   'library_items',
   'library_items_recent',
@@ -30,10 +30,13 @@ const DROP_OBJECTS = [
   'collection_items',
   'collection_items_by_item',
   'collection_items_recent',
+  'playback_queue',
+  'playback_queue_position',
+  'playback_queue_by_item',
 ] as const;
 
-// The v1 definition is unchanged. A fresh installation creates it alongside v2
-// in one transaction; an existing v1 installation never recreates this table.
+// The v1 definition is unchanged. A fresh installation creates it alongside
+// v2/v3 in one transaction; an existing v1 installation never recreates it.
 const LIBRARY_SCHEMA = `
   CREATE TABLE library_items (
     id TEXT PRIMARY KEY NOT NULL,
@@ -80,6 +83,17 @@ const COLLECTIONS_SCHEMA = `
     ON collection_items(itemId, collectionId);
   CREATE INDEX collection_items_recent
     ON collection_items(collectionId, addedAt DESC, itemId DESC);
+`;
+
+const QUEUE_SCHEMA = `
+  CREATE TABLE playback_queue (
+    id TEXT PRIMARY KEY NOT NULL,
+    itemId TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK(position >= 0),
+    addedAt TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX playback_queue_position ON playback_queue(position);
+  CREATE INDEX playback_queue_by_item ON playback_queue(itemId, position);
 `;
 
 const LIBRARY_COLUMNS: Column[] = [
@@ -129,6 +143,12 @@ const MEMBERSHIP_COLUMNS: Column[] = [
   { name: 'itemId', type: 'TEXT', notnull: 1, pk: 2 },
   { name: 'addedAt', type: 'TEXT', notnull: 1, pk: 0 },
 ];
+const QUEUE_COLUMNS: Column[] = [
+  { name: 'id', type: 'TEXT', notnull: 1, pk: 1 },
+  { name: 'itemId', type: 'TEXT', notnull: 1, pk: 0 },
+  { name: 'position', type: 'INTEGER', notnull: 1, pk: 0 },
+  { name: 'addedAt', type: 'TEXT', notnull: 1, pk: 0 },
+];
 
 let opening: Promise<SQLite.SQLiteDatabase> | null = null;
 let preparedDirectoryURL: string | null = null;
@@ -166,6 +186,11 @@ function expectObjects(
     expected.set('collection_items', 'table');
     expected.set('collection_items_by_item', 'index');
     expected.set('collection_items_recent', 'index');
+  }
+  if (version >= 3) {
+    expected.set('playback_queue', 'table');
+    expected.set('playback_queue_position', 'index');
+    expected.set('playback_queue_by_item', 'index');
   }
   if (
     found.size !== expected.size ||
@@ -215,11 +240,16 @@ async function expectIndex(
   table: string,
   name: string,
   columns: [string, number][],
+  unique = false,
 ): Promise<void> {
   const indexes = await db.getAllAsync<Index>(
     `PRAGMA index_list(${identifier(table)})`,
   );
-  if (!indexes.some((index) => index.name === name && index.unique === 0))
+  if (
+    !indexes.some(
+      (index) => index.name === name && index.unique === Number(unique),
+    )
+  )
     invalidSchema();
   const actual = await indexColumns(db, name);
   if (
@@ -306,6 +336,36 @@ async function validateStructure(
     )
       invalidSchema();
   }
+  if (version >= 3) {
+    await expectColumns(db, 'playback_queue', QUEUE_COLUMNS);
+    await expectIndex(
+      db,
+      'playback_queue',
+      'playback_queue_position',
+      [['position', 0]],
+      true,
+    );
+    await expectIndex(db, 'playback_queue', 'playback_queue_by_item', [
+      ['itemId', 0],
+      ['position', 0],
+    ]);
+    const keys = await db.getAllAsync<ForeignKey>(
+      'PRAGMA foreign_key_list("playback_queue")',
+    );
+    const definition = found
+      .get('playback_queue')
+      ?.sql?.toLowerCase()
+      .replaceAll(/\s+/g, '');
+    if (
+      keys.length !== 1 ||
+      keys[0]?.from !== 'itemId' ||
+      keys[0].table !== 'library_items' ||
+      keys[0].to !== 'id' ||
+      keys[0].on_delete.toUpperCase() !== 'CASCADE' ||
+      !definition?.includes('check(position>=0)')
+    )
+      invalidSchema();
+  }
 }
 
 async function open(): Promise<SQLite.SQLiteDatabase> {
@@ -347,8 +407,9 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
     }
     await db.withExclusiveTransactionAsync(async (txn) => {
       await validateStructure(txn, version);
-      if (version === 0) await txn.execAsync(LIBRARY_SCHEMA);
-      await txn.execAsync(COLLECTIONS_SCHEMA);
+      if (version < 1) await txn.execAsync(LIBRARY_SCHEMA);
+      if (version < 2) await txn.execAsync(COLLECTIONS_SCHEMA);
+      if (version < 3) await txn.execAsync(QUEUE_SCHEMA);
       await validateStructure(txn, SCHEMA_VERSION);
       await txn.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     });
@@ -385,7 +446,14 @@ export function openLibraryDatabase(): Promise<SQLite.SQLiteDatabase> {
  */
 export async function withLibraryForeignKeyTransaction<T>(
   action: (txn: SQLite.SQLiteDatabase) => Promise<T>,
+  busyTimeoutMs = 5000,
 ): Promise<T> {
+  if (
+    !Number.isSafeInteger(busyTimeoutMs) ||
+    busyTimeoutMs < 0 ||
+    busyTimeoutMs > 60000
+  )
+    throw new Error('Tiempo de espera SQLite no válido.');
   await openLibraryDatabase();
   if (!preparedDirectoryURL)
     throw new Error('No se pudo preparar la integridad de la Biblioteca.');
@@ -402,6 +470,10 @@ export async function withLibraryForeignKeyTransaction<T>(
     );
     if (setting?.foreign_keys !== 1)
       throw new Error('No se pudo activar la integridad de la Biblioteca.');
+    // BEGIN IMMEDIATE serializes Queue writes with Library Delete on their
+    // separate connections. A short wait avoids treating ordinary contention
+    // as a lost user action.
+    await txn.execAsync(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
     await txn.execAsync('BEGIN IMMEDIATE');
     inTransaction = true;
     const result = await action(txn);

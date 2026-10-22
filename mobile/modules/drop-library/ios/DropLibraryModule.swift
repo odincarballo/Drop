@@ -96,6 +96,10 @@ public final class DropLibraryModule: Module {
       DropCollectionNamePolicy.newID()
     }
 
+    Function("newQueueEntryId") { () -> String in
+      UUID().uuidString.lowercased()
+    }
+
     AsyncFunction("prepare") { () throws -> [String: String] in
       let storage = try DropLibraryStorage()
       let root = try DropLibraryDatabase.prepare(

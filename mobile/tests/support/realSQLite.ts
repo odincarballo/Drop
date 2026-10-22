@@ -9,6 +9,7 @@ export class RealSQLite {
   readonly exclusiveConnections: RealSQLite[] = [];
   closed = false;
   failAfterCollectionsTable = false;
+  failAfterQueueTable = false;
   foreignKeysUnavailable = false;
 
   constructor(private readonly path: string) {
@@ -21,14 +22,21 @@ export class RealSQLite {
   async execAsync(sql: string): Promise<void> {
     this.executed.push(sql);
     if (
-      this.failAfterCollectionsTable &&
-      sql.includes('CREATE TABLE collections')
+      (this.failAfterCollectionsTable &&
+        sql.includes('CREATE TABLE collections')) ||
+      (this.failAfterQueueTable && sql.includes('CREATE TABLE playback_queue'))
     ) {
       for (const statement of sql.split(';').map((part) => part.trim())) {
         if (!statement) continue;
         this.raw.exec(statement);
-        if (statement.startsWith('CREATE TABLE collections')) {
+        if (
+          (this.failAfterCollectionsTable &&
+            statement.startsWith('CREATE TABLE collections')) ||
+          (this.failAfterQueueTable &&
+            statement.startsWith('CREATE TABLE playback_queue'))
+        ) {
           this.failAfterCollectionsTable = false;
+          this.failAfterQueueTable = false;
           throw new Error('injected migration failure');
         }
       }
@@ -62,6 +70,7 @@ export class RealSQLite {
     // callback. Connection-local PRAGMAs on the parent are not inherited.
     const transaction = new RealSQLite(this.path);
     transaction.failAfterCollectionsTable = this.failAfterCollectionsTable;
+    transaction.failAfterQueueTable = this.failAfterQueueTable;
     transaction.foreignKeysUnavailable = this.foreignKeysUnavailable;
     this.exclusiveConnections.push(transaction);
     await transaction.execAsync('BEGIN');
