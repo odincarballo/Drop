@@ -3,7 +3,7 @@ import SQLite3
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-struct PlaybackRecord {
+struct PlaybackRecord: Sendable {
   let id: String
   let relativeMediaPath: String
   let mediaType: String
@@ -27,13 +27,13 @@ struct PlaybackRecord {
   }
 }
 
-enum PlaybackRepositoryError: Error {
+enum PlaybackRepositoryError: Error, Sendable {
   case unavailable
   case busy
   case invalidRecord
 }
 
-protocol PlaybackProgressRepository: AnyObject {
+protocol PlaybackProgressRepository: AnyObject, Sendable {
   func load(id: String) async throws -> PlaybackRecord
   func save(id: String, position: Double, completedAt: String?) async throws
 }
@@ -93,7 +93,9 @@ final class SQLitePlaybackProgressRepository: PlaybackProgressRepository, @unche
     }
   }
 
-  private func queued<T>(_ body: @escaping (OpaquePointer) throws -> T) async throws -> T {
+  private func queued<T: Sendable>(
+    _ body: @escaping @Sendable (OpaquePointer) throws -> T
+  ) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
       queue.async {
         do {

@@ -70,7 +70,10 @@ final class DropPlaybackService {
   private var contextEpoch: UInt64 = 0
   private var pendingAutoplayToken: UInt64?
   private struct PreparedNext {
-    let id: String
+    let occurrence: PlaybackOccurrence
+    let generation: UInt64
+    let preparationSerial: UInt64
+    var id: String { occurrence.libraryID }
     let item: AVPlayerItem
     let mediaType: String
     let duration: Double
@@ -86,10 +89,16 @@ final class DropPlaybackService {
   private var preparationSerial: UInt64 = 0
   private var nextCandidateIndex = 0
   private var completionScheduled = false
+  // B2B must serialize an outgoing A completion with all incoming A progress
+  // writes before enabling A→A; library_items stores progress by Library ID.
+  // Occurrence guards below prevent stale UI/dirty-state updates, but cannot
+  // by themselves order two SQLite writes for the same ID.
   private var completionWrites: [String: (UUID, Task<Void, Never>)] = [:]
   private var queuedAdvanceAt = Date.distantPast
   private var currentItemObservation: NSKeyValueObservation?
   private let leases = PlaybackLeaseCoordinator()
+  private var currentOccurrence: PlaybackOccurrence?
+  private var currentOccurrenceItem: AVPlayerItem?
   private var activeID: String?
   private var activeMediaType: String?
   #if canImport(UIKit)
@@ -380,7 +389,9 @@ final class DropPlaybackService {
     }
     // Reserve before any asynchronous database or asset work. Delete first blocks
     // new opens, then closes this reserved lease before removing the file.
-    guard leases.reserve(id) else { throw DropPlaybackError.unavailable }
+    let occurrence = PlaybackOccurrence(libraryID: id, source: .direct)
+    guard leases.reserveCurrent(occurrence) else { throw DropPlaybackError.unavailable }
+    currentOccurrence = occurrence
     activeID = id
     activeMediaType = nil
     state = "loading"
@@ -434,6 +445,7 @@ final class DropPlaybackService {
       let item = AVPlayerItem(asset: asset)
       guard player.canInsert(item, after: nil) else { throw DropPlaybackError.invalidMedia }
       player.insert(item, after: nil)
+      currentOccurrenceItem = item
       let artworkURL: URL?
       if record.relativeArtworkPath == "Artwork/\(id).jpg" {
         artworkURL = (try? storage.managedArtwork(id: id))?.0
@@ -460,7 +472,9 @@ final class DropPlaybackService {
   }
 
   private func current(_ token: UInt64, id: String) throws {
-    guard token == generation, leases.owns(id) else { throw DropPlaybackError.superseded }
+    guard token == generation, activeID == id,
+          let currentOccurrence, currentOccurrence.libraryID == id,
+          leases.ownsCurrent(currentOccurrence) else { throw DropPlaybackError.superseded }
   }
 
   private func observe(item: AVPlayerItem, token: UInt64, restorePosition: Double) {
@@ -623,12 +637,19 @@ final class DropPlaybackService {
   }
 
   private func cancelPreparation() {
+    // An AVQueuePlayer handoff may precede its KVO callback. Adopt that exact
+    // item before cancelling so its occurrence is never released as NEXT.
+    if let next = preparedNext, player.currentItem === next.item {
+      adoptQueuedItem(next.item)
+    }
     preparationSerial &+= 1
     preparationTask?.cancel()
     preparingItem?.cancelPendingSeeks()
     if let preparedNext {
-      if player.currentItem !== preparedNext.item { player.remove(preparedNext.item) }
-      leases.release(preparedNext.id)
+      if player.currentItem !== preparedNext.item {
+        player.remove(preparedNext.item)
+        leases.releasePrepared(preparedNext.occurrence)
+      }
       self.preparedNext = nil
     }
     preparedStatusObservation = nil
@@ -663,14 +684,18 @@ final class DropPlaybackService {
     while preparationIsCurrent(epoch: epoch, token: token, serial: serial, source: source),
           let context = playbackContext,
           nextCandidateIndex < context.orderedIds.count {
-      let id = context.orderedIds[nextCandidateIndex]
+      let candidateIndex = nextCandidateIndex
+      let id = context.orderedIds[candidateIndex]
       nextCandidateIndex += 1 // Each candidate is attempted at most once.
-      guard leases.reservePrepared(id) else { continue }
+      let occurrence = PlaybackOccurrence(libraryID: id,
+        source: .context(index: candidateIndex))
+      guard leases.reservePrepared(occurrence) else { continue }
       do {
-        let next = try await validatedNext(id: id)
+        let next = try await validatedNext(id: id, occurrence: occurrence,
+          token: token, serial: serial)
         guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
-                                   source: source), leases.ownsPrepared(id) else {
-          leases.release(id)
+                                   source: source), leases.ownsPrepared(occurrence) else {
+          leases.releasePrepared(occurrence)
           return
         }
         // AVPlayerItem.seek is independent of the player. Complete the restore
@@ -686,8 +711,8 @@ final class DropPlaybackService {
           }
         }
         guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
-                                   source: source), leases.ownsPrepared(id) else {
-          leases.release(id)
+                                   source: source), leases.ownsPrepared(occurrence) else {
+          leases.releasePrepared(occurrence)
           return
         }
         guard player.canInsert(next.item, after: source) else {
@@ -698,6 +723,10 @@ final class DropPlaybackService {
           [weak self] item, _ in
           Task { @MainActor [weak self] in
             guard let self, self.preparedNext?.item === item,
+                  self.preparedNext?.occurrence == occurrence,
+                  self.preparedNext?.generation == token,
+                  self.preparedNext?.preparationSerial == serial,
+                  self.generation == token, self.preparationSerial == serial,
                   item.status == .failed,
                   self.player.currentItem !== item else { return }
             self.cancelPreparation()
@@ -708,12 +737,13 @@ final class DropPlaybackService {
         player.insert(next.item, after: source)
         return
       } catch {
-        leases.release(id)
+        leases.releasePrepared(occurrence)
       }
     }
   }
 
-  private func validatedNext(id: String) async throws -> PreparedNext {
+  private func validatedNext(id: String, occurrence: PlaybackOccurrence,
+                             token: UInt64, serial: UInt64) async throws -> PreparedNext {
     let (storage, repository) = try resources()
     if let write = completionWrites[id] { await write.1.value }
     let record = try await repository.load(id: id)
@@ -741,7 +771,8 @@ final class DropPlaybackService {
     }
     let artworkURL = record.relativeArtworkPath == "Artwork/\(id).jpg"
       ? (try? storage.managedArtwork(id: id))?.0 : nil
-    return PreparedNext(id: id, item: AVPlayerItem(asset: asset),
+    return PreparedNext(occurrence: occurrence, generation: token,
+      preparationSerial: serial, item: AVPlayerItem(asset: asset),
       mediaType: record.mediaType, duration: seconds,
       position: PlaybackPolicy.restored(position: record.position, duration: seconds,
         wasCompleted: record.completedAt != nil), completedAt: record.completedAt,
@@ -750,7 +781,8 @@ final class DropPlaybackService {
   }
 
   private func scheduleCompletedSave(id: String, duration: Double) {
-    guard !completionScheduled, let repository else { return }
+    guard !completionScheduled, let repository,
+          let occurrence = currentOccurrence, occurrence.libraryID == id else { return }
     completionScheduled = true
     let priorSave = pendingSave
     pendingSave = nil // The old item's task must not suppress B's 12-second saves.
@@ -762,7 +794,7 @@ final class DropPlaybackService {
       if let previousCompletion { await previousCompletion.value }
       do { try await repository.save(id: id, position: duration, completedAt: completed) }
       catch {
-        if let self, self.activeID == id {
+        if let self, self.currentOccurrence == occurrence {
           self.errorCode = "PROGRESS_SAVE_FAILED"
           self.emit()
         }
@@ -776,9 +808,13 @@ final class DropPlaybackService {
 
   private func adoptQueuedItem(_ item: AVPlayerItem) {
     guard let next = preparedNext, next.item === item,
+          next.generation == generation,
+          next.preparationSerial == preparationSerial,
           let priorID = activeID, let priorDuration = duration,
+          let priorOccurrence = currentOccurrence,
+          priorOccurrence.libraryID == priorID,
           playbackContext?.currentID == priorID,
-          leases.promotePrepared(next.id) == priorID else { return }
+          leases.promotePrepared(next.occurrence, replacing: priorOccurrence) else { return }
     scheduleCompletedSave(id: priorID, duration: priorDuration)
     clearItemObservers()
     preparedStatusObservation = nil
@@ -789,6 +825,8 @@ final class DropPlaybackService {
     nextCandidateIndex = (playbackContext?.currentIndex ?? 0) + 1
     generation &+= 1
     let token = generation
+    currentOccurrence = next.occurrence
+    currentOccurrenceItem = next.item
     activeID = next.id
     activeMediaType = next.mediaType
     duration = next.duration
@@ -1164,10 +1202,16 @@ final class DropPlaybackService {
   func beginDelete(_ id: String) async throws {
     guard UUID(uuidString: id) != nil else { throw DropPlaybackError.invalidID }
     reconcileQueuedItem()
-    if leases.beginDelete(id) {
-      if leases.preparedID == id {
+    let targets = leases.beginDelete(id)
+    if targets.any {
+      if targets.prepared {
         cancelPreparation()
         await drainPreparation()
+      }
+      // AVQueuePlayer can reach a prepared item before its KVO promotion runs.
+      // If that item's lease survived cancellation, Delete must retire the
+      // transport before Library is allowed to remove the managed file.
+      if !targets.current && !leases.retains(id) {
         scheduleNextPreparation()
         return
       }
@@ -1193,18 +1237,22 @@ final class DropPlaybackService {
   func endDelete(_ id: String) { leases.endDelete(id) }
 
   private func safeCurrentPosition() -> Double {
-    guard let duration,
+    guard let duration, let currentOccurrenceItem,
+          player.currentItem === currentOccurrenceItem,
           let current = PlaybackPolicy.clamped(CMTimeGetSeconds(player.currentTime()), duration: duration)
     else { return position }
     return current
   }
 
   private func persist() async throws {
-    guard dirty, let id = activeID, let repository else { return }
+    guard dirty, let id = activeID, let repository,
+          let occurrence = currentOccurrence, occurrence.libraryID == id else { return }
     let saved = position
     let completed = completedAt
     try await repository.save(id: id, position: saved, completedAt: completed)
-    if activeID == id && position == saved && completedAt == completed { dirty = false }
+    if currentOccurrence == occurrence && position == saved && completedAt == completed {
+      dirty = false
+    }
   }
 
   private func updateNowPlaying() {
@@ -1276,10 +1324,17 @@ final class DropPlaybackService {
     pip.reset()
     #endif
     let id = activeID
+    let occurrence = currentOccurrence
     let finalPosition = safeCurrentPosition()
     clearItemObservers()
     player.pause()
     player.removeAllItems()
+    // If an exceptional stale handoff could not be adopted before teardown,
+    // keep its lease until AVQueuePlayer has released the item, then clear it.
+    if let strandedPrepared = leases.prepared {
+      leases.releasePrepared(strandedPrepared)
+    }
+    preparedNext = nil
     system.clear()
     completionScheduled = false
     wasPlayingBeforeInterruption = false
@@ -1287,10 +1342,15 @@ final class DropPlaybackService {
     if id != nil { dirty = dirty || state == "playing" || state == "paused" }
     if let pendingSave { await pendingSave.value }
     pendingSave = nil
+    // A natural end saves completion independently from periodic progress.
+    // Do not release the occurrence while that final write is still pending.
+    if let id, let completion = completionWrites[id] { await completion.1.value }
     defer {
       activeID = nil
       activeMediaType = nil
-      if let id { leases.release(id) }
+      if let occurrence { leases.releaseCurrent(occurrence) }
+      currentOccurrence = nil
+      currentOccurrenceItem = nil
       position = 0
       duration = nil
       completedAt = nil

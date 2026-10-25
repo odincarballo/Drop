@@ -54,7 +54,7 @@ final class FakePlaybackSystemBridge: PlaybackSystemBridge {
   func send(_ event: PlaybackSystemEvent) async { await handler?(token, event) }
 }
 
-final class FakeProgressRepository: PlaybackProgressRepository {
+final class FakeProgressRepository: PlaybackProgressRepository, @unchecked Sendable {
   var records = [String: PlaybackRecord]()
   var writes = [(String, Double, String?)]()
   var saveError: Error?
@@ -348,7 +348,7 @@ struct PlaybackServiceTests {
     repository.records[second] = missingRecord
 
     repository.pauseNextLoad = true
-    let openingForDeletion = Task { try? await service.open(id: second) }
+    let openingForDeletion = Task { _ = try? await service.open(id: second) }
     for _ in 0..<100 {
       if repository.resumeLoad != nil { break }
       try await Task.sleep(nanoseconds: 10_000_000)
@@ -364,8 +364,8 @@ struct PlaybackServiceTests {
 
     // Concurrent opens may finish in either order, but only the winning item
     // may hold a lease or publish a later ready callback.
-    let openingA = Task { try? await service.open(id: first) }
-    let openingB = Task { try? await service.open(id: third) }
+    let openingA = Task { _ = try? await service.open(id: first) }
+    let openingB = Task { _ = try? await service.open(id: third) }
     _ = await openingA.value
     _ = await openingB.value
     try await Task.sleep(nanoseconds: 100_000_000)
@@ -506,6 +506,19 @@ struct PlaybackServiceTests {
     service.endDelete(third)
     _ = try await service.close()
 
+    // Delete at the AVQueuePlayer handoff boundary must not release a prepared
+    // file while that exact item has already become current ahead of KVO.
+    _ = try await service.startInContext(id: first, orderedIds: [first, second])
+    try await playing(service, id: first)
+    try await prepared(service, id: second)
+    let deletingAtHandoff = service.player.items()[1]
+    service.player.advanceToNextItem()
+    try check(service.player.currentItem === deletingAtHandoff)
+    try await service.beginDelete(second)
+    try check(service.player.currentItem == nil && service.player.items().isEmpty)
+    try check(!service.isRetaining(first) && !service.isRetaining(second))
+    service.endDelete(second)
+
     // A manual tap replaces both queue slots and the old context atomically.
     _ = try await service.startInContext(id: first, orderedIds: [first, second])
     try await playing(service, id: first)
@@ -558,7 +571,7 @@ struct PlaybackServiceTests {
     }
     try check(repository.resumeLoad != nil && service.isRetaining(second))
     let replacement = Task {
-      try await service.startInContext(id: third, orderedIds: [third])
+      _ = try await service.startInContext(id: third, orderedIds: [third])
     }
     repository.resumeLoad?.resume()
     repository.resumeLoad = nil
