@@ -2,13 +2,13 @@ import Foundation
 
 // A Library ID identifies the managed file, not one play of that file.
 // Manual and contextual occurrences remain independent even for the same ID.
-enum PlaybackOccurrenceSource: Equatable {
+enum PlaybackOccurrenceSource: Equatable, Sendable {
   case direct
   case context(index: Int)
   case manual(entryID: String)
 }
 
-struct PlaybackOccurrence: Equatable {
+struct PlaybackOccurrence: Equatable, Sendable {
   let libraryID: String
   let identity: UUID
   let source: PlaybackOccurrenceSource

@@ -89,11 +89,7 @@ final class DropPlaybackService {
   private var preparationSerial: UInt64 = 0
   private var nextCandidateIndex = 0
   private var completionScheduled = false
-  // B2B must serialize an outgoing A completion with all incoming A progress
-  // writes before enabling A→A; library_items stores progress by Library ID.
-  // Occurrence guards below prevent stale UI/dirty-state updates, but cannot
-  // by themselves order two SQLite writes for the same ID.
-  private var completionWrites: [String: (UUID, Task<Void, Never>)] = [:]
+  private let progressWrites = PlaybackProgressWriteCoordinator()
   private var queuedAdvanceAt = Date.distantPast
   private var currentItemObservation: NSKeyValueObservation?
   private let leases = PlaybackLeaseCoordinator()
@@ -392,6 +388,7 @@ final class DropPlaybackService {
     let occurrence = PlaybackOccurrence(libraryID: id, source: .direct)
     guard leases.reserveCurrent(occurrence) else { throw DropPlaybackError.unavailable }
     currentOccurrence = occurrence
+    progressWrites.activate(occurrence)
     activeID = id
     activeMediaType = nil
     state = "loading"
@@ -403,9 +400,9 @@ final class DropPlaybackService {
     emit()
     do {
       let (storage, repository) = try resources()
-      // A just-completed item can be manually selected again immediately.
-      // Its asynchronous final write must finish before loading its progress.
-      if let write = completionWrites[id] { await write.1.value }
+      // A just-completed item can be selected again immediately. All writes
+      // already accepted for that Library row finish before its progress loads.
+      await progressWrites.drain(id)
       try current(token, id: id)
       let record = try await repository.load(id: id)
       try current(token, id: id)
@@ -511,6 +508,7 @@ final class DropPlaybackService {
     ) { [weak self] _ in
       Task { @MainActor [weak self] in
         guard let self, token == self.generation,
+              self.currentOccurrenceItem === item,
               let id = self.activeID, let duration = self.duration else { return }
         // AVQueuePlayer advances to a prepared successor itself. This callback
         // never opens or plays the next item. If one is queued, its adoption
@@ -536,7 +534,8 @@ final class DropPlaybackService {
       forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main
     ) { [weak self] _ in
       Task { @MainActor [weak self] in
-        guard let self, token == self.generation else { return }
+        guard let self, token == self.generation,
+              self.currentOccurrenceItem === item else { return }
         await self.failCurrent(.invalidMedia, token: token)
       }
     }
@@ -587,9 +586,12 @@ final class DropPlaybackService {
           elapsed: Date().timeIntervalSince(self.lastSave), hasProgress: self.dirty
         ), self.pendingSave == nil {
           self.lastSave = Date()
+          let observedOccurrence = self.currentOccurrence
           self.pendingSave = Task { @MainActor [weak self] in
-            guard let self, token == self.generation else { return }
-            do { try await self.persist() }
+            guard let self, token == self.generation,
+                  let observedOccurrence,
+                  self.currentOccurrence == observedOccurrence else { return }
+            do { try await self.persist(expected: observedOccurrence) }
             catch {
               if token == self.generation {
                 self.errorCode = "PROGRESS_SAVE_FAILED"
@@ -745,7 +747,7 @@ final class DropPlaybackService {
   private func validatedNext(id: String, occurrence: PlaybackOccurrence,
                              token: UInt64, serial: UInt64) async throws -> PreparedNext {
     let (storage, repository) = try resources()
-    if let write = completionWrites[id] { await write.1.value }
+    await progressWrites.drain(id)
     let record = try await repository.load(id: id)
     let relative = record.relativeMediaPath
     let ext = URL(fileURLWithPath: relative).pathExtension.lowercased()
@@ -783,27 +785,23 @@ final class DropPlaybackService {
   private func scheduleCompletedSave(id: String, duration: Double) {
     guard !completionScheduled, let repository,
           let occurrence = currentOccurrence, occurrence.libraryID == id else { return }
-    completionScheduled = true
     let priorSave = pendingSave
-    pendingSave = nil // The old item's task must not suppress B's 12-second saves.
-    let previousCompletion = completionWrites[id]?.1
     let completed = ISO8601DateFormatter().string(from: Date())
-    let writeToken = UUID()
-    let write = Task { @MainActor [weak self] in
-      if let priorSave { await priorSave.value }
-      if let previousCompletion { await previousCompletion.value }
-      do { try await repository.save(id: id, position: duration, completedAt: completed) }
+    let snapshot = PlaybackProgressWrite(occurrence: occurrence,
+      position: duration, completedAt: completed)
+    guard let write = progressWrites.enqueue(snapshot, repository: repository,
+      after: priorSave) else { return }
+    completionScheduled = true
+    pendingSave = nil // The outgoing task must not suppress the next item's saves.
+    Task { @MainActor [weak self] in
+      do { try await write.value }
       catch {
         if let self, self.currentOccurrence == occurrence {
           self.errorCode = "PROGRESS_SAVE_FAILED"
           self.emit()
         }
       }
-      if self?.completionWrites[id]?.0 == writeToken {
-        self?.completionWrites.removeValue(forKey: id)
-      }
     }
-    completionWrites[id] = (writeToken, write)
   }
 
   private func adoptQueuedItem(_ item: AVPlayerItem) {
@@ -825,6 +823,8 @@ final class DropPlaybackService {
     nextCandidateIndex = (playbackContext?.currentIndex ?? 0) + 1
     generation &+= 1
     let token = generation
+    progressWrites.retire(priorOccurrence)
+    progressWrites.activate(next.occurrence)
     currentOccurrence = next.occurrence
     currentOccurrenceItem = next.item
     activeID = next.id
@@ -882,10 +882,12 @@ final class DropPlaybackService {
     emit()
     updateNowPlaying()
     let token = generation
+    let occurrence = currentOccurrence
     Task { @MainActor [weak self] in
       guard let self, token == self.generation,
-            self.player.currentItem === item else { return }
-      do { try await self.persist() }
+            self.player.currentItem === item,
+            let occurrence, self.currentOccurrence == occurrence else { return }
+      do { try await self.persist(expected: occurrence) }
       catch { self.errorCode = "PROGRESS_SAVE_FAILED"; self.emit() }
     }
   }
@@ -1244,12 +1246,16 @@ final class DropPlaybackService {
     return current
   }
 
-  private func persist() async throws {
+  private func persist(expected: PlaybackOccurrence? = nil) async throws {
     guard dirty, let id = activeID, let repository,
-          let occurrence = currentOccurrence, occurrence.libraryID == id else { return }
+          let occurrence = currentOccurrence, occurrence.libraryID == id,
+          expected == nil || expected == occurrence else { return }
     let saved = position
     let completed = completedAt
-    try await repository.save(id: id, position: saved, completedAt: completed)
+    let snapshot = PlaybackProgressWrite(occurrence: occurrence,
+      position: saved, completedAt: completed)
+    guard let write = progressWrites.enqueue(snapshot, repository: repository) else { return }
+    try await write.value
     if currentOccurrence == occurrence && position == saved && completedAt == completed {
       dirty = false
     }
@@ -1340,23 +1346,37 @@ final class DropPlaybackService {
     wasPlayingBeforeInterruption = false
     position = finalPosition
     if id != nil { dirty = dirty || state == "playing" || state == "paused" }
-    if let pendingSave { await pendingSave.value }
-    pendingSave = nil
-    // A natural end saves completion independently from periodic progress.
-    // Do not release the occurrence while that final write is still pending.
-    if let id, let completion = completionWrites[id] { await completion.1.value }
-    defer {
-      activeID = nil
-      activeMediaType = nil
-      if let occurrence { leases.releaseCurrent(occurrence) }
-      currentOccurrence = nil
-      currentOccurrenceItem = nil
-      position = 0
-      duration = nil
-      completedAt = nil
-      dirty = false
+    let priorSave = pendingSave
+    let finalWrite: Task<Void, Error>?
+    if dirty, let occurrence, let repository {
+      let snapshot = PlaybackProgressWrite(occurrence: occurrence,
+        position: position, completedAt: completedAt)
+      finalWrite = progressWrites.enqueue(snapshot, repository: repository,
+        after: priorSave)
+    } else {
+      finalWrite = nil
     }
-    if id != nil { try await persist() }
+    if let priorSave { await priorSave.value }
+    if currentOccurrence == occurrence { pendingSave = nil }
+    // Completion and final progress are both queued before the lease is freed.
+    if let id { await progressWrites.drain(id) }
+    defer {
+      if let occurrence {
+        progressWrites.retire(occurrence)
+        leases.releaseCurrent(occurrence)
+      }
+      if currentOccurrence == occurrence {
+        activeID = nil
+        activeMediaType = nil
+        currentOccurrence = nil
+        currentOccurrenceItem = nil
+        position = 0
+        duration = nil
+        completedAt = nil
+        dirty = false
+      }
+    }
+    if let finalWrite { try await finalWrite.value }
   }
 
   private func failCurrent(_ error: DropPlaybackError, token: UInt64) async {
