@@ -36,7 +36,7 @@ enum PlaybackManualQueueConsumeResult: Equatable, Sendable {
 
 // This is an injectable contract for Block B2. The repository only owns the
 // durable pending rows; the playback service will own selection and AVQueuePlayer.
-protocol PlaybackManualQueueRepository: AnyObject {
+protocol PlaybackManualQueueRepository: AnyObject, Sendable {
   func pendingEntries() async throws -> [PlaybackManualQueueEntry]
   func consume(entryID: String, itemID: String) async throws -> PlaybackManualQueueConsumeResult
 }

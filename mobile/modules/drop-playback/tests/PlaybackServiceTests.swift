@@ -84,6 +84,46 @@ final class FakeProgressRepository: PlaybackProgressRepository, @unchecked Senda
   }
 }
 
+private actor FakeManualQueueRepository: PlaybackManualQueueRepository {
+  private var entries: [PlaybackManualQueueEntry] = []
+  private var consumed: [String] = []
+  private var readFailure: PlaybackManualQueueError?
+  private var consumeFailure: PlaybackManualQueueError?
+  private var holdConsume = false
+  private var consumeContinuation: CheckedContinuation<Void, Never>?
+
+  func pendingEntries() throws -> [PlaybackManualQueueEntry] {
+    if let readFailure { throw readFailure }
+    return entries
+  }
+
+  func consume(entryID: String, itemID: String) async throws -> PlaybackManualQueueConsumeResult {
+    if holdConsume {
+      holdConsume = false
+      await withCheckedContinuation { consumeContinuation = $0 }
+    }
+    if let consumeFailure { throw consumeFailure }
+    guard let index = entries.firstIndex(where: { $0.entryID == entryID }) else {
+      return .missing
+    }
+    guard entries[index].itemID == itemID else { return .itemMismatch }
+    entries.remove(at: index)
+    consumed.append(entryID)
+    return .persisted
+  }
+
+  func replace(_ values: [PlaybackManualQueueEntry]) { entries = values }
+  func failReads(_ error: PlaybackManualQueueError?) { readFailure = error }
+  func failConsume(_ error: PlaybackManualQueueError?) { consumeFailure = error }
+  func consumedIDs() -> [String] { consumed }
+  func holdNextConsume() { holdConsume = true }
+  func isConsumeWaiting() -> Bool { consumeContinuation != nil }
+  func releaseConsume() {
+    consumeContinuation?.resume()
+    consumeContinuation = nil
+  }
+}
+
 @MainActor
 final class FakePlaybackRatePreference: PlaybackRatePreference {
   var stored: Double?
@@ -140,7 +180,8 @@ struct PlaybackServiceTests {
     let system = FakePlaybackSystemBridge()
     let ratePreference = FakePlaybackRatePreference()
     let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
-      repository: repository, system: system, ratePreference: ratePreference)
+      repository: repository, manualQueue: FakeManualQueueRepository(),
+      system: system, ratePreference: ratePreference)
     let onePlayer = ObjectIdentifier(service.player)
     try check(service.snapshot()["rate"] as? Double == 1)
     try check(service.player.defaultRate == 1)
@@ -308,7 +349,8 @@ struct PlaybackServiceTests {
     // A fresh native service (simulated process relaunch) starts at the stored
     // rate without a transient 1× play call or a JavaScript restoration step.
     let newSession = DropPlaybackService(storage: DropLibraryStorage(root: root),
-      repository: repository, system: FakePlaybackSystemBridge(),
+      repository: repository, manualQueue: FakeManualQueueRepository(),
+      system: FakePlaybackSystemBridge(),
       ratePreference: ratePreference)
     _ = try await newSession.open(id: first)
     try await ready(newSession)
@@ -401,7 +443,7 @@ struct PlaybackServiceTests {
     let failingSystem = FakePlaybackSystemBridge()
     failingSystem.failActivation = true
     let failingService = DropPlaybackService(storage: DropLibraryStorage(root: root),
-      repository: repository, system: failingSystem,
+      repository: repository, manualQueue: FakeManualQueueRepository(), system: failingSystem,
       ratePreference: FakePlaybackRatePreference())
     _ = try await failingService.open(id: first)
     try await ready(failingService)
@@ -413,7 +455,537 @@ struct PlaybackServiceTests {
     try await contextualQueueTests(root: root, repository: repository,
       first: first, second: second, third: third, fourth: fourth, fifth: fifth,
       size: size, videoSize: videoSize)
+    try await manualQueueTests(root: root, first: first, second: second,
+      third: third, audioSize: size, videoSize: videoSize)
     print("PlaybackServiceTests: passed")
+  }
+
+  private static func manualQueueTests(root: URL, first: String, second: String,
+    third: String, audioSize: Int64, videoSize: Int64) async throws {
+    let entryX = "10000000-0000-0000-0000-000000000001"
+    let entryY = "10000000-0000-0000-0000-000000000002"
+    func entry(_ id: String, _ item: String, _ position: Int64) -> PlaybackManualQueueEntry {
+      PlaybackManualQueueEntry(entryID: id, itemID: item, position: position,
+        addedAt: "2026-10-25T00:00:00.000Z", lifecycle: .ready)
+    }
+    func makeRecords() -> FakeProgressRepository {
+      let records = FakeProgressRepository()
+      records.records[first] = PlaybackRecord(id: first,
+        relativeMediaPath: "Media/\(first).m4a", mediaType: "audio",
+        sizeBytes: audioSize, position: 0, completedAt: nil, title: "A")
+      records.records[second] = PlaybackRecord(id: second,
+        relativeMediaPath: "Media/\(second).m4a", mediaType: "audio",
+        sizeBytes: audioSize, position: 0.2, completedAt: nil, title: "B")
+      records.records[third] = PlaybackRecord(id: third,
+        relativeMediaPath: "Media/\(third).mp4", mediaType: "video",
+        sizeBytes: videoSize, position: 0, completedAt: nil, title: "C")
+      return records
+    }
+    func makeService(_ records: FakeProgressRepository,
+      _ queue: FakeManualQueueRepository) -> DropPlaybackService {
+      DropPlaybackService(storage: DropLibraryStorage(root: root), repository: records,
+        manualQueue: queue, system: FakePlaybackSystemBridge(),
+        ratePreference: FakePlaybackRatePreference())
+    }
+    func current(_ service: DropPlaybackService, _ item: AVPlayerItem) async throws {
+      for _ in 0..<150 {
+        if service.player.currentItem === item { return }
+        try await Task.sleep(nanoseconds: 20_000_000)
+      }
+      fatalError("Prepared occurrence did not become CURRENT")
+    }
+    func consumed(_ queue: FakeManualQueueRepository, _ count: Int) async throws {
+      for _ in 0..<150 {
+        if await queue.consumedIDs().count == count { return }
+        try await Task.sleep(nanoseconds: 20_000_000)
+      }
+      fatalError("Manual occurrence was not consumed")
+    }
+
+    // A -> X -> Y -> B -> C; Y and B share a Library ID but represent
+    // independent manual and contextual occurrences.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0), entry(entryY, second, 1)])
+      let service = makeService(records, queue)
+      let playerID = ObjectIdentifier(service.player)
+      _ = try await service.startInContext(id: first,
+        orderedIds: [first, second, third])
+      try await playing(service, id: first)
+      try await prepared(service, id: third)
+      let beforeStart = await queue.consumedIDs()
+      try check(beforeStart.isEmpty) // Preparation is not consumption.
+      let xItem = service.player.items()[1]
+      try await naturalEnd(service)
+      try await current(service, xItem)
+      try await playing(service, id: third)
+      try await consumed(queue, 1)
+      try await prepared(service, id: second)
+      let yItem = service.player.items()[1]
+      try await naturalEnd(service)
+      try await current(service, yItem)
+      try await playing(service, id: second)
+      try await consumed(queue, 2)
+      try await prepared(service, id: second)
+      let bItem = service.player.items()[1]
+      try check(bItem !== yItem)
+      try await naturalEnd(service)
+      try await current(service, bItem)
+      try await prepared(service, id: third)
+      let cItem = service.player.items()[1]
+      try await naturalEnd(service)
+      try await current(service, cItem)
+      try check(ObjectIdentifier(service.player) == playerID)
+      let consumedOrder = await queue.consumedIDs()
+      try check(consumedOrder == [entryX, entryY])
+      _ = try await service.close()
+    }
+
+    // A1 completion must be serialized before a distinct manual A2 begins at
+    // zero and clears the completion marker, even with A1's save blocked.
+    do {
+      let records = makeRecords()
+      records.records[first] = PlaybackRecord(id: first,
+        relativeMediaPath: "Media/\(first).m4a", mediaType: "audio",
+        sizeBytes: audioSize, position: 0.35, completedAt: nil, title: "A")
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, first, 0)])
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      try await prepared(service, id: first)
+      let a2 = service.player.items()[1]
+      try check(abs(CMTimeGetSeconds(a2.currentTime())) < 0.05)
+      _ = try service.setRate(1.5)
+      records.pauseSaveID = first
+      try await naturalEnd(service)
+      try await current(service, a2)
+      try await playing(service, id: first)
+      try check(service.snapshot()["rate"] as? Double == 1.5)
+      try await effectiveRate(service, expected: 1.5)
+      try check(service.snapshot()["completed"] as? Bool == false)
+      try check((service.snapshot()["position"] as? Double ?? -1) < 0.2)
+      for _ in 0..<100 {
+        if records.resumeSave != nil { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(records.resumeSave != nil)
+      records.resumeSave?.resume()
+      records.resumeSave = nil
+      for _ in 0..<100 {
+        if records.writes.last?.0 == first && records.writes.last?.2 == nil { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(records.writes.contains(where: { $0.0 == first && $0.2 != nil }))
+      try check(records.writes.last?.0 == first && records.writes.last?.2 == nil)
+      try await consumed(queue, 1)
+      _ = try await service.close()
+    }
+
+    // A mutation can preempt an already prepared contextual B only after an
+    // explicit native reconciliation (B2C will connect that notification).
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first,
+        orderedIds: [first, second, third])
+      try await playing(service, id: first)
+      try await prepared(service, id: second)
+      let staleB = service.player.items()[1]
+      await queue.replace([entry(entryX, third, 0)])
+      await service.reconcilePendingQueue()
+      try await prepared(service, id: third)
+      try check(service.player.items()[1] !== staleB)
+      try await naturalEnd(service)
+      try await playing(service, id: third)
+      try await consumed(queue, 1)
+      try await prepared(service, id: second) // B was never skipped.
+      _ = try await service.close()
+    }
+
+    // No context is required for manual auto-next. An invalid row is retained
+    // but skipped once within this playback session.
+    do {
+      let records = makeRecords()
+      let invalid = "00000000-0000-0000-0000-000000000005"
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, invalid, 0), entry(entryY, second, 1)])
+      let service = makeService(records, queue)
+      _ = try await service.open(id: first)
+      try await ready(service)
+      _ = try await service.play()
+      try await playing(service, id: first) // Explicit play, no JS auto-next.
+      try await prepared(service, id: second)
+      let beforeStart = await queue.consumedIDs()
+      try check(beforeStart.isEmpty)
+      try await naturalEnd(service)
+      try await playing(service, id: second)
+      try await consumed(queue, 1)
+      let consumedOrder = await queue.consumedIDs()
+      try check(consumedOrder == [entryY])
+      _ = try await service.close()
+    }
+
+    // An unavailable SQLite priority is not an empty queue. Once the read
+    // recovers, native reconciliation may safely prepare contextual B.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.failReads(.busy)
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      for _ in 0..<100 {
+        if service.snapshot()["errorCode"] as? String == "QUEUE_READ_FAILED" { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(service.player.items().count == 1)
+      await queue.failReads(nil)
+      await service.reconcilePendingQueue()
+      try await prepared(service, id: second)
+      _ = try await service.close()
+    }
+
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.failReads(.schemaNotPrepared)
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      for _ in 0..<100 {
+        if service.snapshot()["errorCode"] as? String == "QUEUE_SCHEMA_NOT_READY" { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(service.snapshot()["errorCode"] as? String == "QUEUE_SCHEMA_NOT_READY")
+      try check(service.player.items().count == 1)
+      _ = try await service.close()
+    }
+
+    // A failed durable consume leaves the row present but does not select the
+    // same entry again in this session. A later transition retries once.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      await queue.failConsume(.busy)
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      try await prepared(service, id: third)
+      try await naturalEnd(service)
+      try await playing(service, id: third)
+      for _ in 0..<100 {
+        if service.snapshot()["errorCode"] as? String == "QUEUE_CONSUME_FAILED" { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(service.snapshot()["errorCode"] as? String == "QUEUE_CONSUME_FAILED")
+      let pending = try await queue.pendingEntries()
+      try check(pending.map(\.entryID) == [entryX])
+      try await prepared(service, id: second) // No repeated X.
+      await queue.failConsume(nil)
+      try await naturalEnd(service)
+      try await playing(service, id: second)
+      try await consumed(queue, 1)
+      _ = try await service.close()
+    }
+
+    // A durable consume already accepted at CURRENT may finish after close.
+    // Its failure preserves the row without publishing errors into idle state.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      await queue.holdNextConsume()
+      await queue.failConsume(.busy)
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first])
+      try await playing(service, id: first)
+      try await prepared(service, id: third)
+      try await naturalEnd(service)
+      try await playing(service, id: third)
+      for _ in 0..<100 {
+        if await queue.isConsumeWaiting() { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      let waiting = await queue.isConsumeWaiting()
+      try check(waiting)
+      _ = try await service.close()
+      await queue.releaseConsume()
+      try await Task.sleep(nanoseconds: 100_000_000)
+      try check(service.snapshot()["status"] as? String == "idle")
+      try check(service.snapshot()["errorCode"] is NSNull)
+      let pending = try await queue.pendingEntries()
+      try check(pending.map(\.entryID) == [entryX])
+    }
+
+    // Removing a prepared row cancels only NEXT; CURRENT remains audible and
+    // the contextual B is still eligible. A stale end callback is harmless.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      try await prepared(service, id: third)
+      let cancelled = service.player.items()[1]
+      await queue.replace([])
+      await service.reconcilePendingQueue()
+      try await prepared(service, id: second)
+      try check(service.player.items()[1] !== cancelled)
+      NotificationCenter.default.post(name: AVPlayerItem.didPlayToEndTimeNotification,
+        object: cancelled)
+      try check(service.snapshot()["libraryId"] as? String == first)
+      _ = try await service.close()
+    }
+
+    // Delete of an item occupying BOTH slots must remove both AVPlayerItems
+    // and both occurrence leases before the managed file can be deleted.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, first, 0)])
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      try await prepared(service, id: first)
+      try await service.beginDelete(first)
+      try check(service.player.items().isEmpty)
+      try check(!service.isRetaining(first))
+      let pending = try await queue.pendingEntries()
+      try check(pending.map(\.entryID) == [entryX]) // Fake has no Library FK cascade.
+      service.endDelete(first)
+    }
+
+    // Without the B2C post-commit signal, a row removed after NEXT was
+    // prepared may still cross AVKit's boundary. Once CURRENT, it is not
+    // rolled back; conditional consume reports missing and does not crash.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      try await prepared(service, id: third)
+      await queue.replace([])
+      try await naturalEnd(service)
+      try await playing(service, id: third)
+      try await prepared(service, id: second)
+      let consumedOrder = await queue.consumedIDs()
+      try check(consumedOrder.isEmpty)
+      _ = try await service.close()
+    }
+
+    // Removing the only candidate during an asynchronous load cancels the
+    // in-flight NEXT as well; its late result cannot insert a stale item.
+    do {
+      let records = makeRecords()
+      records.pauseLoadID = third
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first])
+      try await playing(service, id: first)
+      for _ in 0..<100 {
+        if records.resumeLoad != nil { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(records.resumeLoad != nil)
+      await queue.replace([])
+      let reconciliation = Task { await service.reconcilePendingQueue() }
+      await Task.yield()
+      records.resumeLoad?.resume()
+      records.resumeLoad = nil
+      await reconciliation.value
+      try check(service.player.items().count == 1)
+      let consumedOrder = await queue.consumedIDs()
+      try check(consumedOrder.isEmpty)
+      _ = try await service.close()
+    }
+
+    // A slow native preparation remains eligible when CURRENT reaches its
+    // natural end; the successor starts when loading completes, without JS.
+    do {
+      let records = makeRecords()
+      records.pauseLoadID = third
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first])
+      try await playing(service, id: first)
+      for _ in 0..<100 {
+        if records.resumeLoad != nil { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(records.resumeLoad != nil)
+      try await ended(service)
+      records.resumeLoad?.resume()
+      records.resumeLoad = nil
+      try await playing(service, id: third)
+      try await consumed(queue, 1)
+      _ = try await service.close()
+    }
+
+    // Pauses, interruption and output loss while NEXT is loading after the
+    // real natural end cannot authorize autoplay. A later explicit play (or
+    // permitted interruption resume) continues the native handoff.
+    for event in [PlaybackSystemEvent.pause, .oldDeviceUnavailable,
+                  .interruptionBegan] {
+      let records = makeRecords()
+      records.pauseLoadID = third
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      let system = FakePlaybackSystemBridge()
+      let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
+        repository: records, manualQueue: queue, system: system,
+        ratePreference: FakePlaybackRatePreference())
+      _ = try await service.startInContext(id: first, orderedIds: [first])
+      try await playing(service, id: first)
+      for _ in 0..<100 {
+        if records.resumeLoad != nil { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(records.resumeLoad != nil)
+      try await ended(service)
+      await system.send(event)
+      records.resumeLoad?.resume()
+      records.resumeLoad = nil
+      try await Task.sleep(nanoseconds: 100_000_000)
+      let interrupted: Bool
+      if case .interruptionBegan = event { interrupted = true } else { interrupted = false }
+      try check(service.snapshot()["status"] as? String == (interrupted ? "interrupted" : "paused"))
+      if !interrupted { try check(service.snapshot()["playable"] as? Bool == true) }
+      try check(service.player.rate == 0)
+      let consumedOrder = await queue.consumedIDs()
+      try check(consumedOrder.isEmpty)
+      await system.send(.newDeviceAvailable)
+      try check(service.player.rate == 0)
+      if interrupted { await system.send(.interruptionEnded(shouldResume: true)) }
+      else { await system.send(.play) }
+      try await playing(service, id: third)
+      try await consumed(queue, 1)
+      _ = try await service.close()
+    }
+
+    // A user pause during Siri cancels the pending permission to resume.
+    do {
+      let records = makeRecords()
+      records.pauseLoadID = third
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      let system = FakePlaybackSystemBridge()
+      let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
+        repository: records, manualQueue: queue, system: system,
+        ratePreference: FakePlaybackRatePreference())
+      _ = try await service.startInContext(id: first, orderedIds: [first])
+      try await playing(service, id: first)
+      for _ in 0..<100 {
+        if records.resumeLoad != nil { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(records.resumeLoad != nil)
+      try await ended(service)
+      await system.send(.interruptionBegan)
+      await system.send(.pause)
+      await system.send(.interruptionEnded(shouldResume: true))
+      records.resumeLoad?.resume()
+      records.resumeLoad = nil
+      try await Task.sleep(nanoseconds: 100_000_000)
+      try check(service.snapshot()["status"] as? String == "paused")
+      try check(service.player.rate == 0)
+      let consumedOrder = await queue.consumedIDs()
+      try check(consumedOrder.isEmpty)
+      _ = try await service.close()
+    }
+
+    // Distinct duplicate entries advance on real AVFoundation end events,
+    // without advanceToNextItem or synthetic notifications in the test.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, first, 0), entry(entryY, first, 1)])
+      let service = makeService(records, queue)
+      let playerID = ObjectIdentifier(service.player)
+      _ = try await service.startInContext(id: first, orderedIds: [first])
+      try await playing(service, id: first)
+      let a1 = service.player.currentItem!
+      try await prepared(service, id: first)
+      let a2 = service.player.items()[1]
+      try check(a1 !== a2 && service.isRetaining(first))
+      try await current(service, a2)
+      try await consumed(queue, 1)
+      try await prepared(service, id: first)
+      let a3 = service.player.items()[1]
+      try check(a3 !== a2 && a3 !== a1)
+      try await current(service, a3)
+      try await consumed(queue, 2)
+      let consumedOrder = await queue.consumedIDs()
+      try check(consumedOrder == [entryX, entryY])
+      try check(ObjectIdentifier(service.player) == playerID)
+      _ = try await service.close()
+    }
+
+    // Delete wins safely even when manual NEXT crossed CURRENT before KVO.
+    // Only Queue removal permits playback to continue; Library Delete retires
+    // the actual transport before the managed files could be removed.
+    do {
+      let records = makeRecords()
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      try await prepared(service, id: third)
+      let next = service.player.items()[1]
+      service.player.advanceToNextItem()
+      try check(service.player.currentItem === next)
+      try await service.beginDelete(third)
+      try check(service.player.items().isEmpty)
+      try check(!service.isRetaining(first) && !service.isRetaining(third))
+      try check(FileManager.default.fileExists(atPath: root.appendingPathComponent("Media/\(third).mp4").path))
+      NotificationCenter.default.post(name: AVPlayerItem.didPlayToEndTimeNotification, object: next)
+      await Task.yield()
+      try check(service.player.items().isEmpty)
+      service.endDelete(third)
+      _ = try await service.close()
+    }
+
+    // A manual load blocked in the repository retains its lease until Delete
+    // has cancelled and drained it. Late work cannot reinsert the deleted NEXT.
+    do {
+      let records = makeRecords()
+      records.pauseLoadID = third
+      let queue = FakeManualQueueRepository()
+      await queue.replace([entry(entryX, third, 0)])
+      let service = makeService(records, queue)
+      _ = try await service.startInContext(id: first, orderedIds: [first, second])
+      try await playing(service, id: first)
+      for _ in 0..<100 {
+        if records.resumeLoad != nil { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+      try check(records.resumeLoad != nil && service.isRetaining(third))
+      var deleted = false
+      let deletion = Task {
+        try await service.beginDelete(third)
+        deleted = true
+      }
+      try await Task.sleep(nanoseconds: 20_000_000)
+      try check(!deleted && service.isRetaining(third))
+      records.resumeLoad?.resume()
+      records.resumeLoad = nil
+      try await deletion.value
+      try check(deleted && !service.isRetaining(third) && service.isRetaining(first))
+      try await prepared(service, id: second)
+      let consumedOrder = await queue.consumedIDs()
+      try check(consumedOrder.isEmpty)
+      service.endDelete(third)
+      _ = try await service.close()
+    }
   }
 
   private static func contextualQueueTests(root: URL, repository: FakeProgressRepository,
@@ -423,7 +995,8 @@ struct PlaybackServiceTests {
     let system = FakePlaybackSystemBridge()
     let ratePreference = FakePlaybackRatePreference()
     let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
-      repository: repository, system: system, ratePreference: ratePreference)
+      repository: repository, manualQueue: FakeManualQueueRepository(),
+      system: system, ratePreference: ratePreference)
     let queuePlayer: AVPlayer = service.player
     try check(queuePlayer === service.player)
     try check(service.player.actionAtItemEnd == .advance)
@@ -584,7 +1157,9 @@ struct PlaybackServiceTests {
   private static func prepared(_ service: DropPlaybackService, id: String) async throws {
     for _ in 0..<250 {
       let items = service.player.items()
-      if items.count == 2, service.isRetaining(id) { return }
+      if items.count == 2, service.isRetaining(id),
+         let asset = items[1].asset as? AVURLAsset,
+         asset.url.deletingPathExtension().lastPathComponent == id { return }
       try await Task.sleep(nanoseconds: 20_000_000)
     }
     fatalError("Successor was not prequeued before current ended")

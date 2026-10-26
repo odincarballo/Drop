@@ -62,6 +62,7 @@ final class DropPlaybackService {
   var onState: (([String: Any]) -> Void)?
 
   private var repository: PlaybackProgressRepository?
+  private var manualQueue: PlaybackManualQueueRepository?
   private var storage: DropLibraryStorage?
   private let system: PlaybackSystemBridge
   private let ratePreference: PlaybackRatePreference
@@ -87,7 +88,14 @@ final class DropPlaybackService {
   private var preparedStatusObservation: NSKeyValueObservation?
   private var preparationTask: Task<Void, Never>?
   private var preparationSerial: UInt64 = 0
-  private var nextCandidateIndex = 0
+  private let nextSelector = PlaybackNextSelector()
+  private var pendingNaturalAdvance = false
+  // AVQueuePlayer may have removed the exhausted item while NEXT is loading.
+  // Keep that boundary separate from permission to resume after pause/Siri.
+  private var awaitingNaturalSuccessor = false
+  private var consumeRetries: [String: String] = [:]
+  private var consumingEntries = Set<String>()
+  private var playbackSession = UUID()
   private var completionScheduled = false
   private let progressWrites = PlaybackProgressWriteCoordinator()
   private var queuedAdvanceAt = Date.distantPast
@@ -196,11 +204,13 @@ final class DropPlaybackService {
 
   init(player: AVQueuePlayer = AVQueuePlayer(), storage: DropLibraryStorage? = nil,
        repository: PlaybackProgressRepository? = nil,
+       manualQueue: PlaybackManualQueueRepository? = nil,
        system: PlaybackSystemBridge? = nil,
        ratePreference: PlaybackRatePreference? = nil) {
     self.player = player
     self.storage = storage
     self.repository = repository
+    self.manualQueue = manualQueue
     self.system = system ?? IOSPlaybackSystemBridge()
     self.ratePreference = ratePreference ?? UserDefaultsPlaybackRatePreference()
     let storedRate = self.ratePreference.load()
@@ -285,7 +295,7 @@ final class DropPlaybackService {
   func snapshot() -> [String: Any] {
     var result: [String: Any] = ["libraryId": activeID as Any? ?? NSNull(), "status": state,
      "position": position, "duration": duration as Any? ?? NSNull(),
-     "rate": rate, "playable": player.currentItem != nil &&
+     "rate": rate, "playable": (player.currentItem != nil || awaitingNaturalSuccessor) &&
        ["ready", "paused", "playing", "ended"].contains(state),
      "fullscreen": fullscreenActive,
      "completed": completedAt != nil,
@@ -329,13 +339,64 @@ final class DropPlaybackService {
     return (storage!, repository!)
   }
 
+  private func queueRepository() throws -> PlaybackManualQueueRepository {
+    if manualQueue == nil {
+      let (storage, _) = try resources()
+      manualQueue = SQLitePlaybackManualQueueRepository(
+        databaseURL: storage.root.appendingPathComponent("library.sqlite"))
+    }
+    return manualQueue!
+  }
+
+  // Internal B2C integration point. No JavaScript notification is wired in
+  // B2B2; callers must not assume a Queue mutation immediately changes NEXT.
+  func reconcilePendingQueue() async {
+    reconcileQueuedItem()
+    guard let source = currentOccurrenceItem else { return }
+    let token = generation
+    let entries: [PlaybackManualQueueEntry]
+    do { entries = try await queueRepository().pendingEntries() }
+    catch {
+      guard token == generation, currentOccurrenceItem === source else { return }
+      // A previously prepared Context item must not win when priority is
+      // unknown. CURRENT continues without interrupting its transport.
+      cancelPreparation()
+      await drainPreparation()
+      guard token == generation, currentOccurrenceItem === source else { return }
+      errorCode = "QUEUE_READ_FAILED"
+      emit()
+      return
+    }
+    guard token == generation, currentOccurrenceItem === source else { return }
+    let choice = nextSelector.choose(entries: entries, context: playbackContext)
+    if let preparedNext, let choice {
+      switch (preparedNext.occurrence.source, choice) {
+      case (.manual(let entryID), .manual(let entry))
+        where entryID == entry.entryID && preparedNext.id == entry.itemID:
+        return
+      case (.context(let index), .context(let chosenIndex, let id))
+        where index == chosenIndex && preparedNext.id == id:
+        return
+      default: break
+      }
+    } else if preparedNext == nil && choice == nil && preparationTask == nil {
+      return
+    }
+    cancelPreparation()
+    await drainPreparation()
+    guard token == generation, currentOccurrenceItem === source else { return }
+    if choice != nil { scheduleNextPreparation() }
+  }
+
   func open(id: String) async throws -> [String: Any] {
     reconcileQueuedItem()
     contextEpoch &+= 1
     playbackContext = nil
     cancelPreparation()
     await drainPreparation()
-    return try await openManaged(id: id)
+    let result = try await openManaged(id: id)
+    scheduleNextPreparation()
+    return result
   }
 
   func startInContext(id: String, orderedIds: [String]) async throws -> [String: Any] {
@@ -352,7 +413,8 @@ final class DropPlaybackService {
     if activeID == id, player.currentItem != nil,
        ["loading", "ready", "paused", "playing", "ended"].contains(state) {
       playbackContext = newContext
-      nextCandidateIndex = newContext.currentIndex + 1
+      nextSelector.resetContext()
+      cancelPreparation()
       scheduleNextPreparation()
       if state == "playing" { return snapshot() }
       return try await requestAutoplay(token: generation)
@@ -362,7 +424,7 @@ final class DropPlaybackService {
       throw DropPlaybackError.superseded
     }
     playbackContext = newContext
-    nextCandidateIndex = newContext.currentIndex + 1
+    nextSelector.resetContext()
     scheduleNextPreparation()
     return try await requestAutoplay(token: generation)
   }
@@ -386,6 +448,12 @@ final class DropPlaybackService {
     // Reserve before any asynchronous database or asset work. Delete first blocks
     // new opens, then closes this reserved lease before removing the file.
     let occurrence = PlaybackOccurrence(libraryID: id, source: .direct)
+    nextSelector.resetSession()
+    consumeRetries.removeAll()
+    consumingEntries.removeAll()
+    playbackSession = UUID()
+    pendingNaturalAdvance = false
+    awaitingNaturalSuccessor = false
     guard leases.reserveCurrent(occurrence) else { throw DropPlaybackError.unavailable }
     currentOccurrence = occurrence
     progressWrites.activate(occurrence)
@@ -515,19 +583,18 @@ final class DropPlaybackService {
         // schedules this save only after AVFoundation has advanced to it.
         guard self.preparedNext == nil else { return }
         self.scheduleCompletedSave(id: id, duration: duration)
-        self.cancelPreparation()
         self.position = duration
         self.completedAt = ISO8601DateFormatter().string(from: Date())
-        self.state = "ended"
+        let shouldAdvance = self.state == "playing"
+        if shouldAdvance { self.state = "ended" }
         self.dirty = false
+        // If preparation is still in flight, let it finish. A slow SQLite or
+        // asset read must not turn a natural end into a permanent dead end.
+        self.awaitingNaturalSuccessor = true
+        self.pendingNaturalAdvance = shouldAdvance
         self.emit()
         self.updateNowPlaying()
-        #if canImport(UIKit)
-        if self.activeMediaType == "video", self.pip.isActiveOrTransitioning {
-          self.pendingPiPStopReason = .itemEnded
-          _ = try? await self.close()
-        }
-        #endif
+        self.scheduleNextPreparation()
       }
     }
     failureObservation = NotificationCenter.default.addObserver(
@@ -664,8 +731,8 @@ final class DropPlaybackService {
 
   private func scheduleNextPreparation() {
     guard preparedNext == nil, preparationTask == nil,
-          playbackContext != nil, player.currentItem != nil,
-          state != "ended" else { return }
+          currentOccurrenceItem != nil,
+          state != "ended" || pendingNaturalAdvance else { return }
     let epoch = contextEpoch
     let token = generation
     let serial = preparationSerial
@@ -677,21 +744,59 @@ final class DropPlaybackService {
   private func preparationIsCurrent(epoch: UInt64, token: UInt64, serial: UInt64,
                                     source: AVPlayerItem) -> Bool {
     epoch == contextEpoch && token == generation && serial == preparationSerial &&
-      !Task.isCancelled && player.currentItem === source && state != "ended"
+      !Task.isCancelled && currentOccurrenceItem === source &&
+      (player.currentItem === source ||
+        (player.currentItem == nil && pendingNaturalAdvance)) &&
+      (state != "ended" || pendingNaturalAdvance)
   }
 
   private func prepareNext(epoch: UInt64, token: UInt64, serial: UInt64) async {
-    defer { if serial == preparationSerial { preparationTask = nil } }
-    guard let source = player.currentItem else { return }
-    while preparationIsCurrent(epoch: epoch, token: token, serial: serial, source: source),
-          let context = playbackContext,
-          nextCandidateIndex < context.orderedIds.count {
-      let candidateIndex = nextCandidateIndex
-      let id = context.orderedIds[candidateIndex]
-      nextCandidateIndex += 1 // Each candidate is attempted at most once.
-      let occurrence = PlaybackOccurrence(libraryID: id,
-        source: .context(index: candidateIndex))
-      guard leases.reservePrepared(occurrence) else { continue }
+    var exhausted = false
+    defer {
+      if serial == preparationSerial {
+        preparationTask = nil
+        if state == "ended" && preparedNext == nil {
+          pendingNaturalAdvance = false
+          if exhausted { awaitingNaturalSuccessor = false }
+          #if canImport(UIKit)
+          if activeMediaType == "video", pip.isActiveOrTransitioning {
+            Task { @MainActor [weak self] in
+              guard let self, token == self.generation,
+                    epoch == self.contextEpoch, serial == self.preparationSerial,
+                    self.state == "ended", self.preparedNext == nil else { return }
+              self.pendingPiPStopReason = .itemEnded
+              _ = try? await self.close()
+            }
+          }
+          #endif
+        }
+      }
+    }
+    guard let source = currentOccurrenceItem else { return }
+    while preparationIsCurrent(epoch: epoch, token: token, serial: serial, source: source) {
+      let entries: [PlaybackManualQueueEntry]
+      do { entries = try await queueRepository().pendingEntries() }
+      catch {
+        guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
+                                   source: source) else { return }
+        // Unknown priority is not an empty queue. Never prepare Context here.
+        errorCode = (error as? PlaybackManualQueueError) == .schemaNotPrepared
+          ? "QUEUE_SCHEMA_NOT_READY" : "QUEUE_READ_FAILED"
+        emit()
+        return
+      }
+      guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
+                                 source: source) else { return }
+      guard let choice = nextSelector.choose(entries: entries, context: playbackContext) else {
+        exhausted = true
+        return
+      }
+      let id = choice.libraryID
+      let occurrence = choice.occurrence
+      guard leases.reservePrepared(occurrence) else {
+        nextSelector.reject(choice)
+        continue
+      }
       do {
         let next = try await validatedNext(id: id, occurrence: occurrence,
           token: token, serial: serial)
@@ -717,7 +822,34 @@ final class DropPlaybackService {
           leases.releasePrepared(occurrence)
           return
         }
-        guard player.canInsert(next.item, after: source) else {
+        if case .manual(let entry) = choice {
+          // The row can disappear while the asset is loading. This final read
+          // is advisory until B2C supplies post-commit invalidation.
+          let latest: [PlaybackManualQueueEntry]
+          do { latest = try await queueRepository().pendingEntries() }
+          catch {
+            leases.releasePrepared(occurrence)
+            if preparationIsCurrent(epoch: epoch, token: token, serial: serial,
+                                    source: source) {
+              errorCode = "QUEUE_READ_FAILED"
+              emit()
+            }
+            return
+          }
+          guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
+                                     source: source), leases.ownsPrepared(occurrence) else {
+            leases.releasePrepared(occurrence)
+            return
+          }
+          guard latest.contains(where: { $0.entryID == entry.entryID &&
+            $0.itemID == entry.itemID && $0.lifecycle == .ready }) else {
+            nextSelector.reject(choice)
+            leases.releasePrepared(occurrence)
+            continue
+          }
+        }
+        let insertionSource: AVPlayerItem? = player.currentItem === source ? source : nil
+        guard player.canInsert(next.item, after: insertionSource) else {
           throw DropPlaybackError.invalidMedia
         }
         preparedNext = next
@@ -732,16 +864,48 @@ final class DropPlaybackService {
                   item.status == .failed,
                   self.player.currentItem !== item else { return }
             self.cancelPreparation()
+            self.nextSelector.reject(choice)
             self.preparationTask = nil
             self.scheduleNextPreparation()
           }
         }
-        player.insert(next.item, after: source)
+        player.insert(next.item, after: insertionSource)
+        completePendingNaturalAdvance()
         return
       } catch {
         leases.releasePrepared(occurrence)
+        guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
+                                   source: source) else { return }
+        if case PlaybackRepositoryError.busy = error {
+          errorCode = "QUEUE_READ_FAILED"
+          emit()
+          return
+        }
+        nextSelector.reject(choice)
+        if case .manual = choice {
+          errorCode = "QUEUE_ITEM_UNAVAILABLE"
+          emit()
+        }
       }
     }
+  }
+
+  private func completePendingNaturalAdvance() {
+    guard pendingNaturalAdvance, let next = preparedNext,
+          next.generation == generation, next.preparationSerial == preparationSerial else { return }
+    // Only the exhausted CURRENT takes this explicit path. Ordinary prequeued
+    // transitions remain AVQueuePlayer's responsibility.
+    if player.currentItem === currentOccurrenceItem { player.advanceToNextItem() }
+    reconcileQueuedItem()
+    guard player.currentItem === next.item, currentOccurrence == next.occurrence else { return }
+    if state == "paused" {
+      player.defaultRate = Float(rate)
+      player.playImmediately(atRate: Float(rate))
+      state = "playing"
+      emit()
+      updateNowPlaying()
+    }
+    pendingNaturalAdvance = false
   }
 
   private func validatedNext(id: String, occurrence: PlaybackOccurrence,
@@ -773,11 +937,18 @@ final class DropPlaybackService {
     }
     let artworkURL = record.relativeArtworkPath == "Artwork/\(id).jpg"
       ? (try? storage.managedArtwork(id: id))?.0 : nil
+    let repeatingCurrent: Bool
+    if case .manual = occurrence.source {
+      repeatingCurrent = currentOccurrence?.libraryID == id
+    } else {
+      repeatingCurrent = false
+    }
     return PreparedNext(occurrence: occurrence, generation: token,
       preparationSerial: serial, item: AVPlayerItem(asset: asset),
       mediaType: record.mediaType, duration: seconds,
-      position: PlaybackPolicy.restored(position: record.position, duration: seconds,
-        wasCompleted: record.completedAt != nil), completedAt: record.completedAt,
+      position: repeatingCurrent ? 0 : PlaybackPolicy.restored(position: record.position,
+        duration: seconds, wasCompleted: record.completedAt != nil),
+      completedAt: repeatingCurrent ? nil : record.completedAt,
       title: String(record.title.prefix(240)).trimmingCharacters(in: .whitespacesAndNewlines),
       artworkURL: artworkURL)
   }
@@ -805,13 +976,13 @@ final class DropPlaybackService {
   }
 
   private func adoptQueuedItem(_ item: AVPlayerItem) {
-    guard let next = preparedNext, next.item === item,
+    guard player.currentItem === item, let next = preparedNext, next.item === item,
           next.generation == generation,
           next.preparationSerial == preparationSerial,
           let priorID = activeID, let priorDuration = duration,
           let priorOccurrence = currentOccurrence,
           priorOccurrence.libraryID == priorID,
-          playbackContext?.currentID == priorID,
+          currentOccurrenceItem !== item,
           leases.promotePrepared(next.occurrence, replacing: priorOccurrence) else { return }
     scheduleCompletedSave(id: priorID, duration: priorDuration)
     clearItemObservers()
@@ -819,12 +990,31 @@ final class DropPlaybackService {
     preparedNext = nil
     preparationSerial &+= 1
     preparationTask = nil
-    _ = playbackContext?.promote(next.id)
-    nextCandidateIndex = (playbackContext?.currentIndex ?? 0) + 1
+    if case .context(let index) = next.occurrence.source,
+       playbackContext?.orderedIds.indices.contains(index) == true {
+      _ = playbackContext?.promote(next.id)
+    }
     generation &+= 1
     let token = generation
     progressWrites.retire(priorOccurrence)
     progressWrites.activate(next.occurrence)
+    if next.id == priorID, case .manual = next.occurrence.source,
+       let repository {
+      // A1 completion was enqueued before activation. A2's reset follows it
+      // on the same Library row, even if A1's SQLite write is still blocked.
+      let reset = PlaybackProgressWrite(occurrence: next.occurrence,
+        position: 0, completedAt: nil)
+      if let write = progressWrites.enqueue(reset, repository: repository) {
+        Task { @MainActor [weak self] in
+          do { try await write.value }
+          catch {
+            guard let self, self.currentOccurrence == next.occurrence else { return }
+            self.errorCode = "PROGRESS_SAVE_FAILED"
+            self.emit()
+          }
+        }
+      }
+    }
     currentOccurrence = next.occurrence
     currentOccurrenceItem = next.item
     activeID = next.id
@@ -844,6 +1034,13 @@ final class DropPlaybackService {
       dirty = true
     } else { dirty = false }
     errorCode = nil
+    pendingNaturalAdvance = false
+    awaitingNaturalSuccessor = false
+    if case .manual(let entryID) = next.occurrence.source {
+      nextSelector.began(entryID)
+      consumeManual(entryID: entryID, itemID: next.id)
+    }
+    retryPendingConsumes()
     #if canImport(UIKit)
     if next.mediaType == "audio", pip.isActiveOrTransitioning {
       // An audio-only successor keeps playing, but its old video PiP window
@@ -873,6 +1070,44 @@ final class DropPlaybackService {
     scheduleNextPreparation()
   }
 
+  private func consumeManual(entryID: String, itemID: String) {
+    guard !consumingEntries.contains(entryID) else { return }
+    let session = playbackSession
+    consumeRetries[entryID] = itemID
+    consumingEntries.insert(entryID)
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let result = try await self.queueRepository().consume(entryID: entryID, itemID: itemID)
+        guard self.playbackSession == session else { return }
+        self.consumingEntries.remove(entryID)
+        switch result {
+        case .persisted, .missing:
+          self.consumeRetries.removeValue(forKey: entryID)
+        case .itemMismatch, .notReady:
+          self.consumeRetries.removeValue(forKey: entryID)
+          if self.activeID != nil {
+            self.errorCode = "QUEUE_CONSUME_FAILED"
+            self.emit()
+          }
+        }
+      } catch {
+        guard self.playbackSession == session else { return }
+        self.consumingEntries.remove(entryID)
+        if self.activeID != nil {
+          self.errorCode = "QUEUE_CONSUME_FAILED"
+          self.emit()
+        }
+      }
+    }
+  }
+
+  private func retryPendingConsumes() {
+    for (entryID, itemID) in Array(consumeRetries) where !consumingEntries.contains(entryID) {
+      consumeManual(entryID: entryID, itemID: itemID)
+    }
+  }
+
   private func reconcileEffectivePause(item: AVPlayerItem) {
     guard player.currentItem === item, state == "playing", player.rate <= 0,
           player.timeControlStatus == .paused else { return }
@@ -894,7 +1129,7 @@ final class DropPlaybackService {
 
   func play() async throws -> [String: Any] {
     reconcileQueuedItem()
-    guard player.currentItem != nil,
+    guard player.currentItem != nil || awaitingNaturalSuccessor,
           ["ready", "paused", "ended", "interrupted"].contains(state) else {
       throw DropPlaybackError.notReady
     }
@@ -904,7 +1139,19 @@ final class DropPlaybackService {
       await failCurrent(.audioSession, token: token)
       throw DropPlaybackError.audioSession
     }
+    if awaitingNaturalSuccessor {
+      // Resume the interrupted native handoff, without a second open or item.
+      pendingNaturalAdvance = true
+      wasPlayingBeforeInterruption = false
+      state = "ended"
+      completePendingNaturalAdvance()
+      scheduleNextPreparation()
+      emit()
+      updateNowPlaying()
+      return snapshot()
+    }
     if state == "ended" {
+      pendingNaturalAdvance = false
       await seekPlayer(to: 0, token: token)
       guard token == generation else { throw DropPlaybackError.superseded }
       position = 0
@@ -924,11 +1171,22 @@ final class DropPlaybackService {
     pip.updateAutomaticStart(playing: true,
       inlineVisible: fullscreenController == nil && pip.sourceLayer != nil)
     #endif
+    scheduleNextPreparation()
     return snapshot()
   }
 
   func pause() async throws -> [String: Any] {
     reconcileQueuedItem()
+    let wasAwaitingNaturalSuccessor = pendingNaturalAdvance
+    pendingNaturalAdvance = false
+    if awaitingNaturalSuccessor && player.currentItem == nil {
+      player.pause()
+      wasPlayingBeforeInterruption = false
+      state = "paused"
+      emit()
+      updateNowPlaying()
+      return snapshot()
+    }
     guard player.currentItem != nil else { throw DropPlaybackError.notReady }
     let token = generation
     #if canImport(UIKit)
@@ -937,7 +1195,9 @@ final class DropPlaybackService {
     fullscreenDismissIntent = nil
     #endif
     player.pause()
-    if state == "playing" || state == "interrupted" { state = "paused" }
+    if state == "playing" || state == "interrupted" || wasAwaitingNaturalSuccessor {
+      state = "paused"
+    }
     wasPlayingBeforeInterruption = false
     position = safeCurrentPosition()
     dirty = true
@@ -959,6 +1219,8 @@ final class DropPlaybackService {
       throw DropPlaybackError.invalidPosition
     }
     let token = generation
+    pendingNaturalAdvance = false
+    awaitingNaturalSuccessor = false
     await seekPlayer(to: target, token: token)
     guard token == generation else { throw DropPlaybackError.superseded }
     position = target
@@ -1269,13 +1531,14 @@ final class DropPlaybackService {
 
   func handleSystemEvent(token: UInt64, event: PlaybackSystemEvent) async {
     reconcileQueuedItem()
-    guard token == generation, activeID != nil, player.currentItem != nil else { return }
+    guard token == generation, activeID != nil,
+          player.currentItem != nil || awaitingNaturalSuccessor else { return }
     switch event {
     case .play:
       guard ["ready", "paused", "ended"].contains(state) else { return }
       _ = try? await play()
     case .pause:
-      guard ["playing", "interrupted"].contains(state) else { return }
+      guard ["playing", "interrupted"].contains(state) || pendingNaturalAdvance else { return }
       _ = try? await pause()
     case .skip(let seconds):
       _ = try? await skip(seconds)
@@ -1287,7 +1550,8 @@ final class DropPlaybackService {
       pipRestoreIntent = nil
       fullscreenDismissIntent = nil
       #endif
-      wasPlayingBeforeInterruption = state == "playing"
+      wasPlayingBeforeInterruption = state == "playing" || pendingNaturalAdvance
+      pendingNaturalAdvance = false
       guard wasPlayingBeforeInterruption else { return }
       player.pause()
       state = "interrupted"
@@ -1311,7 +1575,9 @@ final class DropPlaybackService {
       fullscreenDismissIntent = nil
       #endif
       wasPlayingBeforeInterruption = false
-      if state == "playing" || state == "interrupted" { _ = try? await pause() }
+      if state == "playing" || state == "interrupted" || pendingNaturalAdvance {
+        _ = try? await pause()
+      }
     case .newDeviceAvailable:
       break // Connecting an output never starts playback.
     }
@@ -1319,6 +1585,8 @@ final class DropPlaybackService {
 
   private func retireCurrent() async throws {
     reconcileQueuedItem()
+    pendingNaturalAdvance = false
+    awaitingNaturalSuccessor = false
     cancelPreparation()
     await drainPreparation()
     #if canImport(UIKit)
