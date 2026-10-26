@@ -52,4 +52,16 @@ SQLite operations are serialized independently of their ACK waits: a newer mutat
 
 Native `onQueueChanged` is emitted only after a persisted consumption, including a commit that finishes after the playback session changed. Missing rows and failed/rolled-back consumption do not emit it. `observeQueue()` rereads SQLite and compares signatures, so repeated signals do not produce duplicate data-change events. Native signals are not echoed back into another reconciliation. With no JS observer, native playback continues; a later read/subscription recovers the durable pending rows. Library-change signals reconcile only when Queue changed. Callers should still obtain an initial snapshot using `listQueue()`.
 
-The Expo method/event require a later integrated iOS build and physical validation; standalone Swift and mocked JS bridge tests do not establish that integration. Queue UI, enqueue actions and visual reordering remain future work. Schema v3, version/build, backend and downloader are unchanged by B2C.
+The Expo method/event require a later integrated iOS build and physical validation; standalone Swift and mocked JS bridge tests do not establish that integration. Schema v3, version/build, backend and downloader are unchanged by B2C.
+
+## Manual Queue interface (Block C)
+
+`/queue` is accessible from Library and PlayerScreen. It shows CURRENT using `PlaybackProvider`, separately from the pending SQLite occurrences. The view does not open another player or derive CURRENT from the first Queue row. Each pending row is keyed by its entry ID, even when several rows reference one Library item. Metadata/artwork come from Library, with safe placeholders and retry when unavailable.
+
+Library, Collection detail and Uncollected reuse `LibraryItemRow` actions **Reproducir a continuación** and **Añadir al final de la cola** for ready MP4 video / M4A audio. These call only `enqueueNext` / `enqueueLast`. A press in flight is guarded synchronously; a later deliberate press is allowed to create a duplicate. Existing play, export, share, Collection and Library Delete actions keep their behavior.
+
+The Queue screen removes individual occurrences, moves them with explicit accessible up/down controls, and confirms before clearing pending entries. These actions never close CURRENT. Queue/Library observers and foreground refresh reconcile the view; request revisions discard stale list and metadata responses, metadata is reused across duplicate rows, and subscriptions are removed on blur/unmount. There is no optimistic second Queue model: mutations render their authoritative post-commit observation.
+
+A committed operation with a pending native ACK shows **Guardado en la cola. Actualizando reproducción…**. An applied result can show a saved confirmation; a persistence rejection shows a separate safe error. No bridge failure is presented as a SQLite rollback. Empty, loading, missing-file and metadata-error states remain usable. The screen uses the existing light/dark theme, Safe Area and labeled controls, with no new dependencies or drag-and-drop engine.
+
+Automated UI tests exercise these contracts with the existing services mocked at their boundary; the Queue service's separate tests use real isolated SQLite. An integrated iOS build and physical checks of VoiceOver/layout, background, PiP, A→A and Delete/consumption races are still pending. This block adds no Playlists, Shuffle, Repeat or manual Next/Previous, and does not change version/build or schema v3.

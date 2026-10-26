@@ -3,6 +3,7 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { LibraryItem } from '@/models/library';
 import { useTheme } from '@/theme';
 import { formatSize } from '@/utils/format';
+import { isPlayableLibraryItem } from '@/utils/playbackContext';
 
 type Props = {
   item: LibraryItem;
@@ -12,6 +13,9 @@ type Props = {
   onShare: (item: LibraryItem) => void;
   onDelete: (item: LibraryItem) => void;
   onCollections: (item: LibraryItem) => void;
+  onQueueNext: (item: LibraryItem) => void;
+  onQueueLast: (item: LibraryItem) => void;
+  queueBusy: boolean;
   onRemoveFromCollection?: (item: LibraryItem) => void;
   collectionName?: string;
 };
@@ -24,6 +28,9 @@ export function LibraryItemRow({
   onShare,
   onDelete,
   onCollections,
+  onQueueNext,
+  onQueueLast,
+  queueBusy,
   onRemoveFromCollection,
   collectionName,
 }: Props) {
@@ -90,6 +97,48 @@ export function LibraryItemRow({
         </View>
       </Pressable>
       <View style={styles.actions}>
+        {item.lifecycle === 'ready' && isPlayableLibraryItem(item) && (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Reproducir a continuación: ${item.title}`}
+              accessibilityState={{
+                disabled: busy || queueBusy,
+                busy: queueBusy,
+              }}
+              disabled={busy || queueBusy}
+              onPress={() => onQueueNext(item)}
+              style={styles.action}
+            >
+              <Text
+                style={{
+                  color: busy || queueBusy ? colors.secondary : colors.text,
+                }}
+              >
+                Reproducir a continuación
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Añadir al final de la cola: ${item.title}`}
+              accessibilityState={{
+                disabled: busy || queueBusy,
+                busy: queueBusy,
+              }}
+              disabled={busy || queueBusy}
+              onPress={() => onQueueLast(item)}
+              style={styles.action}
+            >
+              <Text
+                style={{
+                  color: busy || queueBusy ? colors.secondary : colors.text,
+                }}
+              >
+                Añadir al final de la cola
+              </Text>
+            </Pressable>
+          </>
+        )}
         <Pressable
           accessibilityRole="button"
           disabled={busy}

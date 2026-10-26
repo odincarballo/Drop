@@ -8,7 +8,12 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import {
+  useFocusEffect,
+  useLocalSearchParams,
+  useRouter,
+  type Href,
+} from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PlaybackTimeline } from '@/components/PlaybackTimeline';
@@ -206,14 +211,24 @@ export default function PlayerScreen() {
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Volver a Biblioteca"
-          onPress={() => router.back()}
-          style={styles.back}
-        >
-          <Text style={{ color: colors.text }}>‹ Biblioteca</Text>
-        </Pressable>
+        <View style={styles.navigation}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Volver a Biblioteca"
+            onPress={() => router.back()}
+            style={styles.back}
+          >
+            <Text style={{ color: colors.text }}>‹ Biblioteca</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Ver cola"
+            onPress={() => router.push('/queue' as Href)}
+            style={styles.back}
+          >
+            <Text style={{ color: colors.text }}>Cola</Text>
+          </Pressable>
+        </View>
         {item?.mediaType === 'video' &&
         isPlayableLibraryItem(item) &&
         !['pipStarting', 'pip', 'pipStopping'].includes(
@@ -416,6 +431,11 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   content: { flexGrow: 1, padding: 22, gap: 14 },
   back: { minHeight: 44, justifyContent: 'center' },
+  navigation: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   videoBox: {
     width: '100%',
     aspectRatio: 16 / 9,

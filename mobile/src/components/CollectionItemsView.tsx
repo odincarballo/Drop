@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CollectionPicker } from '@/components/CollectionPicker';
 import { LibraryItemRow } from '@/components/LibraryItemRow';
 import { useLibraryItemActions } from '@/hooks/useLibraryItemActions';
+import { useQueueEnqueue } from '@/hooks/useQueueEnqueue';
 import type { Collection } from '@/models/collections';
 import type { LibraryItem } from '@/models/library';
 import {
@@ -37,6 +38,7 @@ export function CollectionItemsView(props: Props) {
   const [error, setError] = useState<string | null>(null);
   const [pickerItemId, setPickerItemId] = useState<string | null>(null);
   const actions = useLibraryItemActions(setError);
+  const queueActions = useQueueEnqueue();
   const collectionId = props.kind === 'collection' ? props.collectionId : null;
 
   useFocusEffect(
@@ -129,6 +131,22 @@ export function CollectionItemsView(props: Props) {
           {error}
         </Text>
       )}
+      {queueActions.message && (
+        <Text
+          accessibilityLiveRegion="polite"
+          style={[styles.message, { color: colors.secondary }]}
+        >
+          {queueActions.message}
+        </Text>
+      )}
+      {queueActions.error && (
+        <Text
+          accessibilityRole="alert"
+          style={[styles.message, { color: colors.error }]}
+        >
+          {queueActions.error}
+        </Text>
+      )}
       {loading && <ActivityIndicator accessibilityLabel="Cargando descargas" />}
       {missing ? (
         <Text
@@ -151,6 +169,9 @@ export function CollectionItemsView(props: Props) {
             <LibraryItemRow
               item={item}
               busy={actions.busyId === item.id}
+              queueBusy={queueActions.busyId !== null}
+              onQueueNext={queueActions.next}
+              onQueueLast={queueActions.last}
               onOpen={(selected) => actions.open(selected, items)}
               onSave={actions.save}
               onShare={actions.share}

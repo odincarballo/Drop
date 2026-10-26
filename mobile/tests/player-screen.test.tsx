@@ -14,9 +14,10 @@ import { playback, type PlaybackState } from '@/services/playback';
 const mockId = '00000000-0000-0000-0000-000000000001';
 const mockBack = jest.fn();
 const mockReplace = jest.fn();
+const mockPush = jest.fn();
 
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ back: mockBack, replace: mockReplace }),
+  useRouter: () => ({ back: mockBack, replace: mockReplace, push: mockPush }),
   useLocalSearchParams: () => ({ id: mockId }),
   useFocusEffect: (callback: () => void | (() => void)) =>
     require('react').useEffect(callback, []),
@@ -173,6 +174,21 @@ beforeEach(() => {
   jest
     .mocked(playback.enterFullscreen)
     .mockImplementation(async () => ({ ...mockState, fullscreen: true }));
+});
+
+test('Queue navigation preserves the current player and uses the normal leave lifecycle', async () => {
+  jest
+    .mocked(playback.getState)
+    .mockResolvedValue({ ...mockState, status: 'playing' });
+  const view = await render(<PlayerScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast local')).toBeTruthy());
+  await fireEvent.press(screen.getByRole('button', { name: 'Ver cola' }));
+  expect(mockPush).toHaveBeenCalledWith('/queue');
+  expect(playback.open).not.toHaveBeenCalled();
+  expect(playback.close).not.toHaveBeenCalled();
+  await view.unmount();
+  expect(playback.leavePlayerScreen).toHaveBeenCalledWith(mockId);
+  expect(playback.close).not.toHaveBeenCalled();
 });
 
 test('native auto-next navigates to the new active item without reopening it', async () => {

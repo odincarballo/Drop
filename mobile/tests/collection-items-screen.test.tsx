@@ -18,6 +18,11 @@ import { deleteLibraryItem, withLibraryLease } from '@/services/library';
 import { saveLocalFileToFiles } from '@/services/fileExport';
 import { shareLocalFile } from '@/services/jobs';
 import { playback } from '@/services/playback';
+import {
+  enqueueNext,
+  enqueueLast,
+  getQueuePlaybackSyncState,
+} from '@/services/queue';
 
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
@@ -61,6 +66,12 @@ jest.mock('@/services/jobs', () => ({ shareLocalFile: jest.fn() }));
 jest.mock('@/services/playback', () => ({
   playback: { startInContext: jest.fn() },
 }));
+jest.mock('@/services/queue', () => ({
+  enqueueNext: jest.fn(),
+  enqueueLast: jest.fn(),
+  getQueuePlaybackSyncState: jest.fn(),
+  observeQueuePlaybackSync: jest.fn(() => jest.fn()),
+}));
 jest.mock(
   'react-native-safe-area-context',
   () => require('react-native-safe-area-context/jest/mock').default,
@@ -68,6 +79,7 @@ jest.mock(
 
 const item = {
   id: 'item',
+  lifecycle: 'ready',
   title: 'Podcast',
   mediaType: 'audio',
   relativeMediaPath: 'Media/id.m4a',
@@ -88,6 +100,21 @@ const collection = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest
+    .mocked(getQueuePlaybackSyncState)
+    .mockReturnValue({ status: 'applied', lastResult: 'applied' });
+  jest.mocked(enqueueNext).mockResolvedValue({
+    id: 'x',
+    itemId: item.id,
+    position: 0,
+    addedAt: 'now',
+  });
+  jest.mocked(enqueueLast).mockResolvedValue({
+    id: 'y',
+    itemId: item.id,
+    position: 1,
+    addedAt: 'now',
+  });
   jest.mocked(playback.startInContext).mockResolvedValue({} as never);
   jest.mocked(getCollection).mockResolvedValue(collection);
   jest.mocked(listCollectionItems).mockResolvedValue([item] as never);
@@ -97,6 +124,37 @@ beforeEach(() => {
   jest.mocked(saveLocalFileToFiles).mockResolvedValue('saved');
   jest.mocked(shareLocalFile).mockResolvedValue(undefined);
 });
+
+test.each(['collection', 'uncollected'] as const)(
+  '%s enqueues without replacing CURRENT or changing memberships',
+  async (kind) => {
+    await render(
+      kind === 'collection' ? (
+        <CollectionItemsView kind="collection" collectionId="c" />
+      ) : (
+        <CollectionItemsView kind="uncollected" />
+      ),
+    );
+    await waitFor(() => expect(screen.getByText('Podcast')).toBeTruthy());
+    await fireEvent.press(
+      screen.getByRole('button', {
+        name: 'Reproducir a continuación: Podcast',
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText('Añadido a la cola.')).toBeTruthy(),
+    );
+    await fireEvent.press(
+      screen.getByRole('button', {
+        name: 'Añadir al final de la cola: Podcast',
+      }),
+    );
+    await waitFor(() => expect(enqueueLast).toHaveBeenCalledWith(item.id));
+    expect(enqueueNext).toHaveBeenCalledWith(item.id);
+    expect(playback.startInContext).not.toHaveBeenCalled();
+    expect(removeItemFromCollection).not.toHaveBeenCalled();
+  },
+);
 
 test('detail reuses player, export, share, remove and delete flows', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);

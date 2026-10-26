@@ -27,6 +27,12 @@ import {
   renameCollection,
 } from '@/services/collections';
 import { playback } from '@/services/playback';
+import {
+  enqueueLast,
+  enqueueNext,
+  getQueuePlaybackSyncState,
+  observeQueuePlaybackSync,
+} from '@/services/queue';
 
 const mockPush = jest.fn();
 const mockSetParams = jest.fn();
@@ -70,6 +76,12 @@ jest.mock('@/services/jobs', () => ({ shareLocalFile: jest.fn() }));
 jest.mock('@/services/playback', () => ({
   playback: { startInContext: jest.fn() },
 }));
+jest.mock('@/services/queue', () => ({
+  enqueueNext: jest.fn(),
+  enqueueLast: jest.fn(),
+  getQueuePlaybackSyncState: jest.fn(),
+  observeQueuePlaybackSync: jest.fn(() => jest.fn()),
+}));
 jest.mock('expo-symbols', () => ({ SymbolView: () => null }));
 jest.mock(
   'react-native-safe-area-context',
@@ -104,6 +116,12 @@ const item = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest
+    .mocked(getQueuePlaybackSyncState)
+    .mockReturnValue({ status: 'applied', lastResult: 'applied' });
+  const saved = { id: 'entry', itemId: item.id, position: 0, addedAt: 'now' };
+  jest.mocked(enqueueNext).mockResolvedValue(saved);
+  jest.mocked(enqueueLast).mockResolvedValue(saved);
   jest.mocked(playback.startInContext).mockResolvedValue({} as never);
   mockSection = 'downloads';
   jest.mocked(listLibrary).mockResolvedValue([item] as never);
@@ -125,6 +143,153 @@ beforeEach(() => {
   jest.mocked(saveLocalFileToFiles).mockResolvedValue('saved');
   jest.mocked(shareLocalFile).mockResolvedValue(undefined);
   jest.mocked(deleteLibraryItem).mockResolvedValue(undefined);
+});
+
+test('Queue actions use the Queue API and leave CURRENT untouched; navigation opens Queue', async () => {
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Reproducir a continuación: Podcast largo',
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByText('Añadido a la cola.')).toBeTruthy(),
+  );
+  expect(enqueueNext).toHaveBeenCalledWith(item.id);
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Añadir al final de la cola: Podcast largo',
+    }),
+  );
+  await waitFor(() => expect(enqueueLast).toHaveBeenCalledWith(item.id));
+  expect(playback.startInContext).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Ver cola' }));
+  expect(mockPush).toHaveBeenCalledWith('/queue');
+});
+
+test('rapid Queue presses are single-submit but later intentional duplicates remain allowed', async () => {
+  let release!: (entry: Awaited<ReturnType<typeof enqueueNext>>) => void;
+  jest.mocked(enqueueNext).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  const button = screen.getByRole('button', {
+    name: 'Reproducir a continuación: Podcast largo',
+  });
+  await fireEvent.press(button);
+  await fireEvent.press(button);
+  expect(enqueueNext).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('Actualizando cola…')).toBeTruthy();
+  await act(async () =>
+    release({ id: 'x', itemId: item.id, position: 0, addedAt: 'now' }),
+  );
+  await waitFor(() =>
+    expect(screen.getByText('Añadido a la cola.')).toBeTruthy(),
+  );
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Reproducir a continuación: Podcast largo',
+    }),
+  );
+  await waitFor(() => expect(enqueueNext).toHaveBeenCalledTimes(2));
+  expect(observeQueuePlaybackSync).toHaveBeenCalledTimes(1);
+});
+
+test('pending reconciliation is reported as saved, with no false save error or applied notice', async () => {
+  let update!: () => void;
+  jest.mocked(observeQueuePlaybackSync).mockImplementationOnce((listener) => {
+    update = listener;
+    return jest.fn();
+  });
+  jest
+    .mocked(getQueuePlaybackSyncState)
+    .mockReturnValue({ status: 'pending', lastResult: 'failed' });
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Reproducir a continuación: Podcast largo',
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByText('Guardado en la cola. Actualizando reproducción…'),
+    ).toBeTruthy(),
+  );
+  expect(screen.queryByText('Añadido a la cola.')).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  await act(async () => {
+    jest
+      .mocked(getQueuePlaybackSyncState)
+      .mockReturnValue({ status: 'applied', lastResult: 'applied' });
+    update();
+  });
+  expect(screen.getByText('Añadido a la cola.')).toBeTruthy();
+});
+
+test('enqueue feedback removes its observer and ignores late callbacks after unmount', async () => {
+  let update!: () => void;
+  const stop = jest.fn();
+  jest.mocked(observeQueuePlaybackSync).mockImplementationOnce((listener) => {
+    update = listener;
+    return stop;
+  });
+  const view = await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Reproducir a continuación: Podcast largo',
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByText('Añadido a la cola.')).toBeTruthy(),
+  );
+  await view.unmount();
+  const reads = jest.mocked(getQueuePlaybackSyncState).mock.calls.length;
+  await act(async () => update());
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect(getQueuePlaybackSyncState).toHaveBeenCalledTimes(reads);
+});
+
+test('unsupported or non-ready media never offers Queue actions', async () => {
+  jest.mocked(listLibrary).mockResolvedValue([
+    {
+      ...item,
+      id: 'unsupported',
+      title: 'WebM',
+      relativeMediaPath: 'Media/a.webm',
+    },
+    { ...item, id: 'deleting', title: 'Eliminando', lifecycle: 'deleting' },
+  ] as never);
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('WebM')).toBeTruthy());
+  expect(screen.queryByText('Reproducir a continuación')).toBeNull();
+  expect(screen.queryByText('Añadir al final de la cola')).toBeNull();
+});
+
+test('Queue save failures are sanitized and keep the existing Library intact', async () => {
+  jest
+    .mocked(enqueueNext)
+    .mockRejectedValueOnce(new Error('/private/library.sqlite'));
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Reproducir a continuación: Podcast largo',
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /No se pudo guardar en la cola/,
+    ),
+  );
+  expect(screen.getByText('Podcast largo')).toBeTruthy();
+  expect(screen.queryByText('/private/library.sqlite')).toBeNull();
 });
 
 test('Descargas is initial and switching preserves filters and opens Collections', async () => {

@@ -20,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CollectionPicker } from '@/components/CollectionPicker';
 import { LibraryItemRow } from '@/components/LibraryItemRow';
 import { useLibraryItemActions } from '@/hooks/useLibraryItemActions';
+import { useQueueEnqueue } from '@/hooks/useQueueEnqueue';
 import type { CollectionSummary } from '@/models/collections';
 import type { LibraryItem } from '@/models/library';
 import {
@@ -56,6 +57,7 @@ export default function LibraryScreen() {
   const [loading, setLoading] = useState(true);
   const [pickerItemId, setPickerItemId] = useState<string | null>(null);
   const actions = useLibraryItemActions(setError);
+  const queueActions = useQueueEnqueue();
 
   useFocusEffect(
     useCallback(() => {
@@ -188,19 +190,31 @@ export default function LibraryScreen() {
           >
             Drop
           </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Ajustes"
-            onPress={() => router.push('/settings' as Href)}
-            style={styles.settings}
-          >
-            <SymbolView
-              name="gearshape"
-              type="monochrome"
-              size={24}
-              tintColor={colors.text}
-            />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Ver cola"
+              onPress={() => router.push('/queue' as Href)}
+              style={styles.settings}
+            >
+              <Text style={{ color: colors.text, fontWeight: '600' }}>
+                Cola
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Ajustes"
+              onPress={() => router.push('/settings' as Href)}
+              style={styles.settings}
+            >
+              <SymbolView
+                name="gearshape"
+                type="monochrome"
+                size={24}
+                tintColor={colors.text}
+              />
+            </Pressable>
+          </View>
         </View>
         <View style={styles.navigation}>
           <Pressable
@@ -308,6 +322,22 @@ export default function LibraryScreen() {
           </View>
         )}
       </View>
+      {queueActions.message && (
+        <Text
+          accessibilityLiveRegion="polite"
+          style={[styles.error, { color: colors.secondary }]}
+        >
+          {queueActions.message}
+        </Text>
+      )}
+      {queueActions.error && (
+        <Text
+          accessibilityRole="alert"
+          style={[styles.error, { color: colors.error }]}
+        >
+          {queueActions.error}
+        </Text>
+      )}
       {error && (
         <Text
           accessibilityRole="alert"
@@ -335,6 +365,9 @@ export default function LibraryScreen() {
             <LibraryItemRow
               item={item}
               busy={actions.busyId === item.id}
+              queueBusy={queueActions.busyId !== null}
+              onQueueNext={queueActions.next}
+              onQueueLast={queueActions.last}
               onOpen={(selected) => actions.open(selected, visible)}
               onSave={actions.save}
               onShare={actions.share}
@@ -429,6 +462,7 @@ export default function LibraryScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   header: { paddingHorizontal: 22, paddingTop: 18, gap: 8 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   titleRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
