@@ -20,6 +20,7 @@ const state = {
 let eventListener: ((value: unknown) => void) | null = null;
 const remove = jest.fn();
 const native = {
+  queueDidChange: jest.fn(async () => ({ status: 'applied' })),
   open: jest.fn(async () => state),
   startInContext: jest.fn(async () => ({ ...state, status: 'loading' })),
   play: jest.fn(async () => ({ ...state, status: 'playing' })),
@@ -214,4 +215,67 @@ test('PiP restoration event accepts only library IDs and is removable', () => {
   expect(listener).toHaveBeenCalledWith(id);
   unsubscribe();
   expect(remove).toHaveBeenCalled();
+});
+
+test('Queue ACK is sanitized and never receives a JS Queue snapshot', async () => {
+  const { reconcilePlaybackQueue } =
+    require('@/services/playback') as typeof import('@/services/playback');
+  expect(await reconcilePlaybackQueue()).toBe('applied');
+  expect(native.queueDidChange).toHaveBeenCalledWith();
+  native.queueDidChange.mockResolvedValueOnce({ status: 'superseded' });
+  expect(await reconcilePlaybackQueue()).toBe('superseded');
+  native.queueDidChange.mockResolvedValueOnce({ status: 'file:///private/db' });
+  expect(await reconcilePlaybackQueue()).toBe('failed');
+  native.queueDidChange.mockRejectedValueOnce(new Error('file:///private/db'));
+  expect(await reconcilePlaybackQueue()).toBe('failed');
+});
+
+test('an in-flight Queue reconciliation cannot block Pause or Delete', async () => {
+  let release!: (result: { status: string }) => void;
+  native.queueDidChange.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const service =
+    require('@/services/playback') as typeof import('@/services/playback');
+  const ack = service.reconcilePlaybackQueue();
+  await service.playback.pause();
+  await service.beginPlaybackDeletion(id);
+  expect(native.pause).toHaveBeenCalledTimes(1);
+  expect(native.beginDelete).toHaveBeenCalledTimes(1);
+  release({ status: 'applied' });
+  expect(await ack).toBe('applied');
+});
+
+test('a hung Queue ACK becomes pending recovery rather than blocking writes forever', async () => {
+  jest.useFakeTimers();
+  try {
+    native.queueDidChange.mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+    const service =
+      require('@/services/playback') as typeof import('@/services/playback');
+    const ack = service.reconcilePlaybackQueue();
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(await ack).toBe('failed');
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('Queue events carry no metadata into JS and remove their subscription', () => {
+  const service =
+    require('@/services/playback') as typeof import('@/services/playback');
+  const listener = jest.fn();
+  const stop = service.observeNativeQueueChanges(listener);
+  eventListener?.({ uri: 'file:///private/db' });
+  expect(listener).toHaveBeenCalledWith();
+  expect(native.addListener).toHaveBeenCalledWith(
+    'onQueueChanged',
+    expect.any(Function),
+  );
+  stop();
+  expect(remove).toHaveBeenCalledTimes(1);
 });

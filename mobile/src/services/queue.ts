@@ -1,4 +1,5 @@
 import { requireOptionalNativeModule } from 'expo';
+import { AppState } from 'react-native';
 
 import type { QueueEntry } from '@/models/queue';
 import { initializeLibrary, observeLibrary } from '@/services/library';
@@ -6,6 +7,11 @@ import {
   openLibraryDatabase,
   withLibraryForeignKeyTransaction,
 } from '@/services/libraryDatabase';
+import {
+  observeNativeQueueChanges,
+  reconcilePlaybackQueue,
+  type QueueReconciliationStatus,
+} from '@/services/playback';
 
 type Database = Awaited<ReturnType<typeof openLibraryDatabase>>;
 type NativeQueueIds = { newQueueEntryId(): string };
@@ -33,7 +39,17 @@ async function queueTransaction<T>(
 }
 
 const listeners = new Set<() => void>();
+export type QueuePlaybackSyncState = {
+  status: 'unknown' | 'applied' | 'pending';
+  lastResult: QueueReconciliationStatus | null;
+};
+const syncListeners = new Set<() => void>();
+let syncState: QueuePlaybackSyncState = { status: 'unknown', lastResult: null };
+let syncRevision = 0;
+let syncInFlight: { revision: number; promise: Promise<void> } | null = null;
 let stopObservingLibrary: (() => void) | null = null;
+let stopObservingNative: (() => void) | null = null;
+let stopObservingApp: (() => void) | null = null;
 let observedSignature: string | null = null;
 let writeTail: Promise<void> = Promise.resolve();
 
@@ -47,6 +63,16 @@ function serial<T>(action: () => Promise<T>): Promise<T> {
     () => undefined,
   );
   return operation;
+}
+
+/** Serialize SQLite only. Each caller can await its ACK without holding the
+ * persistence tail and preventing a newer committed priority from reaching Swift. */
+async function serialWithAck<T>(
+  action: () => Promise<{ value: T; ack: Promise<void> }>,
+): Promise<T> {
+  const { value, ack } = await serial(action);
+  await ack;
+  return value;
 }
 
 function queueId(): string {
@@ -71,8 +97,60 @@ function signature(rows: QueueEntry[]): string {
 }
 
 function publish(rows: QueueEntry[], changed: boolean): void {
-  observedSignature = signature(rows);
-  if (changed) notify();
+  const next = signature(rows);
+  const externalChange =
+    observedSignature !== null && observedSignature !== next;
+  observedSignature = next;
+  if (changed || externalChange) notify();
+}
+
+/** Existing mutation return types remain unchanged. A resolved mutation means
+ * SQLite committed; callers can separately observe "saved, playback pending". */
+export function getQueuePlaybackSyncState(): QueuePlaybackSyncState {
+  return { ...syncState };
+}
+
+function publishSync(next: QueuePlaybackSyncState): void {
+  if (
+    syncState.status === next.status &&
+    syncState.lastResult === next.lastResult
+  )
+    return;
+  syncState = next;
+  for (const listener of syncListeners) {
+    try {
+      listener();
+    } catch {
+      console.warn('[Drop queue] Sync observer failed');
+    }
+  }
+}
+
+function synchronizePlayback(replaceExisting = false): Promise<void> {
+  if (!replaceExisting && syncInFlight) return syncInFlight.promise;
+  const revision = ++syncRevision;
+  publishSync({ status: 'pending', lastResult: null });
+  const promise = reconcilePlaybackQueue()
+    .then((result) => {
+      if (revision !== syncRevision) return;
+      publishSync({
+        status: result === 'applied' ? 'applied' : 'pending',
+        lastResult: result,
+      });
+    })
+    .finally(() => {
+      if (syncInFlight?.revision === revision) syncInFlight = null;
+    });
+  syncInFlight = { revision, promise };
+  return promise;
+}
+
+async function afterCommit(
+  rows: QueueEntry[],
+  changed: boolean,
+): Promise<void> {
+  publish(rows, changed);
+  if (changed) await synchronizePlayback(true);
 }
 
 function safeError(error: unknown): never {
@@ -155,13 +233,27 @@ async function normalizedSnapshot(): Promise<{
   return queueTransaction(compactIn);
 }
 
-async function refreshFromLibrary(): Promise<void> {
+async function refreshQueue(
+  source: 'library' | 'native' | 'foreground' | 'subscribe',
+): Promise<void> {
   try {
-    await serial(async () => {
-      const { rows } = await normalizedSnapshot();
+    await serialWithAck(async () => {
+      const { rows, changed } = await normalizedSnapshot();
       const next = signature(rows);
-      if (observedSignature !== null && observedSignature !== next) notify();
-      observedSignature = next;
+      const externalChange =
+        observedSignature !== null && observedSignature !== next;
+      publish(rows, changed);
+      // A consume event already comes from native playback. Refresh SQLite,
+      // without reflecting the same event back into an ACK/event loop.
+      const needsSync =
+        source !== 'native' &&
+        (externalChange || changed || source !== 'library');
+      return {
+        value: undefined,
+        ack: needsSync
+          ? synchronizePlayback(externalChange || changed)
+          : Promise.resolve(),
+      };
     });
   } catch {
     // A later Library event or listQueue retries without leaking SQLite paths.
@@ -169,30 +261,70 @@ async function refreshFromLibrary(): Promise<void> {
   }
 }
 
-export function observeQueue(listener: () => void): () => void {
-  listeners.add(listener);
+function startObserving(): void {
   if (!stopObservingLibrary) {
     stopObservingLibrary = observeLibrary(() => {
-      void refreshFromLibrary();
+      void refreshQueue('library');
     });
-    void refreshFromLibrary();
+    stopObservingNative = observeNativeQueueChanges(() => {
+      void refreshQueue('native');
+    });
+    const appSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void refreshQueue('foreground');
+    });
+    stopObservingApp = () => appSubscription.remove();
+    void refreshQueue('subscribe');
   }
+}
+
+function stopObservingIfUnused(): void {
+  if (listeners.size + syncListeners.size !== 0) return;
+  stopObservingLibrary?.();
+  stopObservingNative?.();
+  stopObservingApp?.();
+  stopObservingLibrary = null;
+  stopObservingNative = null;
+  stopObservingApp = null;
+  observedSignature = null;
+}
+
+export function observeQueuePlaybackSync(listener: () => void): () => void {
+  syncListeners.add(listener);
+  startObserving();
+  return () => {
+    syncListeners.delete(listener);
+    stopObservingIfUnused();
+  };
+}
+
+export function observeQueue(listener: () => void): () => void {
+  listeners.add(listener);
+  startObserving();
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) {
-      stopObservingLibrary?.();
-      stopObservingLibrary = null;
-      observedSignature = null;
-    }
+    stopObservingIfUnused();
   };
 }
 
 export function listQueue(): Promise<QueueEntry[]> {
-  return serial(async () => {
+  return serialWithAck(async () => {
     try {
       const { rows, changed } = await normalizedSnapshot();
+      const externalChange =
+        observedSignature !== null && observedSignature !== signature(rows);
+      const initialRead = observedSignature === null;
       publish(rows, changed);
-      return rows;
+      const needsSync =
+        initialRead ||
+        changed ||
+        externalChange ||
+        syncState.status !== 'applied';
+      return {
+        value: rows,
+        ack: needsSync
+          ? synchronizePlayback(changed || externalChange)
+          : Promise.resolve(),
+      };
     } catch (error) {
       safeError(error);
     }
@@ -209,7 +341,7 @@ async function requireReadyItem(txn: Database, itemId: string): Promise<void> {
 }
 
 async function enqueue(itemId: string, next: boolean): Promise<QueueEntry> {
-  return serial(async () => {
+  return serialWithAck(async () => {
     await initializeLibrary();
     const entry: QueueEntry = {
       id: queueId(),
@@ -244,8 +376,7 @@ async function enqueue(itemId: string, next: boolean): Promise<QueueEntry> {
     } catch (error) {
       safeError(error);
     }
-    publish(result, true);
-    return entry;
+    return { value: entry, ack: afterCommit(result, true) };
   });
 }
 
@@ -258,7 +389,7 @@ export function enqueueLast(itemId: string): Promise<QueueEntry> {
 }
 
 export function removeQueueEntry(entryId: string): Promise<void> {
-  return serial(async () => {
+  return serialWithAck(async () => {
     await initializeLibrary();
     let changed = false;
     let result: QueueEntry[] = [];
@@ -281,12 +412,12 @@ export function removeQueueEntry(entryId: string): Promise<void> {
     } catch (error) {
       safeError(error);
     }
-    publish(result, changed);
+    return { value: undefined, ack: afterCommit(result, changed) };
   });
 }
 
 export function clearQueue(): Promise<void> {
-  return serial(async () => {
+  return serialWithAck(async () => {
     await initializeLibrary();
     let changed = false;
     try {
@@ -297,7 +428,7 @@ export function clearQueue(): Promise<void> {
     } catch (error) {
       safeError(error);
     }
-    publish([], changed);
+    return { value: undefined, ack: afterCommit([], changed) };
   });
 }
 
@@ -305,7 +436,7 @@ export function moveQueueEntry(
   entryId: string,
   targetPosition: number,
 ): Promise<void> {
-  return serial(async () => {
+  return serialWithAck(async () => {
     await initializeLibrary();
     let changed = false;
     let result: QueueEntry[] = [];
@@ -337,6 +468,6 @@ export function moveQueueEntry(
     } catch (error) {
       safeError(error);
     }
-    publish(result, changed);
+    return { value: undefined, ack: afterCommit(result, changed) };
   });
 }

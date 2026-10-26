@@ -91,10 +91,17 @@ private actor FakeManualQueueRepository: PlaybackManualQueueRepository {
   private var consumeFailure: PlaybackManualQueueError?
   private var holdConsume = false
   private var consumeContinuation: CheckedContinuation<Void, Never>?
+  private var holdRead = false
+  private var readContinuation: CheckedContinuation<Void, Never>?
 
-  func pendingEntries() throws -> [PlaybackManualQueueEntry] {
+  func pendingEntries() async throws -> [PlaybackManualQueueEntry] {
     if let readFailure { throw readFailure }
-    return entries
+    let snapshot = entries
+    if holdRead {
+      holdRead = false
+      await withCheckedContinuation { readContinuation = $0 }
+    }
+    return snapshot
   }
 
   func consume(entryID: String, itemID: String) async throws -> PlaybackManualQueueConsumeResult {
@@ -117,6 +124,9 @@ private actor FakeManualQueueRepository: PlaybackManualQueueRepository {
   func failConsume(_ error: PlaybackManualQueueError?) { consumeFailure = error }
   func consumedIDs() -> [String] { consumed }
   func holdNextConsume() { holdConsume = true }
+  func holdNextRead() { holdRead = true }
+  func isReadWaiting() -> Bool { readContinuation != nil }
+  func releaseRead() { readContinuation?.resume(); readContinuation = nil }
   func isConsumeWaiting() -> Bool { consumeContinuation != nil }
   func releaseConsume() {
     consumeContinuation?.resume()
@@ -456,6 +466,8 @@ struct PlaybackServiceTests {
       first: first, second: second, third: third, fourth: fourth, fifth: fifth,
       size: size, videoSize: videoSize)
     try await manualQueueTests(root: root, first: first, second: second,
+      third: third, audioSize: size, videoSize: videoSize)
+    try await reconciliationTests(root: root, first: first, second: second,
       third: third, audioSize: size, videoSize: videoSize)
     print("PlaybackServiceTests: passed")
   }
@@ -800,7 +812,7 @@ struct PlaybackServiceTests {
       await Task.yield()
       records.resumeLoad?.resume()
       records.resumeLoad = nil
-      await reconciliation.value
+      _ = await reconciliation.value
       try check(service.player.items().count == 1)
       let consumedOrder = await queue.consumedIDs()
       try check(consumedOrder.isEmpty)
@@ -985,6 +997,277 @@ struct PlaybackServiceTests {
       try check(consumedOrder.isEmpty)
       service.endDelete(third)
       _ = try await service.close()
+    }
+  }
+
+  private static func reconciliationTests(root: URL, first: String, second: String,
+    third: String, audioSize: Int64, videoSize: Int64) async throws {
+    let x = "20000000-0000-0000-0000-000000000001"
+    let y = "20000000-0000-0000-0000-000000000002"
+    func entry(_ id: String, _ item: String, _ position: Int64 = 0) -> PlaybackManualQueueEntry {
+      PlaybackManualQueueEntry(entryID: id, itemID: item, position: position,
+        addedAt: "2026-10-26T00:00:00.000Z", lifecycle: .ready)
+    }
+    func make() async throws -> (DropPlaybackService, FakeProgressRepository,
+      FakeManualQueueRepository, FakePlaybackSystemBridge) {
+      let records = FakeProgressRepository()
+      for (id, ext, type, size) in [(first, "m4a", "audio", audioSize),
+        (second, "m4a", "audio", audioSize), (third, "mp4", "video", videoSize)] {
+        records.records[id] = PlaybackRecord(id: id, relativeMediaPath: "Media/\(id).\(ext)",
+          mediaType: type, sizeBytes: size, position: 0, completedAt: nil, title: id)
+      }
+      let queue = FakeManualQueueRepository()
+      let system = FakePlaybackSystemBridge()
+      let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
+        repository: records, manualQueue: queue, system: system,
+        ratePreference: FakePlaybackRatePreference())
+      _ = try await service.startInContext(id: first, orderedIds: [first, second, third])
+      try await playing(service, id: first)
+      try await prepared(service, id: second)
+      return (service, records, queue, system)
+    }
+    func loadWaiting(_ records: FakeProgressRepository) async throws {
+      for _ in 0..<100 {
+        if records.resumeLoad != nil { return }
+        try await Task.sleep(nanoseconds: 5_000_000)
+      }
+      fatalError("Reconciliation did not reach held asset load")
+    }
+    func readWaiting(_ queue: FakeManualQueueRepository) async throws {
+      for _ in 0..<100 {
+        if await queue.isReadWaiting() { return }
+        try await Task.sleep(nanoseconds: 5_000_000)
+      }
+      fatalError("Reconciliation did not reach held SQLite read")
+    }
+
+    // ACK waits for the replacement NEXT; reorder, removal and clear preserve
+    // CURRENT and the unconsumed contextual cursor, even for NEXT A == CURRENT A.
+    do {
+      let (service, _, queue, _) = try await make()
+      let current = service.player.currentItem
+      let playerID = ObjectIdentifier(service.player)
+      await queue.replace([entry(x, third), entry(y, first, 1)])
+      let inserted = await service.reconcilePendingQueue()
+      try check(inserted == .applied)
+      try await prepared(service, id: third)
+      await queue.replace([entry(y, first), entry(x, third, 1)])
+      let reordered = await service.reconcilePendingQueue()
+      try check(reordered == .applied)
+      try await prepared(service, id: first)
+      try check(service.player.currentItem === current && service.isRetaining(first))
+      await queue.replace([entry(x, third)])
+      let removed = await service.reconcilePendingQueue()
+      try check(removed == .applied)
+      try await prepared(service, id: third)
+      await queue.replace([])
+      let cleared = await service.reconcilePendingQueue()
+      try check(cleared == .applied)
+      try await prepared(service, id: second)
+      try check(service.player.currentItem === current && ObjectIdentifier(service.player) == playerID)
+      let consumed = await queue.consumedIDs()
+      try check(consumed.isEmpty && !service.isRetaining(third))
+      _ = try await service.close()
+    }
+
+    // AVKit can retain an exhausted CURRENT. A newly committed Queue row
+    // must not get an applied ACK when no NEXT was actually prepared.
+    do {
+      let (service, _, queue, _) = try await make()
+      _ = try await service.startInContext(id: first, orderedIds: [first])
+      let current = service.player.currentItem
+      try await naturalEnd(service)
+      try await ended(service)
+      _ = try await service.pause()
+      try check(service.player.currentItem === current)
+      await queue.replace([entry(x, third)])
+      let ack = await service.reconcilePendingQueue()
+      try check(ack == .superseded)
+      try check(service.player.currentItem === current && service.player.rate == 0)
+      try check(!service.isRetaining(third))
+      let pending = try await queue.pendingEntries()
+      try check(pending.map(\.entryID) == [x])
+      _ = try await service.close()
+    }
+
+    // A delayed older SQLite snapshot cannot override the latest request.
+    do {
+      let (service, _, queue, _) = try await make()
+      await queue.replace([entry(x, third)])
+      await queue.holdNextRead()
+      let old = Task { await service.reconcilePendingQueue() }
+      try await readWaiting(queue)
+      await queue.replace([entry(y, first)])
+      let latest = await service.reconcilePendingQueue()
+      try check(latest == .applied)
+      await queue.releaseRead()
+      let oldResult = await old.value
+      try check(oldResult == .superseded)
+      try await prepared(service, id: first)
+      _ = try await service.close()
+    }
+
+    // Concurrent cancellation drains only its own preparation, never the new
+    // one. The late AVPlayerItem cannot be inserted or release CURRENT A.
+    do {
+      let (service, records, queue, _) = try await make()
+      records.pauseLoadID = third
+      await queue.replace([entry(x, third)])
+      let old = Task { await service.reconcilePendingQueue() }
+      try await loadWaiting(records)
+      await queue.replace([entry(y, first)])
+      let latest = Task { await service.reconcilePendingQueue() }
+      await Task.yield()
+      records.resumeLoad?.resume(); records.resumeLoad = nil
+      let results = await (old.value, latest.value)
+      try check(results.0 == .superseded && results.1 == .applied)
+      try await prepared(service, id: first)
+      try check(!service.isRetaining(third) && service.isRetaining(first))
+      _ = try await service.close()
+    }
+
+    // Transport commands remain independent of the reconciliation ACK.
+    for event in [PlaybackSystemEvent.pause, .interruptionBegan, .oldDeviceUnavailable] {
+      let (service, records, queue, system) = try await make()
+      let current = service.player.currentItem
+      records.pauseLoadID = third
+      await queue.replace([entry(x, third)])
+      let ack = Task { await service.reconcilePendingQueue() }
+      try await loadWaiting(records)
+      await system.send(event)
+      records.resumeLoad?.resume(); records.resumeLoad = nil
+      let result = await ack.value
+      try check(result == .applied)
+      try check(service.player.rate == 0 && service.player.currentItem === current)
+      let consumed = await queue.consumedIDs()
+      try check(consumed.isEmpty)
+      _ = try await service.close()
+    }
+
+    // A native handoff that wins before a SQLite reply stays CURRENT.
+    do {
+      let (service, _, queue, _) = try await make()
+      let next = service.player.items()[1]
+      await queue.replace([entry(x, third)])
+      await queue.holdNextRead()
+      let ack = Task { await service.reconcilePendingQueue() }
+      try await readWaiting(queue)
+      service.player.advanceToNextItem()
+      await queue.releaseRead()
+      let result = await ack.value
+      try check(result == .superseded)
+      try check(service.player.currentItem === next)
+      try await playing(service, id: second)
+      try await prepared(service, id: third)
+      _ = try await service.close()
+    }
+
+    // Delete during reconciliation keeps its barrier until the load drains.
+    do {
+      let (service, records, queue, _) = try await make()
+      records.pauseLoadID = third
+      await queue.replace([entry(x, third)])
+      let ack = Task { await service.reconcilePendingQueue() }
+      try await loadWaiting(records)
+      let deletion = Task { try await service.beginDelete(third) }
+      await Task.yield()
+      records.resumeLoad?.resume(); records.resumeLoad = nil
+      try await deletion.value
+      let result = await ack.value
+      try check(result == .superseded)
+      try check(!service.isRetaining(third) && service.isRetaining(first))
+      service.endDelete(third)
+      _ = try await service.close()
+    }
+
+    // Replacing CURRENT while a reconciliation read is pending invalidates
+    // its generation; its old snapshot cannot reconfigure the new session.
+    do {
+      let (service, _, queue, _) = try await make()
+      await queue.holdNextRead()
+      let ack = Task { await service.reconcilePendingQueue() }
+      try await readWaiting(queue)
+      _ = try await service.startInContext(id: third, orderedIds: [third])
+      try await playing(service, id: third)
+      let current = service.player.currentItem
+      await queue.releaseRead()
+      let result = await ack.value
+      try check(result == .superseded && service.player.currentItem === current)
+      try check(service.snapshot()["libraryId"] as? String == third)
+      _ = try await service.close()
+    }
+
+    // An error in the replacement preparation is a failed ACK, not applied.
+    do {
+      let (service, records, queue, _) = try await make()
+      records.pauseLoadID = third
+      await queue.replace([entry(x, third)])
+      let ack = Task { await service.reconcilePendingQueue() }
+      try await loadWaiting(records)
+      await queue.failReads(.busy)
+      records.resumeLoad?.resume(); records.resumeLoad = nil
+      let result = await ack.value
+      try check(result == .failed && service.player.items().count == 1)
+      await queue.failReads(nil)
+      _ = try await service.close()
+    }
+
+    // A failed consume emits nothing. An explicit reconciliation retries the
+    // durable write; repeated ACKs do not duplicate its event.
+    do {
+      let (service, _, queue, _) = try await make()
+      var events = 0
+      service.onQueueChanged = { events += 1 }
+      await queue.replace([entry(x, third)])
+      await queue.failConsume(.busy)
+      let applied = await service.reconcilePendingQueue()
+      try check(applied == .applied && events == 0)
+      try await naturalEnd(service)
+      try await playing(service, id: third)
+      for _ in 0..<100 {
+        if service.snapshot()["errorCode"] as? String == "QUEUE_CONSUME_FAILED" { break }
+        try await Task.sleep(nanoseconds: 5_000_000)
+      }
+      try check(service.snapshot()["errorCode"] as? String == "QUEUE_CONSUME_FAILED")
+      try check(events == 0)
+      await queue.failConsume(nil)
+      _ = await service.reconcilePendingQueue()
+      for _ in 0..<100 {
+        if events == 1 { break }
+        try await Task.sleep(nanoseconds: 5_000_000)
+      }
+      try check(events == 1)
+      _ = await service.reconcilePendingQueue()
+      try check(events == 1)
+      _ = try await service.close()
+    }
+
+    // Durable consume emits exactly after success, including after close;
+    // rollback and retry/missing do not manufacture duplicate events.
+    do {
+      let (service, _, queue, _) = try await make()
+      var events = 0
+      service.onQueueChanged = { events += 1 }
+      await queue.replace([entry(x, third)])
+      await queue.holdNextConsume()
+      let applied = await service.reconcilePendingQueue()
+      try check(applied == .applied && events == 0)
+      try await naturalEnd(service)
+      try await playing(service, id: third)
+      for _ in 0..<100 {
+        if await queue.isConsumeWaiting() { break }
+        try await Task.sleep(nanoseconds: 5_000_000)
+      }
+      try check(events == 0)
+      _ = try await service.close()
+      await queue.releaseConsume()
+      for _ in 0..<100 {
+        if events == 1 { break }
+        try await Task.sleep(nanoseconds: 5_000_000)
+      }
+      try check(events == 1)
+      let pending = try await queue.pendingEntries()
+      try check(pending.isEmpty)
     }
   }
 

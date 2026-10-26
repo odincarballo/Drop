@@ -10,6 +10,8 @@ export type PlaybackStatus =
   | 'ended'
   | 'failed';
 
+export type QueueReconciliationStatus = 'applied' | 'failed' | 'superseded';
+
 export type PiPPresentation =
   | 'inline'
   | 'fullscreen'
@@ -36,6 +38,7 @@ export type PlaybackState = {
 };
 
 type NativePlayback = {
+  queueDidChange(): Promise<unknown>;
   open(id: string): Promise<unknown>;
   startInContext(id: string, orderedIds: string[]): Promise<unknown>;
   play(): Promise<unknown>;
@@ -53,7 +56,7 @@ type NativePlayback = {
   beginDelete(id: string): Promise<unknown>;
   endDelete(id: string): Promise<unknown>;
   addListener(
-    event: 'onPlaybackState' | 'onPiPRestore',
+    event: 'onPlaybackState' | 'onPiPRestore' | 'onQueueChanged',
     listener: (value: unknown) => void,
   ): { remove(): void };
 };
@@ -221,6 +224,45 @@ export const playback = {
     return () => subscription.remove();
   },
 };
+
+/** Queue ACKs do not share commandTail: asset loading must never block Pause
+ * or the Library Delete barrier. Swift guards concurrent requests itself. */
+export async function reconcilePlaybackQueue(): Promise<QueueReconciliationStatus> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const value = await Promise.race([
+      native().queueDidChange(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('Queue ACK timeout')),
+          5_000,
+        );
+      }),
+    ]);
+    const status =
+      value && typeof value === 'object'
+        ? (value as Record<string, unknown>).status
+        : null;
+    return status === 'applied' || status === 'superseded' ? status : 'failed';
+  } catch {
+    return 'failed'; // Never leak a native path, or undo a committed JS write.
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+export function observeNativeQueueChanges(listener: () => void): () => void {
+  try {
+    const subscription = native().addListener('onQueueChanged', () =>
+      listener(),
+    );
+    return () => subscription.remove();
+  } catch {
+    // An older/missing native module can still persist Queue. listQueue and
+    // the explicit sync state expose recovery without pretending rollback.
+    return () => undefined;
+  }
+}
 
 export function beginPlaybackDeletion(id: string): Promise<void> {
   return ordered(async (module) => {

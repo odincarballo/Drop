@@ -10,7 +10,7 @@ private final class PlaybackOperationException: Exception, @unchecked Sendable {
 public final class DropPlaybackModule: Module {
   public func definition() -> ModuleDefinition {
     Name("DropPlayback")
-    Events("onPlaybackState", "onPiPRestore")
+    Events("onPlaybackState", "onPiPRestore", "onQueueChanged")
 
     View(DropPlaybackVideoView.self) {}
 
@@ -22,6 +22,9 @@ public final class DropPlaybackModule: Module {
         DropPlaybackService.shared.onRestore = { [weak self] id in
           self?.sendEvent("onPiPRestore", ["libraryId": id])
         }
+        DropPlaybackService.shared.onQueueChanged = { [weak self] in
+          self?.sendEvent("onQueueChanged", [:])
+        }
       }
     }
 
@@ -29,9 +32,16 @@ public final class DropPlaybackModule: Module {
       Task { @MainActor in
         DropPlaybackService.shared.onState = nil
         DropPlaybackService.shared.onRestore = nil
+        DropPlaybackService.shared.onQueueChanged = nil
       }
     }
 
+    AsyncFunction("queueDidChange") { (promise: Promise) in
+      self.run(promise) {
+        let result = await DropPlaybackService.shared.reconcilePendingQueue()
+        return ["status": result.rawValue]
+      }
+    }
     AsyncFunction("open") { (id: String, promise: Promise) in
       self.run(promise) { try await DropPlaybackService.shared.open(id: id) }
     }

@@ -52,6 +52,10 @@ enum DropPlaybackError: Error {
   }
 }
 
+enum PlaybackQueueReconciliation: String {
+  case applied, failed, superseded
+}
+
 @MainActor
 final class DropPlaybackService {
   static let shared = DropPlaybackService()
@@ -60,6 +64,7 @@ final class DropPlaybackService {
   // keeps using this one transport object.
   let player: AVQueuePlayer
   var onState: (([String: Any]) -> Void)?
+  var onQueueChanged: (() -> Void)?
 
   private var repository: PlaybackProgressRepository?
   private var manualQueue: PlaybackManualQueueRepository?
@@ -88,6 +93,9 @@ final class DropPlaybackService {
   private var preparedStatusObservation: NSKeyValueObservation?
   private var preparationTask: Task<Void, Never>?
   private var preparationSerial: UInt64 = 0
+  private var reconciliationSerial: UInt64 = 0
+  private var queueReadFailureSerial: UInt64?
+  private var queueExhaustedSerial: UInt64?
   private let nextSelector = PlaybackNextSelector()
   private var pendingNaturalAdvance = false
   // AVQueuePlayer may have removed the exhausted item while NEXT is loading.
@@ -348,44 +356,74 @@ final class DropPlaybackService {
     return manualQueue!
   }
 
-  // Internal B2C integration point. No JavaScript notification is wired in
-  // B2B2; callers must not assume a Queue mutation immediately changes NEXT.
-  func reconcilePendingQueue() async {
+  // The ACK describes native reconciliation, never the SQLite write that
+  // triggered it. Only the latest request may replace NEXT after a suspension.
+  @discardableResult
+  func reconcilePendingQueue() async -> PlaybackQueueReconciliation {
+    reconciliationSerial &+= 1
+    let request = reconciliationSerial
     reconcileQueuedItem()
-    guard let source = currentOccurrenceItem else { return }
+    guard let source = currentOccurrenceItem else {
+      return activeID == nil ? .applied : .superseded
+    }
     let token = generation
+    let epoch = contextEpoch
+    retryPendingConsumes()
+    func isCurrent() -> Bool {
+      request == reconciliationSerial && token == generation && epoch == contextEpoch &&
+        currentOccurrenceItem === source && !Task.isCancelled &&
+        (player.currentItem === source ||
+          (player.currentItem == nil && awaitingNaturalSuccessor)) &&
+        currentOccurrence.map { leases.ownsCurrent($0) } == true
+    }
     let entries: [PlaybackManualQueueEntry]
     do { entries = try await queueRepository().pendingEntries() }
     catch {
-      guard token == generation, currentOccurrenceItem === source else { return }
+      reconcileQueuedItem()
+      guard isCurrent() else { return .superseded }
       // A previously prepared Context item must not win when priority is
       // unknown. CURRENT continues without interrupting its transport.
       cancelPreparation()
       await drainPreparation()
-      guard token == generation, currentOccurrenceItem === source else { return }
+      reconcileQueuedItem()
+      guard isCurrent() else { return .superseded }
       errorCode = "QUEUE_READ_FAILED"
       emit()
-      return
+      return .failed
     }
-    guard token == generation, currentOccurrenceItem === source else { return }
+    reconcileQueuedItem()
+    guard isCurrent() else { return .superseded }
     let choice = nextSelector.choose(entries: entries, context: playbackContext)
     if let preparedNext, let choice {
       switch (preparedNext.occurrence.source, choice) {
       case (.manual(let entryID), .manual(let entry))
         where entryID == entry.entryID && preparedNext.id == entry.itemID:
-        return
+        return .applied
       case (.context(let index), .context(let chosenIndex, let id))
         where index == chosenIndex && preparedNext.id == id:
-        return
+        return .applied
       default: break
       }
     } else if preparedNext == nil && choice == nil && preparationTask == nil {
-      return
+      return .applied
     }
     cancelPreparation()
     await drainPreparation()
-    guard token == generation, currentOccurrenceItem === source else { return }
-    if choice != nil { scheduleNextPreparation() }
+    reconcileQueuedItem()
+    guard isCurrent() else { return .superseded }
+    if choice == nil { return .applied }
+    scheduleNextPreparation()
+    let serial = preparationSerial
+    guard let task = preparationTask else { return .superseded }
+    await task.value
+    reconcileQueuedItem()
+    guard isCurrent(), serial == preparationSerial else { return .superseded }
+    if queueReadFailureSerial == serial { return .failed }
+    // Pausing after the exhausted item was removed can defer preparation until
+    // play. Do not claim that the requested NEXT is already applied then.
+    guard preparedNext != nil || queueExhaustedSerial == serial else { return .superseded }
+    retryPendingConsumes()
+    return .applied
   }
 
   func open(id: String) async throws -> [String: Any] {
@@ -725,8 +763,9 @@ final class DropPlaybackService {
   }
 
   private func drainPreparation() async {
+    let serial = preparationSerial
     if let task = preparationTask { await task.value }
-    preparationTask = nil
+    if serial == preparationSerial { preparationTask = nil }
   }
 
   private func scheduleNextPreparation() {
@@ -751,10 +790,13 @@ final class DropPlaybackService {
   }
 
   private func prepareNext(epoch: UInt64, token: UInt64, serial: UInt64) async {
+    queueReadFailureSerial = nil
+    queueExhaustedSerial = nil
     var exhausted = false
     defer {
       if serial == preparationSerial {
         preparationTask = nil
+        if exhausted { queueExhaustedSerial = serial }
         if state == "ended" && preparedNext == nil {
           pendingNaturalAdvance = false
           if exhausted { awaitingNaturalSuccessor = false }
@@ -780,6 +822,7 @@ final class DropPlaybackService {
         guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
                                    source: source) else { return }
         // Unknown priority is not an empty queue. Never prepare Context here.
+        queueReadFailureSerial = serial
         errorCode = (error as? PlaybackManualQueueError) == .schemaNotPrepared
           ? "QUEUE_SCHEMA_NOT_READY" : "QUEUE_READ_FAILED"
         emit()
@@ -824,13 +867,14 @@ final class DropPlaybackService {
         }
         if case .manual(let entry) = choice {
           // The row can disappear while the asset is loading. This final read
-          // is advisory until B2C supplies post-commit invalidation.
+          // complements the post-commit bridge; CURRENT still wins a handoff.
           let latest: [PlaybackManualQueueEntry]
           do { latest = try await queueRepository().pendingEntries() }
           catch {
             leases.releasePrepared(occurrence)
             if preparationIsCurrent(epoch: epoch, token: token, serial: serial,
                                     source: source) {
+              queueReadFailureSerial = serial
               errorCode = "QUEUE_READ_FAILED"
               emit()
             }
@@ -877,6 +921,7 @@ final class DropPlaybackService {
         guard preparationIsCurrent(epoch: epoch, token: token, serial: serial,
                                    source: source) else { return }
         if case PlaybackRepositoryError.busy = error {
+          queueReadFailureSerial = serial
           errorCode = "QUEUE_READ_FAILED"
           emit()
           return
@@ -1079,6 +1124,9 @@ final class DropPlaybackService {
       guard let self else { return }
       do {
         let result = try await self.queueRepository().consume(entryID: entryID, itemID: itemID)
+        // SQLite changed even if CURRENT/session changed while the commit was
+        // in flight. Publish durable changes independently of transport state.
+        if result == .persisted { self.onQueueChanged?() }
         guard self.playbackSession == session else { return }
         self.consumingEntries.remove(entryID)
         switch result {
