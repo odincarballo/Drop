@@ -2,7 +2,7 @@
 
 Drop is an iPhone app for downloading authorized media and keeping it in an
 offline library. The repository and the iPhone app are both named **Drop**.
-This branch prepares Drop v1.3.0 (build 6) as a release candidate.
+This branch prepares Drop v1.4.0 (build 7) as a release candidate.
 
 Drop is designed for public or otherwise authorized content. It does not
 support DRM bypass, private accounts, memberships, paywalls, login cookies,
@@ -36,6 +36,9 @@ are separate from Drop's managed library.
   deletion, sharing, and friendly export filenames.
 - Persistent local Collections organize Library items without duplicating media;
   an item can belong to multiple Collections or appear in Uncollected.
+- A persistent Manual Queue supports adding next/last, reordering, removing,
+  clearing pending entries, and independent repeated occurrences. Native
+  AVQueuePlayer selection plays CURRENT, then Manual Queue, then Playback Context.
 - YouTube range downloads with bounded retries, integrity checks, a narrowly
   scoped audio-403 URL refresh, and dynamic iPhone storage preflight.
 
@@ -221,14 +224,21 @@ installed, launched without Metro, downloaded an authorized YouTube video, and
 passed local playback, controls, background audio, PiP, and library-persistence
 checks across an app restart, including playback after reopening.
 
+For Manual Queue, integrated Release ARM64 compilation and a signed test-app
+update were verified from the functional commit before the version bump. The
+user subsequently reported 15/15 physical checks passing; these are distinct
+from Codex's automated checks. The new 1.4.0 build 7 artifact still needs its
+own build/signing and device verification. See the [physical-validation report](docs/manual-queue-v1.4.0-physical-validation.md)
+and [candidate release notes](docs/release-notes-v1.4.0.md).
+
 ## Known limitations and roadmap
 
 Support is deliberately scoped to compatible individual YouTube URLs and
 validated direct resources. Audio-only playback currently targets M4A/AAC;
 video playback targets compatible local MP4. The 1080p download policy remains
 more conservative than 360p/720p. Downloads do not continue in the background;
-background playback is separate. v1.3.0 does not include a manual Queue,
-Playlist, manual Next/Previous, Repeat, Shuffle, sleep timer, cloud sync, or
+background playback is separate. v1.4.0 does not include Playlists,
+manual Next/Previous, global Repeat, Shuffle, sleep timer, cloud sync, or
 import of old Files exports. Source compatibility and available storage may
 vary by device and source.
 

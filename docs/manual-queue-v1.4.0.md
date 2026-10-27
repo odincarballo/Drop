@@ -1,6 +1,12 @@
-# Manual Queue — v1.4.0 Block A
+# Manual Queue — v1.4.0
 
-Block A defines and persists a manual queue. It does **not** change playback or add UI. The planned order for later blocks is **current item → manual queue → remaining playback context**.
+Blocks A, B and C implement durable Queue persistence, native selection/reconciliation and the Queue interface. Playback order is **current item → manual queue → remaining playback context**. Block A alone introduced persistence; the later blocks added playback and UI without changing that contract.
+
+## Candidate and validation status
+
+Release preparation sets version **1.4.0 build 7**, without changing dependencies, the environment-resolved Bundle ID or playback behavior. This versioned candidate has not yet been compiled or installed. Concise scope and exclusions are in [the release notes](release-notes-v1.4.0.md).
+
+Integrated iOS Release ARM64 compilation and signed reprotest installation were verified against functional commit `6d800e051236342a589d007baf4cce411271ce43`, still declaring **1.3.0 build 6**. The user reported **15/15** physical checks satisfactory on 26 October 2026. [The physical-validation report](manual-queue-v1.4.0-physical-validation.md) distinguishes those observations from Codex's build, signing, SQLite and file-preservation checks. It does not treat the new version/build as already validated.
 
 ## Boundaries
 
@@ -52,7 +58,7 @@ SQLite operations are serialized independently of their ACK waits: a newer mutat
 
 Native `onQueueChanged` is emitted only after a persisted consumption, including a commit that finishes after the playback session changed. Missing rows and failed/rolled-back consumption do not emit it. `observeQueue()` rereads SQLite and compares signatures, so repeated signals do not produce duplicate data-change events. Native signals are not echoed back into another reconciliation. With no JS observer, native playback continues; a later read/subscription recovers the durable pending rows. Library-change signals reconcile only when Queue changed. Callers should still obtain an initial snapshot using `listQueue()`.
 
-The Expo method/event require a later integrated iOS build and physical validation; standalone Swift and mocked JS bridge tests do not establish that integration. Schema v3, version/build, backend and downloader are unchanged by B2C.
+D1/D2 subsequently verified the Expo method/event in an integrated iOS build of the functional commit. Standalone Swift and mocked JS bridge tests alone do not establish that integration, and successful compilation does not establish every runtime ACK/error path. Schema v3, version/build, backend and downloader were unchanged by B2C; the version bump is separate release preparation.
 
 ## Manual Queue interface (Block C)
 
@@ -64,4 +70,4 @@ The Queue screen removes individual occurrences, moves them with explicit access
 
 A committed operation with a pending native ACK shows **Guardado en la cola. Actualizando reproducción…**. An applied result can show a saved confirmation; a persistence rejection shows a separate safe error. No bridge failure is presented as a SQLite rollback. Empty, loading, missing-file and metadata-error states remain usable. The screen uses the existing light/dark theme, Safe Area and labeled controls, with no new dependencies or drag-and-drop engine.
 
-Automated UI tests exercise these contracts with the existing services mocked at their boundary; the Queue service's separate tests use real isolated SQLite. An integrated iOS build and physical checks of VoiceOver/layout, background, PiP, A→A and Delete/consumption races are still pending. This block adds no Playlists, Shuffle, Repeat or manual Next/Previous, and does not change version/build or schema v3.
+Automated UI tests exercise these contracts with the existing services mocked at their boundary; the Queue service's separate tests use real isolated SQLite. Integrated builds and the 15 user-reported physical cases are recorded above. Physical VoiceOver verification, exhaustive layout/theme checks and exceptional concurrency scenarios (including Delete/consumption races) remain pending. The completed Library Delete check does not establish all race interleavings. This block adds no Playlists, Shuffle, global Repeat or manual Next/Previous, and did not change version/build or schema v3.
