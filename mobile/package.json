@@ -14,7 +14,7 @@
     "ios:release": "EXPO_PUBLIC_APP_ENV=production expo run:ios --configuration Release --device",
     "lint": "expo lint",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "node scripts/check_source_format.mjs",
     "typecheck": "tsc --noEmit",
     "test": "jest --runInBand",
     "test:integration": "MEDIADROP_LIVE_TEST=1 jest --runInBand tests/live-backend.test.tsx",

@@ -1,5 +1,9 @@
 # Drop: Release iOS desde checkout limpio
 
+Antes de preparar una candidata, aplicar el [workflow transversal](engineering-workflow.md)
+para identidad de entradas, espacio, supervisión y evidencia durable. Esta página
+conserva los pasos de preparación específicos de iOS.
+
 Partir de un clon o worktree temporal sin `mobile/ios`, `node_modules`, Pods,
 `vendor` ni DerivedData. La Mac necesita Xcode con licencia aceptada, Node según
 `mobile/.nvmrc`, Ruby 2.6–3.1, Bundler 2.4.22, acceso a Internet y una identidad
