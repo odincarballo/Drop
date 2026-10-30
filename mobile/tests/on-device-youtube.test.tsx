@@ -193,6 +193,20 @@ test('metadata uses the native module without HTTP client, token or backend fall
   fetchSpy.mockRestore();
 });
 
+test('live share URL reaches the native bridge without backend fallback', async () => {
+  const url = 'https://www.youtube.com/live/u_uUZRU6kkQ?si=hHEJ_1BJbbj7QwMo';
+  const fetchSpy = jest.spyOn(global, 'fetch');
+  try {
+    await expect(analyzeYoutubeOnDevice(` ${url} `)).resolves.toMatchObject(
+      result,
+    );
+    expect(native.analyze).toHaveBeenCalledWith(url);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
 test('missing native module fails without falling back to Render', async () => {
   jest.mocked(requireOptionalNativeModule).mockReturnValue(null);
   await expect(

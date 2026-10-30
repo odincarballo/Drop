@@ -109,6 +109,80 @@ class SpikeTests(unittest.TestCase):
                 spike.canonical_url(url), "https://www.youtube.com/watch?v=AWGPaFraPN4"
             )
 
+    def test_live_urls_normalize_to_watch(self):
+        for url in [
+            "https://www.youtube.com/live/u_uUZRU6kkQ",
+            "https://www.youtube.com/live/u_uUZRU6kkQ?si=hHEJ_1BJbbj7QwMo",
+            "https://www.youtube.com/live/u_uUZRU6kkQ/?si=shared#fragment",
+            "http://youtube.com/live/u_uUZRU6kkQ/",
+            "https://m.youtube.com/live/u_uUZRU6kkQ",
+            "https://music.youtube.com/live/u_uUZRU6kkQ",
+            "https://youtube.com:443/live/u_uUZRU6kkQ",
+            "https://youtube.com/live/u_uUZRU6kkQ?list=ignored",
+        ]:
+            with self.subTest(url=url):
+                self.assertEqual(
+                    spike.canonical_url(url),
+                    spike.canonical_url("https://www.youtube.com/watch?v=u_uUZRU6kkQ"),
+                )
+
+    def test_live_urls_preserve_strict_input_restrictions(self):
+        for url in [
+            "https://youtube.com/live/",
+            "https://youtube.com/live/u_uUZRU6kk",
+            "https://youtube.com/live/u_uUZRU6kkQQ",
+            "https://youtube.com/live/u_uUZRU6kk!",
+            "https://youtube.com/live/u_uUZRU6kké",
+            "https://youtube.com/live/u_uUZRU6kkQ/extra",
+            "https://youtube.com/live/u_uUZRU6kkQ//",
+            "https://youtube.com/live//u_uUZRU6kkQ",
+            "https://youtube.com/channel/live/u_uUZRU6kkQ",
+            "https://youtube.com.evil.test/live/u_uUZRU6kkQ",
+            "https://evil.youtube.com/live/u_uUZRU6kkQ",
+            "https://user:password@youtube.com/live/u_uUZRU6kkQ",
+            "https://youtube.com:8443/live/u_uUZRU6kkQ",
+            "ftp://youtube.com/live/u_uUZRU6kkQ",
+            "https://youtube.com/live/u_uUZRU6kkQ?si=" + "x" * 2048,
+        ]:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                spike.canonical_url(url)
+
+    def test_live_url_analysis_extracts_canonical_archived_video(self):
+        payload = self.audio_payload()
+        payload.update(id="u_uUZRU6kkQ", is_live=False, live_status="was_live")
+        with patch.object(
+            spike.LocalYoutubeDL, "extract_info", return_value=payload
+        ) as extract:
+            result = json.loads(
+                spike.analyze("https://www.youtube.com/live/u_uUZRU6kkQ?si=shared")
+            )
+        extract.assert_called_once_with(
+            "https://www.youtube.com/watch?v=u_uUZRU6kkQ", download=False, process=False
+        )
+        self.assertEqual(result["metadata"]["audioFormats"][0]["id"], "140")
+        self.assertNotIn("error", result)
+
+    def test_live_state_guards_remain_unchanged(self):
+        for status in ["is_live", "is_upcoming", "post_live"]:
+            payload = self.audio_payload()
+            payload.update(is_live=False, live_status=status)
+            with (
+                self.subTest(status=status),
+                self.assertRaisesRegex(ValueError, "LIVE_NOT_SUPPORTED"),
+            ):
+                spike.normalize(payload)
+        for status in ["was_live", "not_live"]:
+            payload = self.audio_payload()
+            payload.update(is_live=False, live_status=status)
+            with self.subTest(status=status):
+                self.assertEqual(
+                    spike.normalize(payload)["audioFormats"][0]["id"], "140"
+                )
+        payload = self.audio_payload()
+        payload.update(is_live=True, live_status="was_live")
+        with self.assertRaisesRegex(ValueError, "LIVE_NOT_SUPPORTED"):
+            spike.normalize(payload)
+
     def test_unsupported_urls(self):
         for url in [
             "https://youtube.com/playlist?list=abc",

@@ -250,6 +250,8 @@ def canonical_url(raw):
             video_id = query["v"][0]
         elif parsed.path.startswith("/shorts/"):
             video_id = parsed.path.removeprefix("/shorts/").rstrip("/")
+        elif parsed.path.startswith("/live/"):
+            video_id = parsed.path.removeprefix("/live/").removesuffix("/")
     if not video_id or not VIDEO_ID.fullmatch(video_id):
         raise ValueError(
             "PLAYLIST_NOT_SUPPORTED" if "list" in query else "UNSUPPORTED_URL"
