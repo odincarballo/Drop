@@ -60,6 +60,7 @@ test('rejects absent exporter and unconfirmed native outcomes', async () => {
 });
 
 const libraryItem = {
+  availability: 'available',
   title: 'Este video lo borraré en 48 horas',
   mediaType: 'video',
   relativeMediaPath: 'Media/ad02362e-bd7c-498a-8f00-aaaaaaaaaaaa.mp4',
@@ -114,4 +115,18 @@ test('named share failure also removes its temporary hard link', async () => {
     }),
   ).rejects.toThrow('Share cancelled');
   expect(removeNamedExport).toHaveBeenCalledWith(namedUri);
+});
+
+test('unavailable record cannot create a named export even via the service API', async () => {
+  const createNamedExport = jest.fn();
+  jest
+    .mocked(requireOptionalNativeModule)
+    .mockReturnValue({ createNamedExport, removeNamedExport: jest.fn() });
+  await expect(
+    withNamedLibraryFile(
+      { ...libraryItem, availability: 'missing', uri: null },
+      jest.fn(),
+    ),
+  ).rejects.toThrow('disponible');
+  expect(createNamedExport).not.toHaveBeenCalled();
 });

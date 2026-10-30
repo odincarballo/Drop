@@ -1,6 +1,6 @@
 import { requireOptionalNativeModule } from 'expo';
 
-import type { LibraryItem } from '@/models/library';
+import { isAvailableLibraryItem, type LibraryItem } from '@/models/library';
 import { withLocalFileLease } from '@/services/jobs';
 import { libraryExportName } from '@/utils/libraryExportName';
 
@@ -58,6 +58,8 @@ export async function withNamedLibraryFile<T>(
   item: LibraryItem,
   operation: (uri: string) => Promise<T>,
 ): Promise<T> {
+  if (!isAvailableLibraryItem(item))
+    throw new Error('El archivo ya no está disponible.');
   const exporter =
     requireOptionalNativeModule<DropFileExportNative>('DropFileExport');
   if (!exporter?.createNamedExport || !exporter.removeNamedExport) {

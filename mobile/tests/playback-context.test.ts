@@ -11,6 +11,8 @@ const ids = [1, 2, 3, 4].map(
 function item(id: string, mediaType: 'audio' | 'video', extension: string) {
   return {
     id,
+    availability: 'available',
+    uri: `file:///library/${id}.${extension}`,
     mediaType,
     relativeMediaPath: `Media/${id}.${extension}`,
   } as LibraryItem;
@@ -40,5 +42,18 @@ test('filtered video and audio contexts never insert another media type', () => 
   expect(playbackContextFromVisibleItems(audio).orderedIds).toEqual([
     ids[1],
     ids[3],
+  ]);
+});
+
+test('unavailable records never enter the audible context', () => {
+  const missing = {
+    ...item(ids[0], 'audio', 'm4a'),
+    availability: 'missing' as const,
+    uri: null,
+  };
+  const valid = item(ids[1], 'video', 'mp4');
+  expect(isPlayableLibraryItem(missing)).toBe(false);
+  expect(playbackContextFromVisibleItems([missing, valid]).orderedIds).toEqual([
+    ids[1],
   ]);
 });

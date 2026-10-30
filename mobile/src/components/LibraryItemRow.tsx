@@ -1,6 +1,6 @@
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { LibraryItem } from '@/models/library';
+import { isAvailableLibraryItem, type LibraryItem } from '@/models/library';
 import { useTheme } from '@/theme';
 import { formatSize } from '@/utils/format';
 import { isPlayableLibraryItem } from '@/utils/playbackContext';
@@ -35,6 +35,7 @@ export function LibraryItemRow({
   collectionName,
 }: Props) {
   const { colors } = useTheme();
+  const available = isAvailableLibraryItem(item);
   const progress = item.completedAt
     ? 100
     : item.durationSeconds
@@ -47,7 +48,13 @@ export function LibraryItemRow({
     <View style={[styles.item, { borderBottomColor: colors.border }]}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Reproducir ${item.title}`}
+        accessibilityLabel={
+          available
+            ? `Reproducir ${item.title}`
+            : `${item.title}, archivo no disponible`
+        }
+        accessibilityState={{ disabled: !available || busy }}
+        disabled={!available || busy}
         onPress={() => onOpen(item)}
         style={styles.playableRow}
       >
@@ -78,6 +85,12 @@ export function LibraryItemRow({
             {item.resolution ? ` · ${item.resolution}` : ''} ·{' '}
             {formatSize(item.sizeBytes)}
           </Text>
+          {!available && (
+            <Text accessibilityRole="text" style={{ color: colors.secondary }}>
+              Archivo no disponible. Se conservan sus datos; volverá a estar
+              disponible si se recupera el archivo válido.
+            </Text>
+          )}
           <Text style={{ color: colors.secondary, fontSize: 12 }}>
             {new Date(item.downloadedAt).toLocaleDateString()}
           </Text>
@@ -141,7 +154,8 @@ export function LibraryItemRow({
         )}
         <Pressable
           accessibilityRole="button"
-          disabled={busy}
+          accessibilityState={{ disabled: busy || !available }}
+          disabled={busy || !available}
           onPress={() => onSave(item)}
           style={styles.action}
         >
@@ -149,7 +163,8 @@ export function LibraryItemRow({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          disabled={busy}
+          accessibilityState={{ disabled: busy || !available }}
+          disabled={busy || !available}
           onPress={() => onShare(item)}
           style={styles.action}
         >

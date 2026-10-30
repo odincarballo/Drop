@@ -2,14 +2,6 @@ import Foundation
 import ImageIO
 import UIKit
 
-enum DropLibraryStorageError: Error {
-  case invalidIdentifier
-  case invalidSource
-  case invalidManagedPath
-  case missingFile
-  case invalidImage
-}
-
 public final class DropLibraryStorage {
   private let manager: FileManager
   public let root: URL
@@ -128,14 +120,7 @@ public final class DropLibraryStorage {
 
   public func managedArtwork(id: String) throws -> (URL, Int64)? {
     let url = artwork.appendingPathComponent("\(try Self.validatedID(id)).jpg")
-    guard let size = try regularSize(url) else { return nil }
-    guard size > 0, size <= 2 * 1_048_576,
-          let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-          CGImageSourceGetCount(source) > 0,
-          CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete else {
-      try manager.removeItem(at: url)
-      return nil
-    }
+    guard let size = try DropLibraryFileInspection.artworkSize(url, manager: manager) else { return nil }
     return (url, size)
   }
 
@@ -144,7 +129,19 @@ public final class DropLibraryStorage {
   }
 
   func removeArtwork(id: String) throws {
-    if let (url, _) = try managedArtwork(id: id) { try manager.removeItem(at: url) }
+    let url = artwork.appendingPathComponent("\(try Self.validatedID(id)).jpg")
+    // Explicit deletion may remove an invalid regular image; inspection may not.
+    if try regularSize(url) != nil { try manager.removeItem(at: url) }
+  }
+
+  func preparedSource(relative: String) throws -> (URL, Int64)? {
+    guard isOwnedCachePath(relative) else { throw DropLibraryStorageError.invalidSource }
+    let url = cache.appendingPathComponent(relative).standardizedFileURL
+    guard url.path.hasPrefix(cache.path + "/"), url.resolvingSymlinksInPath() == url else {
+      throw DropLibraryStorageError.invalidSource
+    }
+    guard let size = try regularSize(url) else { return nil }
+    return (url, size)
   }
 
   func mediaFiles() throws -> [String] {
@@ -156,17 +153,7 @@ public final class DropLibraryStorage {
   }
 
   func artworkFiles() throws -> [String] {
-    try manager.contentsOfDirectory(at: artwork, includingPropertiesForKeys: nil)
-      .compactMap { url in
-        guard url.pathExtension.lowercased() == "jpg",
-              let id = try? Self.validatedID(url.deletingPathExtension().lastPathComponent),
-              (try? managedArtwork(id: id)) != nil else {
-          // Artwork is an owned directory. Remove only regular files, not links or directories.
-          if (try? regularSize(url)) != nil { try? manager.removeItem(at: url) }
-          return nil
-        }
-        return id
-      }
+    try DropLibraryFileInspection.artworkIDs(in: artwork, manager: manager)
   }
 
   func saveJPEG(_ data: Data, id: String) throws -> (URL, Int64) {
@@ -192,12 +179,6 @@ public final class DropLibraryStorage {
   }
 
   private func regularSize(_ url: URL) throws -> Int64? {
-    guard manager.fileExists(atPath: url.path) else { return nil }
-    let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-    guard values.isRegularFile == true, values.isSymbolicLink != true,
-          url.resolvingSymlinksInPath() == url.standardizedFileURL else {
-      throw DropLibraryStorageError.invalidManagedPath
-    }
-    return Int64(values.fileSize ?? 0)
+    try DropLibraryFileInspection.regularSize(url, manager: manager)
   }
 }

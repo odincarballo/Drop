@@ -2,6 +2,10 @@ export type LibrarySourceKind = 'youtube' | 'direct';
 export type LibraryMediaType = 'video' | 'audio';
 export type LibraryLifecycle = 'pending' | 'ready' | 'deleting';
 
+// Derived from storage on each read; never persisted as lifecycle.
+export type LibraryAvailability =
+  'available' | 'missing' | 'invalid' | 'unreadable';
+
 export type LibraryMetadata = {
   sourceKind: LibrarySourceKind;
   sourceVideoId?: string | null;
@@ -27,6 +31,20 @@ export type LibraryItem = LibraryMetadata & {
   playbackPositionSeconds: number;
   completedAt: string | null;
   lifecycle: LibraryLifecycle;
-  uri: string;
+  availability: LibraryAvailability;
+  mediaSizeOnDisk: number | null;
+  uri: string | null;
   artworkUri: string | null;
 };
+
+export type AvailableLibraryItem = LibraryItem & { uri: string };
+
+export function isAvailableLibraryItem(
+  item: LibraryItem,
+): item is AvailableLibraryItem {
+  return (
+    item.availability === 'available' &&
+    typeof item.uri === 'string' &&
+    item.uri.length > 0
+  );
+}

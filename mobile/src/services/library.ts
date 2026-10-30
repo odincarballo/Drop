@@ -1,6 +1,12 @@
 import { requireOptionalNativeModule } from 'expo';
 
-import type { LibraryItem, LibraryMetadata } from '@/models/library';
+import {
+  isAvailableLibraryItem,
+  type AvailableLibraryItem,
+  type LibraryAvailability,
+  type LibraryItem,
+  type LibraryMetadata,
+} from '@/models/library';
 import {
   openLibraryDatabase,
   withLibraryForeignKeyTransaction,
@@ -29,6 +35,7 @@ type NativeLibrary = {
     sizeBytes: number;
   }>;
   statMedia(relative: string): Promise<NativeStat>;
+  statPreparedSource(relative: string): Promise<NativeStat>;
   statArtwork(id: string): Promise<NativeStat>;
   listMedia(): Promise<string[]>;
   listArtwork(): Promise<string[]>;
@@ -43,7 +50,7 @@ type NativeLibrary = {
 
 export type LibraryRow = Omit<
   LibraryItem,
-  'uri' | 'artworkUri' | 'thumbnailUrl'
+  'uri' | 'artworkUri' | 'thumbnailUrl' | 'availability' | 'mediaSizeOnDisk'
 > & {
   sourceCacheRelativePath: string | null;
 };
@@ -140,18 +147,24 @@ async function reconcile(): Promise<void> {
         await finishDeletion(row);
         continue;
       }
+      // A confirmed record is durable metadata, not proof of current disk availability.
+      // Only an explicit deleting tombstone authorizes removing it and its relations.
+      if (row.lifecycle === 'ready') continue;
       let stat = await storage.statMedia(row.relativeMediaPath);
       if (
         row.lifecycle === 'pending' &&
         !stat.exists &&
         row.sourceCacheRelativePath
       ) {
-        try {
+        // Inspection errors are not evidence of abandonment. Let the outer catch
+        // retain pending until a later startup can inspect both locations safely.
+        const source = await storage.statPreparedSource(
+          row.sourceCacheRelativePath,
+        );
+        if (source.exists) {
+          if (!source.sizeBytes || source.sizeBytes !== row.sizeBytes) continue;
           const ext = row.relativeMediaPath.split('.').at(-1) ?? '';
           await storage.movePrepared(row.sourceCacheRelativePath, row.id, ext);
-          stat = await storage.statMedia(row.relativeMediaPath);
-        } catch {
-          // Missing/invalid source is handled below; other failures are retried next launch.
           stat = await storage.statMedia(row.relativeMediaPath);
         }
       }
@@ -159,11 +172,15 @@ async function reconcile(): Promise<void> {
         !stat.exists ||
         !stat.sizeBytes ||
         stat.sizeBytes <= 0 ||
-        (row.sizeBytes > 0 && row.sizeBytes !== stat.sizeBytes)
+        row.sizeBytes <= 0 ||
+        row.sizeBytes !== stat.sizeBytes
       ) {
-        await deleteLibraryRow(row.id);
-        if (stat.exists) await storage.removeMedia(row.relativeMediaPath);
-        await storage.removeArtwork(row.id);
+        // Only an unconfirmed import absent from both known locations is
+        // abandoned. Existing partial files may still be restored: do not erase.
+        if (!stat.exists) {
+          await deleteLibraryRow(row.id);
+          await storage.removeArtwork(row.id);
+        }
         continue;
       }
       if (row.lifecycle === 'pending') {
@@ -174,21 +191,8 @@ async function reconcile(): Promise<void> {
           row.id,
         );
       }
-      if (row.relativeArtworkPath) {
-        const art = await storage.statArtwork(row.id);
-        if (!art.exists) {
-          await db.runAsync(
-            'UPDATE library_items SET relativeArtworkPath = NULL, artworkSizeBytes = 0 WHERE id = ?',
-            row.id,
-          );
-        } else if (row.artworkSizeBytes !== art.sizeBytes) {
-          await db.runAsync(
-            'UPDATE library_items SET artworkSizeBytes = ? WHERE id = ?',
-            art.sizeBytes ?? 0,
-            row.id,
-          );
-        }
-      }
+      // Artwork references survive missing/partial images; hydration uses a
+      // fallback without changing the stored reference or expected metadata.
     } catch (error) {
       console.warn('[Drop library] Could not reconcile item', row.id, error);
     }
@@ -210,11 +214,9 @@ async function reconcile(): Promise<void> {
     }
   }
   const artworkOwners = new Set(
-    (
-      await db.getAllAsync<{ id: string }>(
-        "SELECT id FROM library_items WHERE relativeArtworkPath IS NOT NULL AND lifecycle = 'ready'",
-      )
-    ).map((row) => row.id),
+    (await db.getAllAsync<{ id: string }>('SELECT id FROM library_items')).map(
+      (row) => row.id,
+    ),
   );
   for (const id of await storage.listArtwork()) {
     if (!artworkOwners.has(id)) {
@@ -237,38 +239,52 @@ export function initializeLibrary(): Promise<void> {
   return startup;
 }
 
-async function attach(row: Row): Promise<LibraryItem | null> {
-  const stat = await native().statMedia(row.relativeMediaPath);
-  if (!stat.exists || !stat.uri || stat.sizeBytes !== row.sizeBytes)
-    return null;
-  const art = row.relativeArtworkPath
-    ? await native().statArtwork(row.id)
-    : null;
+async function attach(row: Row): Promise<LibraryItem> {
+  let stat: NativeStat | null = null;
+  let availability: LibraryAvailability;
+  try {
+    stat = await native().statMedia(row.relativeMediaPath);
+    availability = !stat.exists
+      ? 'missing'
+      : !stat.uri ||
+          !stat.sizeBytes ||
+          stat.sizeBytes <= 0 ||
+          stat.sizeBytes !== row.sizeBytes
+        ? 'invalid'
+        : 'available';
+  } catch {
+    availability = 'unreadable';
+  }
+  let art: NativeStat | null = null;
+  if (row.relativeArtworkPath) {
+    try {
+      art = await native().statArtwork(row.id);
+    } catch {
+      /* Optional; retry on next read. */
+    }
+  }
   return {
     ...row,
-    sizeBytes: stat.sizeBytes ?? row.sizeBytes,
+    availability,
+    mediaSizeOnDisk:
+      stat?.exists &&
+      typeof stat.sizeBytes === 'number' &&
+      Number.isFinite(stat.sizeBytes) &&
+      stat.sizeBytes >= 0
+        ? stat.sizeBytes
+        : null,
     artworkSizeBytes: art?.exists ? (art.sizeBytes ?? 0) : 0,
     thumbnailUrl: null,
-    uri: stat.uri,
+    uri: availability === 'available' ? stat!.uri! : null,
     artworkUri: art?.exists ? (art.uri ?? null) : null,
   };
 }
 
-/** Hydrate SQL rows through Biblioteca's existing physical-media validation. */
+/** Keep durable records visible; availability is re-evaluated without SQL writes. */
 export async function hydrateLibraryRows(
   rows: LibraryRow[],
 ): Promise<LibraryItem[]> {
-  const items = await Promise.all(
-    rows.map(async (row) => {
-      try {
-        return await attach(row);
-      } catch (error) {
-        console.warn('[Drop library] Invalid item omitted', row.id, error);
-        return null;
-      }
-    }),
-  );
-  return items.filter((item): item is LibraryItem => item !== null);
+  return Promise.all(rows.map(attach));
 }
 
 export async function listLibrary(): Promise<LibraryItem[]> {
@@ -290,7 +306,8 @@ export async function getLibraryItem(id: string): Promise<LibraryItem | null> {
 export async function librarySpaceUsed(): Promise<number> {
   const items = await listLibrary();
   return items.reduce(
-    (total, item) => total + item.sizeBytes + item.artworkSizeBytes,
+    (total, item) =>
+      total + (item.mediaSizeOnDisk ?? 0) + item.artworkSizeBytes,
     0,
   );
 }
@@ -298,7 +315,7 @@ export async function librarySpaceUsed(): Promise<number> {
 export async function promoteToLibrary(
   uri: string,
   metadata: LibraryMetadata,
-): Promise<LibraryItem> {
+): Promise<AvailableLibraryItem> {
   await initializeLibrary();
   const storage = native();
   const db = await openLibraryDatabase();
@@ -363,7 +380,8 @@ export async function promoteToLibrary(
   const row = await rowFor(prepared.id);
   if (!row) throw new Error('No se pudo confirmar el archivo en Biblioteca.');
   const item = await attach(row);
-  if (!item) throw new Error('No se pudo verificar el archivo en Biblioteca.');
+  if (!isAvailableLibraryItem(item))
+    throw new Error('No se pudo verificar el archivo en Biblioteca.');
   changed();
   if (safe.thumbnailUrl && safe.sourceKind === 'youtube') {
     void storage
@@ -388,7 +406,7 @@ export async function promoteToLibrary(
 
 export async function withLibraryLease<T>(
   id: string,
-  operation: (item: LibraryItem) => Promise<T>,
+  operation: (item: AvailableLibraryItem) => Promise<T>,
 ): Promise<T> {
   await initializeLibrary();
   leases.set(id, (leases.get(id) ?? 0) + 1);
@@ -397,7 +415,8 @@ export async function withLibraryLease<T>(
     if (!row || row.lifecycle !== 'ready')
       throw new Error('El archivo ya no está en Biblioteca.');
     const item = await attach(row);
-    if (!item) throw new Error('El archivo ya no está disponible.');
+    if (!isAvailableLibraryItem(item))
+      throw new Error('El archivo ya no está disponible.');
     return await operation(item);
   } finally {
     const remaining = (leases.get(id) ?? 1) - 1;

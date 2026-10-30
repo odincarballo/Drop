@@ -174,7 +174,8 @@ export default function LibraryScreen() {
     (item) => filter === 'all' || item.mediaType === filter,
   );
   const used = items.reduce(
-    (total, item) => total + item.sizeBytes + item.artworkSizeBytes,
+    (total, item) =>
+      total + (item.mediaSizeOnDisk ?? 0) + item.artworkSizeBytes,
     0,
   );
 

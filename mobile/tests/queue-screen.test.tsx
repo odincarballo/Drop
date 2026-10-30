@@ -51,6 +51,8 @@ function media(id: string, title: string): LibraryItem {
     relativeMediaPath: `Media/${id}.m4a`,
     relativeArtworkPath: null,
     sizeBytes: 100,
+    availability: 'available' as const,
+    mediaSizeOnDisk: 100,
     artworkSizeBytes: 0,
     downloadedAt: '2026-10-26T00:00:00Z',
     playbackPositionSeconds: 0,

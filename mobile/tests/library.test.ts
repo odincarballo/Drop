@@ -34,6 +34,8 @@ const db = {
     const all = [...rows.values()];
     if (sql.includes('relativeMediaPath FROM'))
       return all.map((row) => ({ relativeMediaPath: row.relativeMediaPath }));
+    if (sql === 'SELECT id FROM library_items')
+      return all.map((row) => ({ id: row.id }));
     if (sql.includes('id FROM') && sql.includes('relativeArtworkPath'))
       return all
         .filter((row) => row.relativeArtworkPath && row.lifecycle === 'ready')
@@ -148,6 +150,11 @@ const native = {
       sizeBytes: size,
     };
   }),
+  statPreparedSource: jest.fn(async (relative: string) =>
+    cache.has(relative)
+      ? { exists: true, sizeBytes: cache.get(relative) }
+      : { exists: false },
+  ),
   statMedia: jest.fn(async (relative: string) =>
     media.has(relative)
       ? {
@@ -323,7 +330,7 @@ test('a moved file with a changed size is never published', async () => {
   expect(media.size).toBe(0);
 });
 
-test('restart clears missing pending/ready and orphan media, but retains valid ready', async () => {
+test('restart clears abandoned pending and orphan media but preserves unavailable ready metadata', async () => {
   rows.set('00000000-0000-0000-0000-000000000001', {
     id: '00000000-0000-0000-0000-000000000001',
     lifecycle: 'pending',
@@ -337,8 +344,10 @@ test('restart clears missing pending/ready and orphan media, but retains valid r
   });
   media.set('Media/00000000-0000-0000-0000-000000000003.mp4', 100);
   const library = service();
-  expect(await library.listLibrary()).toEqual([]);
-  expect(rows.size).toBe(0);
+  expect(await library.listLibrary()).toEqual([
+    expect.objectContaining({ availability: 'missing', uri: null }),
+  ]);
+  expect(rows.size).toBe(1);
   expect(media.size).toBe(0);
 });
 

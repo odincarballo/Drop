@@ -284,7 +284,11 @@ test('listCollections counts ready only, item queries preserve order and validat
   media.delete('Media/new.mp4');
   expect(
     (await service.listCollectionItems(c.id)).map((item) => item.id),
-  ).toEqual(['old']);
+  ).toEqual(['new', 'old']);
+  expect((await service.listCollectionItems(c.id))[0]?.availability).toBe(
+    'missing',
+  );
+  expect((await service.listCollections())[0]?.itemCount).toBe(2);
   expect(await library.librarySpaceUsed()).toBe(100);
 });
 
@@ -381,7 +385,7 @@ test('Collections mutations never invoke physical-media operations', async () =>
   expect(storage.saveArtwork).not.toHaveBeenCalled();
 });
 
-test('startup reconciliation removes missing ready item and cascades membership', async () => {
+test('startup reconciliation preserves missing ready item and its membership', async () => {
   await seedItem('i');
   const c = await service.createCollection('C');
   await service.addItemToCollection(c.id, 'i');
@@ -397,7 +401,10 @@ test('startup reconciliation removes missing ready item and cascades membership'
   });
   service = require('@/services/collections') as CollectionsService;
   await service.listCollections();
-  expect(await memberships('i')).toEqual([]);
+  expect(await memberships('i')).toHaveLength(1);
   expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
-  expect((await service.listCollections())[0]?.itemCount).toBe(0);
+  expect((await service.listCollections())[0]?.itemCount).toBe(1);
+  expect((await service.listCollectionItems(c.id))[0]?.availability).toBe(
+    'missing',
+  );
 });

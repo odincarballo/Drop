@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreVideo
+import SQLite3
 import Foundation
 
 // Standalone macOS test double; the shipping build imports DropLibrary instead.
@@ -637,6 +638,72 @@ struct PlaybackServiceTests {
       try await consumed(queue, 1)
       let consumedOrder = await queue.consumedIDs()
       try check(consumedOrder == [entryY])
+      _ = try await service.close()
+    }
+
+    // A retained Library row whose file is absent must not consume its manual
+    // occurrences or disturb CURRENT. The next available entry may be prepared.
+    do {
+      let missingURL = root.appendingPathComponent("Media/\(second).m4a")
+      let originalData = try Data(contentsOf: missingURL)
+      try FileManager.default.removeItem(at: missingURL)
+      defer { try? originalData.write(to: missingURL) }
+      let records = makeRecords()
+      // This contract fixture uses the production SQLite queue repository,
+      // not a predetermined consume response. It is unrelated to app containers.
+      let databaseURL = root.appendingPathComponent("unit1-missing-next.sqlite")
+      var handle: OpaquePointer?
+      try check(sqlite3_open(databaseURL.path, &handle) == SQLITE_OK)
+      let db = handle!
+      let sql = """
+        PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE library_items (id TEXT PRIMARY KEY NOT NULL,
+          lifecycle TEXT NOT NULL CHECK(lifecycle IN ('pending','ready','deleting')));
+        CREATE TABLE playback_queue (id TEXT PRIMARY KEY NOT NULL,
+          itemId TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL CHECK(position >= 0), addedAt TEXT NOT NULL);
+        CREATE UNIQUE INDEX playback_queue_position ON playback_queue(position);
+        CREATE INDEX playback_queue_by_item ON playback_queue(itemId, position);
+        INSERT INTO library_items VALUES ('\(first)', 'ready'), ('\(second)', 'ready'), ('\(third)', 'ready');
+        INSERT INTO playback_queue VALUES ('\(entryX)', '\(second)', 0, '2026-01-01'),
+          ('\(entryY)', '\(third)', 1, '2026-01-01');
+        PRAGMA user_version = 3;
+        """
+      let seedResult = sqlite3_exec(db, sql, nil, nil, nil)
+      sqlite3_close(db)
+      try check(seedResult == SQLITE_OK)
+      let queue = SQLitePlaybackManualQueueRepository(databaseURL: databaseURL)
+      let pending = try await queue.pendingEntries()
+      let service = DropPlaybackService(storage: DropLibraryStorage(root: root), repository: records,
+        manualQueue: queue, system: FakePlaybackSystemBridge(),
+        ratePreference: FakePlaybackRatePreference())
+      _ = try await service.open(id: first)
+      try await ready(service)
+      let player = ObjectIdentifier(service.player)
+      let item = service.player.currentItem
+      _ = try await service.play()
+      try await playing(service, id: first)
+      try await prepared(service, id: third)
+      let after = try await queue.pendingEntries()
+      try check(after == pending) // Includes both IDs, positions and lifecycle.
+      try check(ObjectIdentifier(service.player) == player && service.player.currentItem === item)
+      try check(service.snapshot()["status"] as? String == "playing")
+      try check(service.isRetaining(first) && !service.isRetaining(second))
+      try await naturalEnd(service)
+      try await playing(service, id: third)
+      for _ in 0..<150 {
+        if try await queue.pendingEntries().count == 1 { break }
+        try await Task.sleep(nanoseconds: 20_000_000)
+      }
+      let remaining = try await queue.pendingEntries()
+      try check(remaining.count == 1 && remaining[0].entryID == entryX &&
+        remaining[0].itemID == second && remaining[0].position == 0)
+      _ = try await service.close()
+      try originalData.write(to: missingURL)
+      _ = try await service.open(id: second)
+      try await ready(service)
+      try check(service.player.rate == 0) // Reappearance alone never autoplays.
       _ = try await service.close()
     }
 

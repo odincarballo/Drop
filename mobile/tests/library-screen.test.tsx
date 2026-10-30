@@ -97,6 +97,8 @@ const item = {
   relativeMediaPath: 'Media/a.m4a',
   relativeArtworkPath: null,
   sizeBytes: 100_000_000,
+  availability: 'available' as const,
+  mediaSizeOnDisk: 100_000_000,
   artworkSizeBytes: 0,
   durationSeconds: 3600,
   resolution: null,
@@ -537,4 +539,56 @@ test('unsupported format retains export/share/delete but does not navigate', asy
   ).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Compartir' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Eliminar' })).toBeTruthy();
+});
+
+test('unavailable record is visible, blocks playback/export and allows explicit Delete', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  jest
+    .mocked(listLibrary)
+    .mockResolvedValue([
+      { ...item, availability: 'missing', mediaSizeOnDisk: null, uri: null },
+    ] as never);
+  await render(<LibraryScreen />);
+  const row = await screen.findByRole('button', {
+    name: 'Podcast largo, archivo no disponible',
+  });
+  expect(row).toBeDisabled();
+  expect(screen.getByText(/Se conservan sus datos/)).toBeTruthy();
+  expect(
+    screen.getByRole('button', { name: 'Guardar en Archivos' }),
+  ).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Compartir' })).toBeDisabled();
+  await fireEvent.press(row);
+  await fireEvent.press(screen.getByText('Guardar en Archivos'));
+  await fireEvent.press(screen.getByText('Compartir'));
+  expect(playback.startInContext).not.toHaveBeenCalled();
+  expect(withLibraryLease).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByText('Eliminar'));
+  const buttons = alert.mock.calls.at(-1)?.[2];
+  if (Array.isArray(buttons)) buttons[1]?.onPress?.();
+  await waitFor(() => expect(deleteLibraryItem).toHaveBeenCalledWith(item.id));
+});
+
+test('returning to Library rechecks a recovered medium and enables its actions', async () => {
+  jest
+    .mocked(listLibrary)
+    .mockResolvedValue([
+      { ...item, availability: 'missing', mediaSizeOnDisk: null, uri: null },
+    ] as never);
+  const first = await render(<LibraryScreen />);
+  expect(
+    await screen.findByRole('button', {
+      name: 'Podcast largo, archivo no disponible',
+    }),
+  ).toBeDisabled();
+  await first.unmount();
+  jest.mocked(listLibrary).mockResolvedValue([item] as never);
+  await render(<LibraryScreen />);
+  expect(
+    await screen.findByRole('button', { name: 'Reproducir Podcast largo' }),
+  ).toBeEnabled();
+  expect(
+    screen.getByRole('button', { name: 'Guardar en Archivos' }),
+  ).toBeEnabled();
+  expect(playback.startInContext).not.toHaveBeenCalled();
 });

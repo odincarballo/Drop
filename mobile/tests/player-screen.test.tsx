@@ -89,6 +89,8 @@ jest.mock(
 );
 
 const audio = {
+  availability: 'available',
+  uri: 'file:///library/audio.m4a',
   id: mockId,
   title: 'Podcast local',
   mediaType: 'audio',

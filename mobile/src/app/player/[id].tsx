@@ -133,7 +133,7 @@ export default function PlayerScreen() {
         try {
           const found = await getLibraryItem(id);
           if (!active) return;
-          if (!found) {
+          if (!found || found.availability !== 'available') {
             setError('Este archivo ya no está disponible en Biblioteca.');
             return;
           }

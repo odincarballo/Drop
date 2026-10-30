@@ -156,6 +156,11 @@ export default function QueueScreen() {
             >
               {title}
             </Text>
+            {row.item && row.item.availability !== 'available' && (
+              <Text style={{ color: colors.secondary }}>
+                Archivo no disponible. La entrada se conserva.
+              </Text>
+            )}
             {row.metadataFailed && (
               <Text style={{ color: colors.secondary }}>
                 No se pudo cargar la información. Puedes quitar esta entrada.

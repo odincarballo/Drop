@@ -79,11 +79,14 @@ jest.mock(
 
 const item = {
   id: 'item',
+  uri: 'file:///library/id.m4a',
   lifecycle: 'ready',
   title: 'Podcast',
   mediaType: 'audio',
   relativeMediaPath: 'Media/id.m4a',
   sizeBytes: 100,
+  availability: 'available' as const,
+  mediaSizeOnDisk: 100,
   durationSeconds: 100,
   playbackPositionSeconds: 25,
   downloadedAt: '2026-10-01T00:00:00.000Z',
@@ -278,3 +281,31 @@ test('late result from collection A cannot overwrite collection B', async () => 
   expect(screen.queryByText('Obsoleto')).toBeNull();
   expect(screen.getByText('Podcast')).toBeTruthy();
 });
+
+test.each(['collection', 'uncollected'] as const)(
+  '%s keeps unavailable records visible and non-playable',
+  async (kind) => {
+    const unavailable = {
+      ...item,
+      availability: 'missing',
+      uri: null,
+      mediaSizeOnDisk: null,
+    };
+    jest.mocked(listCollectionItems).mockResolvedValue([unavailable] as never);
+    jest.mocked(listUncollectedItems).mockResolvedValue([unavailable] as never);
+    await render(
+      kind === 'collection' ? (
+        <CollectionItemsView kind="collection" collectionId="c" />
+      ) : (
+        <CollectionItemsView kind="uncollected" />
+      ),
+    );
+    const row = await screen.findByRole('button', {
+      name: 'Podcast, archivo no disponible',
+    });
+    expect(row).toBeDisabled();
+    expect(screen.getByText('Eliminar')).toBeEnabled();
+    await fireEvent.press(row);
+    expect(playback.startInContext).not.toHaveBeenCalled();
+  },
+);

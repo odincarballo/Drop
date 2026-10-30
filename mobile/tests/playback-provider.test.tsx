@@ -54,6 +54,8 @@ const item = (id: string): LibraryItem => ({
   relativeMediaPath: `Media/${id}.m4a`,
   relativeArtworkPath: `Artwork/${id}.jpg`,
   sizeBytes: 100,
+  availability: 'available' as const,
+  mediaSizeOnDisk: 100,
   artworkSizeBytes: 20,
   downloadedAt: '2026-10-21T00:00:00Z',
   playbackPositionSeconds: 0,

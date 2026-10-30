@@ -288,8 +288,8 @@ export async function addItemToCollection(
   collectionId: string,
   itemId: string,
 ): Promise<void> {
-  // Startup reconciliation removes physically missing rows. A file may still
-  // disappear later; the next reconciliation will delete its row and cascade.
+  // Membership belongs to durable metadata even when its medium is unavailable.
+  // Only explicit Library deletion removes the row and cascades its memberships.
   await initializeLibrary();
   let changed = false;
   try {

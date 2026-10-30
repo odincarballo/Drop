@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { useRouter, type Href } from 'expo-router';
 
-import type { LibraryItem } from '@/models/library';
+import { isAvailableLibraryItem, type LibraryItem } from '@/models/library';
 import {
   saveLocalFileToFiles,
   withNamedLibraryFile,
@@ -23,6 +23,10 @@ export function useLibraryItemActions(
   const [busyId, setBusyId] = useState<string | null>(null);
 
   function open(item: LibraryItem, visibleItems: readonly LibraryItem[]) {
+    if (!isAvailableLibraryItem(item)) {
+      setError('El archivo no está disponible. Sus datos se conservan.');
+      return;
+    }
     if (!isPlayableLibraryItem(item)) {
       Alert.alert(
         'Formato no compatible',

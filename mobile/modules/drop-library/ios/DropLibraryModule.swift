@@ -124,6 +124,13 @@ public final class DropLibraryModule: Module {
               "uri": url.absoluteString, "sizeBytes": size]
     }
 
+    AsyncFunction("statPreparedSource") { (relative: String) throws -> [String: Any] in
+      guard let (_, size) = try DropLibraryStorage().preparedSource(relative: relative) else {
+        return ["exists": false]
+      }
+      return ["exists": true, "sizeBytes": size]
+    }
+
     AsyncFunction("statMedia") { (relative: String) throws -> [String: Any] in
       let storage = try DropLibraryStorage()
       guard let (url, size) = try storage.managedMedia(relative: relative) else {
