@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "platforms": ["ios"],
     "ios": {
-      "buildNumber": "7",
+      "buildNumber": "8",
       "supportsTablet": false,
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
