@@ -3,27 +3,26 @@
 Actualizado: 30 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-- **Estado:** corrección `/live/{videoId}` cerrada funcionalmente en prueba
-  aislada; release 1.4.1 build 9 preparado localmente. **No desplegado** en
-  la aplicación original. Compilación, firma e instalación de build 9 pendientes.
-- **Git:** main permanece en `3c745cf9a790a28b3e6e5c7c1122a0dac12888d2`,
-  árbol `e2f2b6a90eb37de7e415d99f427efe31c48096cd`. Ese commit incorpora
-  exclusivamente normalización Python y sus pruebas. Release independiente:
-  `codex/release-v1.4.1-build9`, basado en main; obtener SHA y árbol con Git.
-  Sin integración del release en main, push ni tags nuevos. El tag v1.4.0
-  conserva `7927dec6429bdc85fbc19082ad62c18de99ffa73`.
-- **Versionado preparado:** Expo y package 1.4.1; iOS buildNumber 9.
-  `mobile/app.config.js` mantiene Bundle ID por entorno; futura original:
-  `com.odincarballo.mediadrop`, Team `HK927RUDLZ`. No fijar identidades de
-  prueba en fuentes. Expo generará Info.plist/proyecto nativo desde esta
-  configuración en el checkout de build; todavía no se ha generado ni compilado.
+- **Estado:** Drop **1.4.1 build 9 instalada y validada en la original**;
+  corrección `/live/{videoId}` integrada y desplegada. Release cerrado localmente.
+- **Git:** parche funcional `3c745cf9a790a28b3e6e5c7c1122a0dac12888d2`;
+  código instalado `ada0298813d6a57aa96d6dac6972f6741b687535`, árbol
+  `947528629c20cb0184a77976c56cbe34604ccf68`. El commit documental de cierre
+  es posterior y modifica únicamente este archivo: no fue compilado ni instalado.
+  Main y `codex/release-v1.4.1-build9` quedan sincronizados por fast-forward;
+  obtener el SHA documental y árbol final mediante Git. Sin merge commit,
+  push ni tags nuevos. El tag v1.4.0 conserva
+  `7927dec6429bdc85fbc19082ad62c18de99ffa73`.
+- **Identidad instalada:** `com.odincarballo.mediadrop`, Team `HK927RUDLZ`,
+  versión 1.4.1 build 9. Bundle ID por entorno en `mobile/app.config.js`;
+  dependencias y schema SQLite v3 sin cambios. No fijar IDs de prueba en fuentes.
 - **Parche:** `/live/{videoId}` se normaliza a `/watch?v={videoId}` con
   validaciones de URL existentes; se conservan los rechazos `is_live`,
   `is_upcoming` y `post_live`. No habilita directos activos ni evade restricciones.
 - **Automatización aprobada:** 54 pruebas Python PASS y 27 móviles PASS sobre
   los hashes del parche integrado. Evidencia `youtube-live-normalization-2026-10-30-b2366s24`
   bajo `DropValidationEvidence`. No se repiten por cambios de metadatos y
-  documentación; la candidata definitiva requiere su propia build verificable.
+  documentación; la build definitiva firmada también fue verificada.
 - **Validación física aislada PASS:** app
   `com.odincarballo.mediadrop.live141test`, versión declarada 1.4.0 build 8,
   fuente `3c745cf9a790a28b3e6e5c7c1122a0dac12888d2`. Analizó el enlace
@@ -40,51 +39,69 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   fallback HTTP en código, pero **no hubo captura de tráfico del backend**.
   No certificar cero solicitudes por esta prueba. Otros formatos no se probaron
   físicamente; 47 formatos reportados en macOS no equivalen a 47 descargas iOS.
-- **Original instalada:** continúa en **1.4.0 build 8**, fuente
-  `3dab34bb01b2eace6fa14778d5113513693b8076`, árbol
-  `4689d14b232d60b667477ad494937b18355ccb25`. Último despliegue PASS in-place;
-  15 LibraryItems, 15 medios, 15 portadas, 1 Collection, 0 memberships y cola
-  vacía documentados entonces. Durante prueba aislada: identidad y 253 entradas
-  del inventario conservaron metadatos; no se volvieron a copiar SQLite ni
-  medios originales para verificar hashes. No inferir inventario actual íntegro
-  de ese control limitado. Revalidar y respaldar antes de otra instalación.
-- **Original y respaldos preservados:** evidencia de build
-  `original-build8-signed-2026-10-30-m0w9vd3m`, instalación
-  `original-build8-inplace-2026-10-30-mk02dlzp/FINAL-RESULT.json`, respaldo previo
-  `drop-original-v1.4.0-build7-pre-build8-updated-2026-10-30-o_5lpbje`, todos bajo
-  `DropValidationEvidence`. No restaurar automáticamente ni sobrescribir copias.
-- **Firma original:** provisioning vence **04/11/2026, 11:30:36 CDMX**
-  (2026-11-04T17:30:36Z). Misma cuenta, Team, App ID, dispositivo autorizado,
-  certificado vigente con clave privada y entitlements compatibles requeridos
-  para build 9. No se renovó el perfil, no se firmó ni instaló en este bloque.
-  La firma de live141test no sustituye la original. Solicitar perfil nuevo en
-  Xcode con autorización posterior; automatic signing puede reutilizar el
-  vigente y no garantiza renovación. Si exige autenticación, usar Settings →
-  Accounts con la misma cuenta; detener ante cambio inesperado de identidad,
-  permisos o certificado. Verificar el perfil efectivamente emitido.
+- **Build original verificada:** Release iPhoneOS ARM64, dos jobs, Hermes,
+  Swift/CPython/bridge y Python `/live/` empaquetados; firma deep/strict PASS,
+  mismo certificado y entitlements compatibles con build 8, sin instrumentación.
+  SHA-256 del ejecutable firmado:
+  `b814b16d7f05b45a65de8c2160ca85671bc4f7bd2eb219ee202af4dd987be15e`.
+  Artefacto y manifiestos bajo `DropValidationEvidence`:
+  `original141-build9-final-2026-10-30-1jkxxp4a/Drop.app` y `FINAL-RESULT.json`.
+- **Instalación original in-place PASS:** una actualización, sin uninstall,
+  reset ni restauración. Antes y después, previamente a reproducir:
+  **13 LibraryItems ready, 13 medios, 13 portadas, 1 Collection,
+  0 memberships y 0 entradas de Manual Queue**. IDs, metadatos, progreso y
+  relaciones idénticos; 26 tamaños y SHA-256 coincidentes con el respaldo.
+  SQLite v3 integrity_check=ok y FK=0 antes, después y tras el smoke.
+  Evidencia de instalación:
+  `/Users/odincarballo/Library/Application Support/DropValidationEvidence/original141-build9-install-2026-10-30-se0axyn4/FINAL-RESULT.json`.
+- **Smoke original:** apertura sin Metro y reproducción confirmada por el usuario
+  sin errores. Único cambio posterior: en «La forma CORRECTA de programar con IA
+  en 2027: el método ODD», posición de 1261 s a 25.000150217 s y `completedAt`
+  de fecha existente a null tras volver a reproducir un archivo completado.
+  Es **comportamiento observado, sin diagnóstico definitivo**; no se declara
+  corregido ni se interpreta como prueba de ausencia de defectos de progreso.
+  Otros 12 registros y relaciones intactos. Tras reproducir se verificó que los
+  metadatos de los 26 archivos no cambiaron; no se repitieron sus hashes completos.
+- **Respaldo previo preservado:** bajo `DropValidationEvidence`,
+  `drop-original-v1.4.0-build8-pre-build9-2026-10-30-aqz26b4c`, aproximadamente
+  1.16 GiB; SQLite/WAL/SHM, 13 medios, 13 portadas, inventario y manifiesto.
+  Dos lecturas independientes idénticas y metadatos estables; normalización solo
+  sobre copia local. El paso histórico de 15 a 13 elementos corresponde a dos
+  eliminaciones confirmadas por el usuario; ningún hash de archivo retenido cambió.
+  Respaldos e informes anteriores conservados; no restaurar automáticamente.
+- **Firma vigente:** perfil original renovado
+  `549b057e-e195-4b9a-9315-d6f3241efd9f`, vence **06/11/2026, 17:43:54 CDMX**
+  (2026-11-06T23:43:54Z). Mismo Team, certificado, App ID, entitlements y
+  dispositivo. Perfil anterior apartado con copia verificada, no revocado;
+  no se modificaron los otros perfiles. Para renovar de nuevo, autorización
+  específica y verificación de la fecha real; no basta con que Xcode firme.
 - **Unidad 1 y protocolo:** integrados en `9058c430eb55cd3c506e5d75bc330aecd8e4f99a`;
   commits originales `c4134d41cb0e60256fca29aa7e2bf826a7a693bf` y
   `7186eb8037ecad21bb1d5fa1f00c7f7085b7f59b` preservados. Protección de
   Biblioteca desplegada en build 8; schema v3 sin cambios en este release.
-- **Incidencia independiente:** NOT_READY no apareció en la sesión aislada;
-  origen histórico pendiente de investigación. No se declara corregido.
-- **Protección:** árbol instrumentado `fix/library-incomplete-restore` y ambos
-  Markdown locales sin seguimiento se conservan fuera de este release. Original,
-  reprotest y app aislada no se modifican durante esta preparación.
-- **Próxima acción:** recuperar margen con limpieza autorizada por separado si
-  hace falta; preparar checkout exacto del commit de release, dependencias y
-  manifiesto de build. Exigir 24 GiB justo antes de Xcode, supervisión cada 5 s,
-  parada a 15 GiB y máximo 2 jobs, sin limpieza automática. Renovación de perfil,
-  build y firma requieren el bloque posterior autorizado. Instalación exige
-  autorización independiente y respaldo actualizado. No iniciar 1.5.0.
+- **Incidencia independiente:** NOT_READY no fue reportado en los smokes
+  aislado y original; origen histórico pendiente. No se declara corregido.
+- **Aplicaciones de prueba conservadas:** `com.odincarballo.drop.reprotest`
+  (1.4.0 build 7) y `com.odincarballo.mediadrop.live141test` (1.4.0 build 8)
+  siguen instaladas según la verificación final. No se modificaron durante el
+  upgrade original. Retirar la tercera requiere autorización independiente.
+- **Protección:** árbol instrumentado `fix/library-incomplete-restore`, ambos
+  Markdown locales protegidos, respaldos y evidencias permanecen intactos.
+  Este cierre es exclusivamente documental y Git local, sin acceso al iPhone,
+  nuevas pruebas, compilaciones ni instalaciones.
+- **Próximo objetivo:** Drop **1.5.0**, pendiente de definición y autorización.
+  No iniciar todavía. Pendientes independientes: seguimiento del provisioning,
+  NOT_READY, observación de progreso al repetir completados y decisión sobre la
+  app aislada. No se realizó publicación remota ni se autorizó por este cierre.
 
 ## Registro ligero de eficiencia
 
-| Fecha      | Incidente verificado                                               | Prevención                                                     |
-| ---------- | ------------------------------------------------------------------ | -------------------------------------------------------------- |
-| 2026-10-29 | App normal perdida tras desaparición de `/tmp`; hubo que regenerar | Checkout durable y archivo automático antes de retirar entorno |
-| 2026-10-29 | `eslint .` amplió alcance; seis errores reproducidos en base       | Usar lint Expo; registrar chequeos adicionales separados       |
-| 2026-10-29 | Formato global recorrió 81 archivos de gemas/cachés                | Formato sobre fuentes Git con reglas intactas                  |
-| 2026-10-29 | Verificador supuso un nombre antiguo de framework Hermes           | Inspección de bytecode/dependencias reales                     |
+| Fecha      | Incidente verificado                                                    | Prevención                                                                                    |
+| ---------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| 2026-10-29 | App normal perdida tras desaparición de `/tmp`; hubo que regenerar      | Checkout durable y archivo automático antes de retirar entorno                                |
+| 2026-10-29 | `eslint .` amplió alcance; seis errores reproducidos en base            | Usar lint Expo; registrar chequeos adicionales separados                                      |
+| 2026-10-29 | Formato global recorrió 81 archivos de gemas/cachés                     | Formato sobre fuentes Git con reglas intactas                                                 |
+| 2026-10-29 | Verificador supuso un nombre antiguo de framework Hermes                | Inspección de bytecode/dependencias reales                                                    |
+| 2026-10-30 | Presencia de PID interpretada como app activa; bloqueo falso de captura | Confirmación de cierre y estabilidad de archivos/SQLite; no inferir escrituras solo de un PID |
 
 Añadir solo incidencias accionables; no duplicar conversaciones ni logs.
