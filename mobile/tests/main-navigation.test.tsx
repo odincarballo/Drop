@@ -338,12 +338,15 @@ test.each([false, true])(
     );
     if (missing) {
       await screen.findByText(
-        'Este archivo ya no está disponible en Biblioteca.',
+        'Este archivo ya no está disponible o no se puede reproducir.',
       );
       expect(playback.open).not.toHaveBeenCalled();
       expect(playback.startInContext).not.toHaveBeenCalled();
       return;
     }
+    expect(playback.startInContext).toHaveBeenCalledWith(mockItem.id, [
+      mockItem.id,
+    ]);
     await screen.findByRole('button', { name: 'Volver a Biblioteca' });
     expect(screen.queryByTestId('mini-player')).toBeNull();
     await fireEvent.press(

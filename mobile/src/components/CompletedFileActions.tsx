@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useRouter, type Href } from 'expo-router';
@@ -8,7 +8,9 @@ import {
   saveLocalFileToFiles,
   withNamedLibraryFile,
 } from '@/services/fileExport';
-import { withLibraryLease } from '@/services/library';
+import { getLibraryItem, withLibraryLease } from '@/services/library';
+import { playback } from '@/services/playback';
+import { isPlayableLibraryItem } from '@/utils/playbackContext';
 import { useTheme } from '@/theme';
 
 type ExportState = 'idle' | 'saving' | 'saved' | 'cancelled' | 'error';
@@ -29,6 +31,12 @@ export function CompletedFileActions({
   const [state, setState] = useState<ExportState>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const mounted = useRef(true);
+  const opening = useRef(false);
+  const [isOpening, setIsOpening] = useState(false);
+  const currentId = useRef(libraryId);
+  useLayoutEffect(() => {
+    currentId.current = libraryId;
+  }, [libraryId]);
 
   useEffect(() => {
     mounted.current = true;
@@ -36,6 +44,37 @@ export function CompletedFileActions({
       mounted.current = false;
     };
   }, [uri]);
+
+  async function open() {
+    if (!libraryId || opening.current) return;
+    const id = libraryId;
+    opening.current = true;
+    setIsOpening(true);
+    setMessage(null);
+    try {
+      const item = await getLibraryItem(id);
+      if (!mounted.current || currentId.current !== id) return;
+      if (!item || item.id !== id || !isPlayableLibraryItem(item)) {
+        throw new Error(
+          'Este archivo ya no está disponible o no se puede reproducir.',
+        );
+      }
+      await playback.startInContext(id, [id]);
+      if (mounted.current && currentId.current === id)
+        router.push(`/player/${encodeURIComponent(id)}` as Href);
+    } catch (error) {
+      if (!mounted.current || currentId.current !== id) return;
+      setState('error');
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : 'No se pudo iniciar la reproducción.',
+      );
+    } finally {
+      opening.current = false;
+      if (mounted.current) setIsOpening(false);
+    }
+  }
 
   async function save() {
     if (state === 'saving') return;
@@ -71,9 +110,9 @@ export function CompletedFileActions({
         <ActionButton
           label="Abrir archivo"
           secondary
-          onPress={() =>
-            router.push(`/player/${encodeURIComponent(libraryId)}` as Href)
-          }
+          onPress={() => void open()}
+          disabled={isOpening}
+          loading={isOpening}
         />
       )}
       <ActionButton

@@ -5,7 +5,13 @@ import {
   saveLocalFileToFiles,
   withNamedLibraryFile,
 } from '@/services/fileExport';
-import { withLibraryLease } from '@/services/library';
+import { getLibraryItem, withLibraryLease } from '@/services/library';
+
+import { playback } from '@/services/playback';
+
+jest.mock('@/services/playback', () => ({
+  playback: { startInContext: jest.fn(async () => undefined) },
+}));
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush }) }));
@@ -17,6 +23,13 @@ jest.mock('@/services/fileExport', () => ({
   ),
 }));
 jest.mock('@/services/library', () => ({
+  getLibraryItem: jest.fn(async (id) => ({
+    id,
+    availability: 'available',
+    uri: `file:///library/${id}.m4a`,
+    mediaType: 'audio',
+    relativeMediaPath: `Media/${id}.m4a`,
+  })),
   withLibraryLease: jest.fn((_id, operation) =>
     operation({ uri: 'file:///library/uuid.mp4' }),
   ),
@@ -123,6 +136,7 @@ test('open uses the current saved Library ID after consecutive results, never th
   );
   expect(mockPush).not.toHaveBeenCalled();
   await fireEvent.press(screen.getByRole('button', { name: 'Abrir archivo' }));
+  expect(playback.startInContext).toHaveBeenLastCalledWith('a', ['a']);
   expect(mockPush).toHaveBeenLastCalledWith('/player/a');
   await view.rerender(
     <CompletedFileActions
@@ -132,6 +146,7 @@ test('open uses the current saved Library ID after consecutive results, never th
     />,
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Abrir archivo' }));
+  expect(playback.startInContext).toHaveBeenLastCalledWith('b', ['b']);
   expect(mockPush).toHaveBeenLastCalledWith('/player/b');
   expect(JSON.stringify(mockPush.mock.calls)).not.toContain('file://');
 });
@@ -145,4 +160,106 @@ test('legacy URI-only result does not invent a Library ID or expose open', async
     />,
   );
   expect(screen.queryByRole('button', { name: 'Abrir archivo' })).toBeNull();
+});
+
+test('unavailable completed item is rejected before playback and navigation', async () => {
+  jest.mocked(getLibraryItem).mockResolvedValueOnce(null);
+  await render(
+    <CompletedFileActions
+      uri={uri}
+      libraryId="missing"
+      onMoreOptions={jest.fn()}
+      onNewDownload={jest.fn()}
+    />,
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Abrir archivo' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Este archivo ya no está disponible o no se puede reproducir.',
+  );
+  expect(playback.startInContext).not.toHaveBeenCalled();
+  expect(mockPush).not.toHaveBeenCalled();
+});
+
+test('rapid taps start once and navigation waits for playback acknowledgement', async () => {
+  let finish!: () => void;
+  jest.mocked(playback.startInContext).mockImplementationOnce(
+    () =>
+      new Promise<Awaited<ReturnType<typeof playback.startInContext>>>(
+        (resolve) => {
+          finish = () =>
+            resolve({
+              libraryId: 'one',
+              status: 'playing',
+              position: 0,
+              duration: 1,
+              rate: 1,
+              playable: true,
+              completed: false,
+              fullscreen: false,
+              pipPresentation: 'inline',
+              pipSupported: false,
+              pipAvailable: false,
+              errorCode: null,
+            });
+        },
+      ),
+  );
+  await render(
+    <CompletedFileActions
+      uri={uri}
+      libraryId="one"
+      onMoreOptions={jest.fn()}
+      onNewDownload={jest.fn()}
+    />,
+  );
+  const button = screen.getByRole('button', { name: 'Abrir archivo' });
+  await fireEvent.press(button);
+  await fireEvent.press(button);
+  expect(playback.startInContext).toHaveBeenCalledTimes(1);
+  expect(mockPush).not.toHaveBeenCalled();
+  await act(async () => finish());
+  expect(mockPush).toHaveBeenCalledTimes(1);
+});
+
+test('late lookup from a previous result cannot start playback or navigate', async () => {
+  let finish!: (item: Awaited<ReturnType<typeof getLibraryItem>>) => void;
+  jest.mocked(getLibraryItem).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const props = { onMoreOptions: jest.fn(), onNewDownload: jest.fn() };
+  const view = await render(
+    <CompletedFileActions {...props} uri="file:///a" libraryId="a" />,
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Abrir archivo' }));
+  await view.rerender(
+    <CompletedFileActions {...props} uri="file:///b" libraryId="b" />,
+  );
+  await act(async () => finish(null));
+  expect(playback.startInContext).not.toHaveBeenCalled();
+  expect(mockPush).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Abrir archivo' }));
+  expect(playback.startInContext).toHaveBeenCalledWith('b', ['b']);
+});
+
+test('playback failure remains actionable without navigating', async () => {
+  jest
+    .mocked(playback.startInContext)
+    .mockRejectedValueOnce(new Error('No se pudo iniciar'));
+  await render(
+    <CompletedFileActions
+      uri={uri}
+      libraryId="a"
+      onMoreOptions={jest.fn()}
+      onNewDownload={jest.fn()}
+    />,
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Abrir archivo' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'No se pudo iniciar',
+  );
+  expect(mockPush).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Abrir archivo' })).toBeEnabled();
 });
