@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { useRouter, type Href } from 'expo-router';
+
 import { ActionButton } from '@/components/ActionButton';
 import {
   saveLocalFileToFiles,
@@ -23,6 +25,7 @@ export function CompletedFileActions({
   onNewDownload: () => void;
 }) {
   const { colors } = useTheme();
+  const router = useRouter();
   const [state, setState] = useState<ExportState>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const mounted = useRef(true);
@@ -64,6 +67,15 @@ export function CompletedFileActions({
 
   return (
     <View style={styles.actions}>
+      {libraryId && (
+        <ActionButton
+          label="Abrir archivo"
+          secondary
+          onPress={() =>
+            router.push(`/player/${encodeURIComponent(libraryId)}` as Href)
+          }
+        />
+      )}
       <ActionButton
         label={
           state === 'saving' ? 'Abriendo Archivos…' : 'Guardar en Archivos'
@@ -75,6 +87,7 @@ export function CompletedFileActions({
       {message && (
         <Text
           accessibilityRole={state === 'error' ? 'alert' : undefined}
+          accessibilityLiveRegion="polite"
           style={{ color: state === 'error' ? colors.error : colors.secondary }}
         >
           {message}

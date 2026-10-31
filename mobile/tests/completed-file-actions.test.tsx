@@ -7,6 +7,9 @@ import {
 } from '@/services/fileExport';
 import { withLibraryLease } from '@/services/library';
 
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush }) }));
+
 jest.mock('@/services/fileExport', () => ({
   saveLocalFileToFiles: jest.fn(),
   withNamedLibraryFile: jest.fn((_item, operation) =>
@@ -107,4 +110,39 @@ test('completed Library result exports a friendly alias while retaining its leas
     'file:///cache/DropExport/Friendly.mp4',
   );
   expect(await screen.findByText('Guardado en Archivos.')).toBeTruthy();
+});
+
+test('open uses the current saved Library ID after consecutive results, never the file URI', async () => {
+  const props = { onMoreOptions: jest.fn(), onNewDownload: jest.fn() };
+  const view = await render(
+    <CompletedFileActions
+      {...props}
+      uri="file:///library/a.m4a"
+      libraryId="a"
+    />,
+  );
+  expect(mockPush).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Abrir archivo' }));
+  expect(mockPush).toHaveBeenLastCalledWith('/player/a');
+  await view.rerender(
+    <CompletedFileActions
+      {...props}
+      uri="file:///library/b.m4a"
+      libraryId="b"
+    />,
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Abrir archivo' }));
+  expect(mockPush).toHaveBeenLastCalledWith('/player/b');
+  expect(JSON.stringify(mockPush.mock.calls)).not.toContain('file://');
+});
+
+test('legacy URI-only result does not invent a Library ID or expose open', async () => {
+  await render(
+    <CompletedFileActions
+      uri={uri}
+      onMoreOptions={jest.fn()}
+      onNewDownload={jest.fn()}
+    />,
+  );
+  expect(screen.queryByRole('button', { name: 'Abrir archivo' })).toBeNull();
 });

@@ -3,7 +3,47 @@
 Actualizado: 31 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Bloque actual: Biblioteca 1.5.0 C
+## Bloque actual: pulido y cierre 1.5.0 D
+
+- Misma rama/worktree; base `ae7c5ccb2acb5916eccb9ef7a09932bc9d39dade`,
+  árbol `01eafd890524c964c0d5306ce36cda3bfca635f6`. D cerrado con commit local en esta rama (consultar SHA con Git); sin build ni instalación.
+- Resultado completado: botón Abrir archivo mediante libraryId real y PlayerScreen
+  existente. Sin URI como identidad, sin otra sesión de reproducción ni cambios
+  de motores/providers. PlayerScreen conserva el rechazo de archivos ausentes.
+  Mensajes de exportación con región viva; tamaños/temas de ActionButton reutilizados.
+- Verificación cruzada sobre rutas/providers reales con I/O simulado: continuidad,
+  apertura del resultado, búsqueda/orden, reproducción contextual y archivo ausente.
+  Pruebas de operaciones consecutivas usan el ID actualizado. Regresiones de
+  cancelación y finalización locales seleccionadas; no repetir suites A/B/C completas.
+- Validación D: 30 pruebas distintas PASS (22 acciones/rutas, 5 regresiones de
+  descarga/cancelación, 3 finalizaciones locales); las demás no ejecutadas por filtro.
+  TypeScript, lint Expo y formato focal comprobados; no se suman suites históricas.
+- Reutilización: selectores y Biblioteca de C, políticas de limpieza de A y rutas,
+  MiniPlayer/temas de B sin cambios. Sus resultados históricos no se suman a D.
+- Identidad futura de prueba: `DROP_BUNDLE_IDENTIFIER=com.odincarballo.drop.reprotest`,
+  Team HK927RUDLZ vía configuración externa existente. Compatibilidad in-place
+  prevista por identidad/schema v3 conservados, pendiente de comprobar contra
+  instalación, entitlements y provisioning reales; no hay garantía de contenedor.
+  Metadatos siguen 1.4.1 build 9: preparar versión de candidata por separado.
+- Sesión física única propuesta, con autorización posterior:
+  1. Verificar identidad/firma y respaldo consistente actualizado de reprotest,
+     SQLite/WAL, integridad/FK, conteos y hashes de medios/portadas/progreso/cola.
+  2. Usar solo nuevos medios pequeños autorizados (audio/video); analizar y
+     descargar cambiando Biblioteca/Descargar, comprobar progreso y promoción única.
+  3. Abrir resultado, buscarlo, combinar filtros/orden, iniciar reproducción y
+     cambiar consulta sin alterar CURRENT; MiniPlayer, Cola, Collections y PiP/retorno.
+  4. Teclado/dismiss, safe areas, orientación/tamaño disponible, Dynamic Type y
+     VoiceOver; no declarar otros dispositivos o tamaños comprobados.
+  5. Comparar datos previos/posteriores, diferenciar progreso legítimo, conservar
+     evidencia y limpiar solo fixtures por acciones normales si se autoriza.
+     La original queda fuera. No reutilizar instrumentación temporal.
+- Reanudación: A/B/C/D implementados mediante commits locales. Preparar una única
+  candidata integrada en reprotest requiere autorización posterior; no comenzar
+  esa preparación en este cierre ni integrar en main. Después, autorización de
+  firma, backup e instalación con límites de recursos del workflow. NOT_READY y
+  progreso al repetir completados siguen independientes. No desplegado; main intacto.
+
+## Bloque C cerrado: búsqueda y organización
 
 - Misma rama/worktree; base `b25339944645fede8ef9079fa55680c5fb0b47bc`,
   árbol `598f2716f8ea8512460455c6eaa34ce0d0ae3338`. C cerrado con commit local en esta rama (consultar SHA con Git).

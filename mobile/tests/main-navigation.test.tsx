@@ -24,7 +24,11 @@ import { THEME_PREFERENCE_KEY } from '@/theme';
 import { useDownloadSession } from '@/providers/DownloadSessionProvider';
 import { analyzeMedia } from '@/services/media';
 import { createDownloadJob, downloadJobFile } from '@/services/jobs';
-import { initializeLibrary, promoteToLibrary } from '@/services/library';
+import {
+  initializeLibrary,
+  promoteToLibrary,
+  getLibraryItem,
+} from '@/services/library';
 import { playback, type PlaybackState } from '@/services/playback';
 import type { LibraryItem } from '@/models/library';
 import type { MediaAnalysis } from '@/models/media';
@@ -282,46 +286,90 @@ test('analysis continues through real router replacements and returns the same r
   expect(initializeLibrary).toHaveBeenCalledTimes(1);
 });
 
-test('active download retains selection, progress and one promotion through real navigation', async () => {
-  const transfer = deferred<{ uri: string; size: number }>();
-  jest.mocked(createDownloadJob).mockResolvedValue({
-    id: 'active-job',
-    status: 'COMPLETED',
-    progress: 1,
-    bytesDownloaded: 12,
-    totalBytes: 12,
-    fileName: 'clip.mp4',
-    fileSize: 12,
-    error: null,
-    downloadUrl: '/jobs/active-job/file',
-  });
-  jest.mocked(downloadJobFile).mockReturnValue(transfer.promise);
-  await openApp('/download');
-  await analyzeDirect();
-  await fireEvent.press(screen.getByRole('radio', { name: /Original/ }));
-  const selection =
-    session.state.status === 'success' ? session.state.selection : null;
-  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
-  await waitFor(() => expect(downloadJobFile).toHaveBeenCalledTimes(1));
-  await tab('Biblioteca');
-  await act(() => jest.mocked(downloadJobFile).mock.calls[0]![2](6, 12));
-  expect(jest.mocked(downloadJobFile).mock.calls[0]![1].aborted).toBe(false);
-  await tab('Descargar');
-  expect(session.state).toMatchObject({ selection });
-  expect(session.download.state).toMatchObject({
-    status: 'transferring',
-    bytesDownloaded: 6,
-  });
-  await tab('Biblioteca');
-  await act(() => transfer.resolve({ uri: 'file:///cache/new.mp4', size: 12 }));
-  await tab('Descargar');
-  expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
-  expect(createDownloadJob).toHaveBeenCalledTimes(1);
-  expect(promoteToLibrary).toHaveBeenCalledTimes(1);
-  expect(session.download.state).toMatchObject({ libraryId: mockItem.id });
-  expect(playback.subscribe).toHaveBeenCalledTimes(1);
-  expect(playback.close).not.toHaveBeenCalled();
-});
+test.each([false, true])(
+  'active download retains selection/progress and opens safely (missing=%s)',
+  async (missing) => {
+    const transfer = deferred<{ uri: string; size: number }>();
+    jest.mocked(createDownloadJob).mockResolvedValue({
+      id: 'active-job',
+      status: 'COMPLETED',
+      progress: 1,
+      bytesDownloaded: 12,
+      totalBytes: 12,
+      fileName: 'clip.mp4',
+      fileSize: 12,
+      error: null,
+      downloadUrl: '/jobs/active-job/file',
+    });
+    jest.mocked(downloadJobFile).mockReturnValue(transfer.promise);
+    await openApp('/download');
+    await analyzeDirect();
+    await fireEvent.press(screen.getByRole('radio', { name: /Original/ }));
+    const selection =
+      session.state.status === 'success' ? session.state.selection : null;
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    await waitFor(() => expect(downloadJobFile).toHaveBeenCalledTimes(1));
+    await tab('Biblioteca');
+    await act(() => jest.mocked(downloadJobFile).mock.calls[0]![2](6, 12));
+    expect(jest.mocked(downloadJobFile).mock.calls[0]![1].aborted).toBe(false);
+    await tab('Descargar');
+    expect(session.state).toMatchObject({ selection });
+    expect(session.download.state).toMatchObject({
+      status: 'transferring',
+      bytesDownloaded: 6,
+    });
+    await tab('Biblioteca');
+    await act(() =>
+      transfer.resolve({ uri: 'file:///cache/new.mp4', size: 12 }),
+    );
+    await tab('Descargar');
+    expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
+    expect(createDownloadJob).toHaveBeenCalledTimes(1);
+    expect(promoteToLibrary).toHaveBeenCalledTimes(1);
+    expect(session.download.state).toMatchObject({ libraryId: mockItem.id });
+    if (missing)
+      jest.mocked(getLibraryItem).mockResolvedValueOnce({
+        ...mockItem,
+        availability: 'missing',
+        uri: null,
+      });
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Abrir archivo' }),
+    );
+    if (missing) {
+      await screen.findByText(
+        'Este archivo ya no está disponible en Biblioteca.',
+      );
+      expect(playback.open).not.toHaveBeenCalled();
+      expect(playback.startInContext).not.toHaveBeenCalled();
+      return;
+    }
+    await screen.findByRole('button', { name: 'Volver a Biblioteca' });
+    expect(screen.queryByTestId('mini-player')).toBeNull();
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Volver a Biblioteca' }),
+    );
+    await screen.findByTestId('main-navigation');
+    await tab('Biblioteca');
+    await fireEvent.changeText(
+      screen.getByLabelText('Buscar en Biblioteca'),
+      'ÁUDIO actual',
+    );
+    await fireEvent.press(screen.getByRole('radio', { name: 'Título A–Z' }));
+    expect(
+      screen.getByRole('button', { name: 'Reproducir Audio actual' }),
+    ).toBeTruthy();
+    expect(screen.getAllByTestId('mini-player')).toHaveLength(1);
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Reproducir Audio actual' }),
+    );
+    expect(playback.startInContext).toHaveBeenCalledWith(mockItem.id, [
+      mockItem.id,
+    ]);
+    expect(playback.subscribe).toHaveBeenCalledTimes(3); // root and two explicit Player visits
+    expect(playback.close).not.toHaveBeenCalled();
+  },
+);
 
 test('opening and leaving the full player preserves CURRENT and uses leavePlayerScreen', async () => {
   await openApp();

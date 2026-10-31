@@ -28,6 +28,8 @@ import {
 import { shareLocalFile } from '@/services/jobs';
 import { promoteToLibrary } from '@/services/library';
 
+jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
+
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/fileExport', () => ({
   saveLocalFileToFiles: jest.fn(),
