@@ -1,7 +1,35 @@
 # Estado operativo de Drop
 
-Actualizado: 30 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 31 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
+
+## Bloque actual: continuidad de descargas 1.5.0 A
+
+- Worktree aislado `v1.5.0-download-continuity`, rama
+  `codex/v1.5.0-download-continuity`, base
+  `23873b3ad87fa69f97dff331428a7ce7c5e8871f`. Bloque A cerrado con commit local
+  en esta rama (obtener SHA con Git);
+  main y las apps instaladas no se modifican en este bloque.
+- Implementación: propietario único de la sesión por encima de las rutas,
+  reutilizando los tres hooks existentes. URL, selección, progreso y resultado
+  sobreviven al desmontaje de Descargar; navegación no cancela, cancelación
+  explícita y desmontaje del propietario conservan su limpieza.
+- Observadores nativos estables, cancelación de análisis con generación y
+  respuestas de jobs cancelados aisladas de operaciones posteriores. Sin cambios
+  de motores, schema, dependencias, versión ni build. Sin instrumentación.
+- Validación focal: 72 pruebas móviles PASS (Home y on-device YouTube), con
+  navegación durante análisis/descarga, modos/formatos, cancelación, resultados
+  obsoletos, sesión caducada, promoción única y liberación de observadores.
+  No se ejecutó integración HTTP opt-in, compilación iOS ni validación física.
+- Reanudación: Bloque B, navegación Biblioteca/Descargar y composición del
+  MiniPlayer existente, pendiente de autorización. Reutilizar esta rama/worktree
+  mientras sea seguro; no integrar A en main todavía. La navegación real queda
+  pendiente de una candidata iOS y validación física autorizadas. Background
+  y fin del proceso conservan las políticas existentes; no se implementó
+  persistencia de trabajos fuera del proceso.
+  NOT_READY continúa independiente. No iniciar B durante este cierre.
+
+## Snapshot del release instalado (histórico)
 
 - **Estado:** Drop **1.4.1 build 9 instalada y validada en la original**;
   corrección `/live/{videoId}` integrada y desplegada. Release cerrado localmente.

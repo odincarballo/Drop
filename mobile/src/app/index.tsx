@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   KeyboardAvoidingView,
   Pressable,
@@ -19,58 +18,29 @@ import { MetadataCard } from '@/components/MetadataCard';
 import { LocalYoutubeDiagnosticsCard } from '@/components/LocalYoutubeDiagnosticsCard';
 import { LocalYoutubeMainCard } from '@/components/LocalYoutubeMainCard';
 import { config } from '@/config';
-import { useMediaAnalysis } from '@/hooks/useMediaAnalysis';
-import { useMediaDownload } from '@/hooks/useMediaDownload';
-import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
-import {
-  hasLocalYoutubeEngine,
-  isYoutubeUrl,
-} from '@/services/onDeviceYoutube';
+import { useDownloadSession } from '@/providers/DownloadSessionProvider';
+import { hasLocalYoutubeEngine } from '@/services/onDeviceYoutube';
 import { useTheme } from '@/theme';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { colors } = useTheme();
-  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
-  const spike = useLocalYoutubeSpike();
   const {
     url,
     state,
-    isBusy: isAnalyzing,
     isPasting,
-    updateUrl,
     pasteUrl,
-    analyze,
-    resetAnalysis,
     select,
-  } = useMediaAnalysis(() => {
-    spike.reset();
-    setShowTechnicalDetails(false);
-  });
-  const download = useMediaDownload();
-  const localYoutube = isYoutubeUrl(url);
-  const isBusy = isAnalyzing || download.isActive || spike.isBusy;
-
-  function changeUrl(value: string) {
-    download.reset();
-    updateUrl(value);
-  }
-
-  function newDownload() {
-    changeUrl('');
-    setShowTechnicalDetails(false);
-  }
-
-  async function runAnalysis() {
-    if (download.isActive || spike.isBusy) return;
-    download.reset();
-    if (localYoutube) {
-      resetAnalysis();
-      await spike.analyze(url);
-    } else {
-      await analyze();
-    }
-  }
+    spike,
+    download,
+    localYoutube,
+    isBusy,
+    changeUrl,
+    newDownload,
+    runAnalysis,
+    showTechnicalDetails,
+    setShowTechnicalDetails,
+  } = useDownloadSession();
 
   return (
     <SafeAreaView

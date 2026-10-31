@@ -9,6 +9,7 @@ import * as http from 'node:http';
 import { Alert } from 'react-native';
 
 import HomeScreen from '@/app/index';
+import { DownloadSessionProvider } from '@/providers/DownloadSessionProvider';
 import { config } from '@/config';
 
 jest.mock('expo-clipboard', () => ({ getStringAsync: jest.fn() }));
@@ -77,7 +78,11 @@ liveTest(
       .mocked(Clipboard.getStringAsync)
       .mockResolvedValue('https://example.com/video.mp4');
     const notice = jest.spyOn(Alert, 'alert');
-    await render(<HomeScreen />);
+    await render(
+      <DownloadSessionProvider>
+        <HomeScreen />
+      </DownloadSessionProvider>,
+    );
     await fireEvent.press(screen.getByRole('button', { name: 'Pegar' }));
     await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
     await waitFor(

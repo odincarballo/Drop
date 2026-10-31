@@ -8,7 +8,13 @@ import {
 import { requireOptionalNativeModule } from 'expo';
 import * as Clipboard from 'expo-clipboard';
 
-import HomeScreen from '@/app/index';
+import HomeScreenView from '@/app/index';
+import {
+  DownloadSessionProvider,
+  useDownloadSession,
+} from '@/providers/DownloadSessionProvider';
+import { useEffect, useState } from 'react';
+import { Pressable, Text } from 'react-native';
 import type { MediaAnalysis } from '@/models/media';
 import { ApiError } from '@/services/errors';
 import { promoteToLibrary } from '@/services/library';
@@ -21,6 +27,14 @@ import {
   shareLocalFile,
 } from '@/services/jobs';
 import { demoMedia, youtubeMedia } from './fixtures/media';
+
+function HomeScreen() {
+  return (
+    <DownloadSessionProvider>
+      <HomeScreenView />
+    </DownloadSessionProvider>
+  );
+}
 
 jest.mock('@/services/media', () => ({ analyzeMedia: jest.fn() }));
 jest.mock('@/services/fileExport', () => ({
@@ -35,7 +49,8 @@ jest.mock('@/services/library', () => ({
     operation({ uri: 'file:///library/clip.mp4' }),
   ),
 }));
-jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush }) }));
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/jobs', () => ({
   createDownloadJob: jest.fn(),
@@ -61,11 +76,14 @@ jest.mock(
 );
 
 beforeEach(() => {
-  jest.mocked(promoteToLibrary).mockResolvedValue({
-    id: '00000000-0000-0000-0000-000000000001',
-    uri: 'file:///library/clip.mp4',
-    sizeBytes: 1_000_000,
-  } as never);
+  jest
+    .mocked(promoteToLibrary)
+    .mockReset()
+    .mockResolvedValue({
+      id: '00000000-0000-0000-0000-000000000001',
+      uri: 'file:///library/clip.mp4',
+      sizeBytes: 1_000_000,
+    } as never);
   jest.mocked(requireOptionalNativeModule).mockReset().mockReturnValue(null);
   jest.mocked(analyzeMedia).mockReset().mockResolvedValue(demoMedia);
   jest
@@ -135,7 +153,7 @@ const localYoutubeMetadata = {
 };
 
 function localYoutubeNativeEngine() {
-  const listeners: Record<string, (event: unknown) => void> = {};
+  const listeners = new Map<string, Set<(event: unknown) => void>>();
   return {
     analyze: jest.fn().mockResolvedValue(JSON.stringify(localYoutubeMetadata)),
     startAudioDownload: jest.fn(),
@@ -146,10 +164,17 @@ function localYoutubeNativeEngine() {
     cancelCombinedDownload: jest.fn(),
     cancel: jest.fn(),
     addListener: jest.fn((name: string, listener: (event: unknown) => void) => {
-      listeners[name] = listener;
-      return { remove: jest.fn() };
+      if (!listeners.has(name)) listeners.set(name, new Set());
+      listeners.get(name)!.add(listener);
+      return { remove: jest.fn(() => listeners.get(name)!.delete(listener)) };
     }),
-    emit: (name: string, event: unknown) => listeners[name]?.(event),
+    emit: (name: string, event: unknown) =>
+      listeners.get(name)?.forEach((listener) => listener(event)),
+    listenerCount: () =>
+      [...listeners.values()].reduce(
+        (count, entries) => count + entries.size,
+        0,
+      ),
   };
 }
 
@@ -902,4 +927,485 @@ test('clipboard denial leaves manual input available', async () => {
   );
   await analyzeExample();
   expect(screen.getByText('MediaDrop Demo Video')).toBeTruthy();
+});
+
+// Real screen and hooks; only external I/O is mocked. The route is actually
+// removed, not merely hidden, while its session owner remains mounted.
+let session: ReturnType<typeof useDownloadSession>;
+function SessionRoutes() {
+  session = useDownloadSession();
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    mockPush.mockImplementation(() => setVisible(false));
+    return () => {
+      mockPush.mockReset();
+    };
+  }, []);
+  return visible ? (
+    <HomeScreenView />
+  ) : (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Volver a Descargar"
+      onPress={() => setVisible(true)}
+    >
+      <Text>Biblioteca temporal</Text>
+    </Pressable>
+  );
+}
+function NavigableSession() {
+  return (
+    <DownloadSessionProvider>
+      <SessionRoutes />
+    </DownloadSessionProvider>
+  );
+}
+async function leaveDownload() {
+  await fireEvent.press(screen.getByRole('tab', { name: 'Biblioteca' }));
+  expect(screen.queryByLabelText('URL del recurso multimedia')).toBeNull();
+}
+async function returnToDownload() {
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Volver a Descargar' }),
+  );
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+const completedDirectJob = {
+  id: 'navigation-job',
+  status: 'COMPLETED' as const,
+  progress: 1,
+  bytesDownloaded: 12,
+  totalBytes: 12,
+  fileName: 'clip.mp4',
+  fileSize: 12,
+  error: null,
+  downloadUrl: '/jobs/navigation-job/file',
+};
+const navigationDirectMedia: MediaAnalysis = {
+  ...demoMedia,
+  source: 'direct',
+  audioFormats: [],
+  videoFormats: [
+    { ...demoMedia.videoFormats[0]!, id: 'original', hasAudio: true },
+  ],
+};
+const nativeJob = '7D628D93-DC67-4729-83AD-B8EF70877A87';
+const completeNative = {
+  jobId: nativeJob,
+  status: 'COMPLETED',
+  formatId: '140',
+  container: 'm4a',
+  codec: 'mp4a.40.2',
+  fileName: 'fixture.mp4',
+  fileSize: 1_000_000,
+  localUri: 'file:///cache/fixture.mp4',
+  durationSeconds: 121,
+};
+
+async function startNavigableAudio() {
+  const native = localYoutubeNativeEngine();
+  native.startAudioDownload.mockReturnValue(nativeJob);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  const view = await render(<NavigableSession />);
+  await analyzeYoutube();
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  return { native, view };
+}
+
+test.each(['local', 'backend'] as const)(
+  'active %s analysis survives route removal and returns its result',
+  async (engine) => {
+    const native = localYoutubeNativeEngine();
+    const pending = deferred<string>();
+    const backend = deferred<MediaAnalysis>();
+    native.analyze.mockReturnValue(pending.promise);
+    jest.mocked(analyzeMedia).mockReturnValue(backend.promise);
+    jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+    const view = await render(<NavigableSession />);
+    if (engine === 'local') await analyzeYoutube();
+    else await analyzeExample();
+    await leaveDownload();
+    expect(native.cancel).not.toHaveBeenCalled();
+    if (engine === 'backend')
+      expect(jest.mocked(analyzeMedia).mock.calls[0]![1]?.aborted).toBe(false);
+    await act(() => {
+      pending.resolve(JSON.stringify(localYoutubeMetadata));
+      backend.resolve(demoMedia);
+    });
+    await returnToDownload();
+    expect(
+      screen.getByText(
+        engine === 'local' ? 'YouTube local' : 'MediaDrop Demo Video',
+      ),
+    ).toBeTruthy();
+    expect(native.analyze).toHaveBeenCalledTimes(engine === 'local' ? 1 : 0);
+    expect(analyzeMedia).toHaveBeenCalledTimes(engine === 'backend' ? 1 : 0);
+    expect(native.addListener).toHaveBeenCalledTimes(3);
+    await view.unmount();
+    expect(native.listenerCount()).toBe(0);
+  },
+);
+
+test.each([
+  ['Solo audio', 'onAudioDownloadState', 'startAudioDownload', 'audioState'],
+  ['Solo video', 'onVideoDownloadState', 'startVideoDownload', 'videoState'],
+  [
+    'Video + audio',
+    'onCombinedDownloadState',
+    'startCombinedDownload',
+    'combinedState',
+  ],
+] as const)(
+  '%s retains one job, selection, progress and one promotion across routes',
+  async (label, event, start, state) => {
+    const native = localYoutubeNativeEngine();
+    native[start].mockReturnValue(nativeJob);
+    jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+    const view = await render(<NavigableSession />);
+    await analyzeYoutube();
+    await fireEvent.press(screen.getByRole('radio', { name: label }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    await leaveDownload();
+    await act(() =>
+      native.emit(event, {
+        jobId: nativeJob,
+        status: state === 'combinedState' ? 'DOWNLOADING_VIDEO' : 'DOWNLOADING',
+        formatId: state === 'audioState' ? '140' : '134',
+        bytesDownloaded: 500_000,
+        totalBytes: 1_000_000,
+        progress: 0.5,
+      }),
+    );
+    await returnToDownload();
+    expect(screen.getByRole('radio', { name: label })).toBeChecked();
+    expect(screen.getByText(/500 KB \/ 1 MB/)).toBeTruthy();
+    expect(session.spike[state]).toMatchObject({
+      jobId: nativeJob,
+      progress: 0.5,
+    });
+    expect(screen.getByRole('button', { name: 'Descargar' })).toBeDisabled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    expect(native[start]).toHaveBeenCalledTimes(1);
+    await leaveDownload();
+    const saved = deferred<Awaited<ReturnType<typeof promoteToLibrary>>>();
+    jest.mocked(promoteToLibrary).mockReturnValueOnce(saved.promise);
+    await act(() => {
+      native.emit(event, {
+        ...completeNative,
+        container: state === 'audioState' ? 'm4a' : 'mp4',
+        formatId: state === 'audioState' ? '140' : '134',
+      });
+      native.emit(event, {
+        ...completeNative,
+        container: state === 'audioState' ? 'm4a' : 'mp4',
+        formatId: state === 'audioState' ? '140' : '134',
+      });
+    });
+    expect(session.spike[state].status).toBe('saving');
+    expect(promoteToLibrary).toHaveBeenCalledTimes(1);
+    await returnToDownload();
+    expect(screen.getByText('Guardando en Biblioteca…')).toBeTruthy();
+    await act(() =>
+      saved.resolve({
+        id: 'saved-once',
+        uri: 'file:///library/saved.mp4',
+        sizeBytes: 1_000_000,
+      } as never),
+    );
+    expect(session.spike[state]).toMatchObject({
+      status: 'completed',
+      libraryId: 'saved-once',
+    });
+    await leaveDownload();
+    await returnToDownload();
+    expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
+    expect(native.addListener).toHaveBeenCalledTimes(3);
+    expect(native.cancelAudioDownload).not.toHaveBeenCalled();
+    expect(native.cancelVideoDownload).not.toHaveBeenCalled();
+    expect(native.cancelCombinedDownload).not.toHaveBeenCalled();
+    await view.unmount();
+    expect(native.listenerCount()).toBe(0);
+  },
+);
+
+test('video selection survives navigation without resubscribing and supplies promotion metadata', async () => {
+  const native = localYoutubeNativeEngine();
+  native.analyze.mockResolvedValue(
+    JSON.stringify({
+      ...localYoutubeMetadata,
+      metadata: {
+        ...localYoutubeMetadata.metadata,
+        videoFormats: [
+          ...localYoutubeMetadata.metadata.videoFormats,
+          {
+            ...localYoutubeMetadata.metadata.videoFormats[0],
+            id: '720',
+            resolution: '720p',
+            height: 720,
+            width: 1280,
+          },
+        ],
+      },
+    }),
+  );
+  native.startCombinedDownload.mockReturnValue(nativeJob);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<NavigableSession />);
+  await analyzeYoutube();
+  await fireEvent.press(screen.getByRole('radio', { name: /720p/ }));
+  await leaveDownload();
+  await returnToDownload();
+  expect(screen.getByRole('radio', { name: /720p/ })).toBeChecked();
+  expect(native.addListener).toHaveBeenCalledTimes(3);
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  await act(() => native.emit('onCombinedDownloadState', completeNative));
+  expect(promoteToLibrary).toHaveBeenCalledWith(
+    completeNative.localUri,
+    expect.objectContaining({ resolution: '720p' }),
+  );
+});
+
+test('direct transfer keeps selection/progress while away and promotes exactly once', async () => {
+  jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+  jest.mocked(createDownloadJob).mockResolvedValue(completedDirectJob);
+  const transfer = deferred<{ uri: string; size: number }>();
+  jest.mocked(downloadJobFile).mockReturnValue(transfer.promise);
+  await render(<NavigableSession />);
+  await analyzeExample();
+  await fireEvent.press(screen.getByRole('radio', { name: /360p/ }));
+  const selection =
+    session.state.status === 'success' ? session.state.selection : null;
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  await waitFor(() => expect(downloadJobFile).toHaveBeenCalledTimes(1));
+  await leaveDownload();
+  await act(() => jest.mocked(downloadJobFile).mock.calls[0]![2](6, 12));
+  expect(jest.mocked(downloadJobFile).mock.calls[0]![1].aborted).toBe(false);
+  await returnToDownload();
+  expect(session.state).toMatchObject({ selection });
+  expect(session.download.state).toMatchObject({
+    status: 'transferring',
+    bytesDownloaded: 6,
+  });
+  await leaveDownload();
+  await act(() =>
+    transfer.resolve({ uri: 'file:///cache/clip.mp4', size: 12 }),
+  );
+  await returnToDownload();
+  expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
+  expect(session.download.state).toMatchObject({
+    libraryId: '00000000-0000-0000-0000-000000000001',
+  });
+  expect(createDownloadJob).toHaveBeenCalledTimes(1);
+  expect(downloadJobFile).toHaveBeenCalledTimes(1);
+  expect(promoteToLibrary).toHaveBeenCalledTimes(1);
+});
+
+test('explicit cancellation after returning ignores late native completion', async () => {
+  const { native } = await startNavigableAudio();
+  await leaveDownload();
+  await returnToDownload();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Cancelar descarga' }),
+  );
+  await act(() => native.emit('onAudioDownloadState', completeNative));
+  expect(native.cancelAudioDownload).toHaveBeenCalledTimes(1);
+  expect(session.spike.audioState.status).toBe('cancelled');
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+});
+
+test('explicit analysis cancellation invalidates a response arriving after a new analysis', async () => {
+  const native = localYoutubeNativeEngine();
+  const old = deferred<string>();
+  native.analyze.mockReturnValueOnce(old.promise);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<NavigableSession />);
+  await analyzeYoutube();
+  await leaveDownload();
+  await returnToDownload();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Cancelar análisis' }),
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await act(() =>
+    old.resolve(
+      JSON.stringify({
+        ...localYoutubeMetadata,
+        metadata: { ...localYoutubeMetadata.metadata, title: 'Stale response' },
+      }),
+    ),
+  );
+  expect(screen.getByText('YouTube local')).toBeTruthy();
+  expect(screen.queryByText('Stale response')).toBeNull();
+  expect(native.cancel).toHaveBeenCalledTimes(1);
+});
+
+test.each(['local', 'backend'] as const)(
+  'URL replacement ignores late %s results',
+  async (engine) => {
+    const native = localYoutubeNativeEngine();
+    const local = deferred<string>();
+    const backend = deferred<MediaAnalysis>();
+    native.analyze.mockReturnValueOnce(local.promise);
+    if (engine === 'backend')
+      jest.mocked(analyzeMedia).mockReturnValueOnce(backend.promise);
+    jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+    await render(<NavigableSession />);
+    if (engine === 'local') await analyzeYoutube();
+    else await analyzeExample();
+    await leaveDownload();
+    await act(() => session.changeUrl('https://example.com/new.mp4'));
+    await act(() => session.runAnalysis());
+    await act(() => {
+      local.resolve(JSON.stringify(localYoutubeMetadata));
+      backend.resolve({ ...demoMedia, title: 'Stale response' });
+    });
+    await returnToDownload();
+    expect(
+      screen.getByLabelText('URL del recurso multimedia'),
+    ).toHaveDisplayValue('https://example.com/new.mp4');
+    expect(screen.getByText('MediaDrop Demo Video')).toBeTruthy();
+    expect(screen.queryByText('Stale response')).toBeNull();
+    expect(screen.queryByText('YouTube local')).toBeNull();
+  },
+);
+
+test('an expired native session requests reanalysis after navigation without retry or promotion', async () => {
+  const { native } = await startNavigableAudio();
+  await leaveDownload();
+  await act(() =>
+    native.emit('onAudioDownloadState', {
+      jobId: nativeJob,
+      status: 'FAILED',
+      errorCode: 'ANALYSIS_NOT_FOUND',
+    }),
+  );
+  await returnToDownload();
+  expect(screen.getByText(/El análisis local caducó/)).toBeTruthy();
+  expect(native.startAudioDownload).toHaveBeenCalledTimes(1);
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  expect(native.analyze).toHaveBeenCalledTimes(2);
+});
+
+test.each(['analysis', 'download'] as const)(
+  'full session teardown cancels %s and releases its observers',
+  async (operation) => {
+    const native = localYoutubeNativeEngine();
+    const pending = deferred<string>();
+    if (operation === 'analysis')
+      native.analyze.mockReturnValue(pending.promise);
+    native.startAudioDownload.mockReturnValue(nativeJob);
+    jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+    const view = await render(<NavigableSession />);
+    await analyzeYoutube();
+    if (operation === 'download') {
+      await fireEvent.press(screen.getByRole('radio', { name: 'Solo audio' }));
+      await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    }
+    await leaveDownload();
+    expect(native.listenerCount()).toBe(3);
+    await view.unmount();
+    expect(native.listenerCount()).toBe(0);
+    expect(
+      operation === 'analysis' ? native.cancel : native.cancelAudioDownload,
+    ).toHaveBeenCalledTimes(1);
+    await act(() => {
+      pending.resolve(JSON.stringify(localYoutubeMetadata));
+      native.emit('onAudioDownloadState', completeNative);
+    });
+    expect(promoteToLibrary).not.toHaveBeenCalled();
+  },
+);
+
+test.each(['cancel', 'teardown'] as const)(
+  'direct transfer %s aborts only on explicit cancellation or full teardown',
+  async (action) => {
+    jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+    jest.mocked(createDownloadJob).mockResolvedValue(completedDirectJob);
+    const transfer = deferred<{ uri: string; size: number }>();
+    jest.mocked(downloadJobFile).mockReturnValue(transfer.promise);
+    const view = await render(<NavigableSession />);
+    await analyzeExample();
+    await fireEvent.press(screen.getByRole('radio', { name: /360p/ }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    await waitFor(() => expect(downloadJobFile).toHaveBeenCalledTimes(1));
+    const signal = jest.mocked(downloadJobFile).mock.calls[0]![1];
+    await leaveDownload();
+    expect(signal.aborted).toBe(false);
+    if (action === 'cancel') {
+      await returnToDownload();
+      await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
+    } else await view.unmount();
+    expect(signal.aborted).toBe(true);
+    expect(deleteDownloadJob).toHaveBeenCalledWith(completedDirectJob.id);
+    await act(() =>
+      transfer.resolve({ uri: 'file:///cache/late-route.mp4', size: 12 }),
+    );
+    expect(deleteLocalFile).toHaveBeenCalledWith(
+      'file:///cache/late-route.mp4',
+    );
+    expect(promoteToLibrary).not.toHaveBeenCalled();
+  },
+);
+
+test.each(['success', 'failure'] as const)(
+  'late %s of cancelled job creation cannot replace the new transfer',
+  async (outcome) => {
+    jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+    const oldCreation = deferred<typeof completedDirectJob>();
+    jest
+      .mocked(createDownloadJob)
+      .mockReturnValueOnce(oldCreation.promise)
+      .mockResolvedValue({ ...completedDirectJob, id: 'new-job' });
+    const transfer = deferred<{ uri: string; size: number }>();
+    jest.mocked(downloadJobFile).mockReturnValue(transfer.promise);
+    await render(<NavigableSession />);
+    await analyzeExample();
+    await fireEvent.press(screen.getByRole('radio', { name: /360p/ }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    await leaveDownload();
+    await returnToDownload();
+    await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    await waitFor(() => expect(downloadJobFile).toHaveBeenCalledTimes(1));
+    await act(() => {
+      if (outcome === 'success') oldCreation.resolve(completedDirectJob);
+      else oldCreation.reject(new Error('Late creation failure'));
+    });
+    expect(downloadJobFile).toHaveBeenCalledTimes(1);
+    expect(session.download.state).toMatchObject({
+      status: 'transferring',
+      job: { id: 'new-job' },
+    });
+    if (outcome === 'success')
+      expect(deleteDownloadJob).toHaveBeenCalledWith(completedDirectJob.id);
+    expect(deleteDownloadJob).not.toHaveBeenCalledWith('new-job');
+    await act(() =>
+      transfer.resolve({ uri: 'file:///cache/new.mp4', size: 12 }),
+    );
+    expect(promoteToLibrary).toHaveBeenCalledTimes(1);
+  },
+);
+
+test('synchronous video and audio actions cannot start two native jobs', async () => {
+  const native = localYoutubeNativeEngine();
+  native.startVideoDownload.mockReturnValue(nativeJob);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<NavigableSession />);
+  await analyzeYoutube();
+  await act(() => {
+    session.spike.downloadVideo();
+    session.spike.downloadAudio();
+  });
+  expect(native.startVideoDownload).toHaveBeenCalledTimes(1);
+  expect(native.startAudioDownload).not.toHaveBeenCalled();
 });

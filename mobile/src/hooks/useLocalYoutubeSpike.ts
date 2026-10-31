@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { DownloadType } from '@/models/media';
+
 import type {
   LocalAudioDownloadEvent,
   LocalCombinedDownloadEvent,
@@ -160,9 +162,15 @@ export function useLocalYoutubeSpike() {
   const [combinedState, setCombinedState] = useState<LocalCombinedState>({
     status: 'idle',
   });
-  const [selectedVideoFormatId, setSelectedVideoFormatId] = useState<
+  const [selectedVideoFormatId, storeSelectedVideoFormatId] = useState<
     string | null
   >(null);
+  const selectedVideoFormat = useRef<string | null>(null);
+  const [requestedMode, setRequestedMode] = useState<DownloadType | null>(null);
+  function setSelectedVideoFormatId(value: string | null) {
+    selectedVideoFormat.current = value;
+    storeSelectedVideoFormatId(value);
+  }
   const busy = useRef(false);
   const audioJobId = useRef<string | null>(null);
   const videoJobId = useRef<string | null>(null);
@@ -397,7 +405,7 @@ export function useLocalYoutubeSpike() {
         const metadata = analyzedMetadata.current;
         const generation = analysisGeneration.current;
         const format = metadata?.videoFormats.find(
-          (entry) => entry.id === selectedVideoFormatId,
+          (entry) => entry.id === selectedVideoFormat.current,
         );
         setCombinedState({ status: 'saving', jobId: event.jobId });
         void promoteToLibrary(event.localUri, {
@@ -461,7 +469,7 @@ export function useLocalYoutubeSpike() {
         });
       }
     },
-    [selectedVideoFormatId],
+    [],
   );
 
   useEffect(() => {
@@ -491,6 +499,7 @@ export function useLocalYoutubeSpike() {
     setVideoState({ status: 'idle' });
     setCombinedState({ status: 'idle' });
     setSelectedVideoFormatId(null);
+    setRequestedMode(null);
     setState({ status: 'loading' });
     try {
       const result = await analyzeYoutubeOnDevice(url);
@@ -519,6 +528,14 @@ export function useLocalYoutubeSpike() {
     }
   }
 
+  function cancelAnalysis() {
+    if (!busy.current) return;
+    ++analysisGeneration.current;
+    busy.current = false;
+    cancelLocalYoutube();
+    setState({ status: 'idle' });
+  }
+
   function reset() {
     ++analysisGeneration.current;
     analyzedMetadata.current = null;
@@ -535,6 +552,7 @@ export function useLocalYoutubeSpike() {
     setVideoState({ status: 'idle' });
     setCombinedState({ status: 'idle' });
     setSelectedVideoFormatId(null);
+    setRequestedMode(null);
   }
 
   const videoOptions =
@@ -559,6 +577,7 @@ export function useLocalYoutubeSpike() {
     if (
       busy.current ||
       audioJobId.current ||
+      videoJobId.current ||
       combinedJobId.current ||
       state.status !== 'result'
     )
@@ -792,7 +811,9 @@ export function useLocalYoutubeSpike() {
     downloadCombined,
     cancelCombined,
     shareCombined,
-    cancel: cancelLocalYoutube,
+    cancel: cancelAnalysis,
+    requestedMode,
+    setRequestedMode,
     isBusy:
       state.status === 'loading' ||
       audioState.status === 'preparing' ||

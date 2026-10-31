@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { ActionButton } from '@/components/ActionButton';
@@ -85,7 +84,7 @@ export function LocalYoutubeMainCard({
   onNewDownload: () => void;
 }) {
   const { colors } = useTheme();
-  const [requestedMode, setRequestedMode] = useState<Mode | null>(null);
+  const { requestedMode, setRequestedMode } = spike;
   const result = spike.state.status === 'result' ? spike.state.result : null;
   const metadata = result?.metadata;
   const qualities = metadata

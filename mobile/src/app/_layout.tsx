@@ -4,6 +4,7 @@ import { Slot, usePathname, useRouter, type Href } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { DownloadSessionProvider } from '@/providers/DownloadSessionProvider';
 import { MiniPlayer } from '@/components/MiniPlayer';
 import { cleanupAbandonedFilesAtStartup } from '@/services/fileExport';
 import { PlaybackProvider } from '@/providers/PlaybackProvider';
@@ -67,7 +68,7 @@ function ThemedRoutes() {
     );
   if (!libraryReady) return null;
   return (
-    <>
+    <DownloadSessionProvider>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <View style={{ flex: 1, backgroundColor: colors.background }}>
         <View style={{ flex: 1 }}>
@@ -75,7 +76,7 @@ function ThemedRoutes() {
         </View>
         <MiniPlayer />
       </View>
-    </>
+    </DownloadSessionProvider>
   );
 }
 

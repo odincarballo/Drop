@@ -88,11 +88,23 @@ export function useMediaDownload() {
     const requestController = new AbortController();
     controller.current = requestController;
     setState({ status: 'creating' });
+    let ownedJobId: string | null = null;
+    const isCurrent = () =>
+      mounted.current &&
+      operation.current === currentOperation &&
+      !requestController.signal.aborted;
     try {
       let job = await createDownloadJob(
         downloadRequest,
         requestController.signal,
       );
+      ownedJobId = job.id;
+      // A cancelled creation may still resolve. Never adopt it into a new
+      // session or start its transfer, even if the transport ignored abort.
+      if (!isCurrent()) {
+        void deleteDownloadJob(job.id).catch(() => undefined);
+        return;
+      }
       jobId.current = job.id;
       while (
         job.status === 'PENDING' ||
@@ -106,6 +118,7 @@ export function useMediaDownload() {
         await pause(config.jobPollIntervalMs, requestController.signal);
         if (requestController.signal.aborted) return;
         job = await getDownloadJob(job.id, requestController.signal);
+        if (!isCurrent()) return;
       }
       if (job.status === 'FAILED') throw jobError(job.error?.code);
       if (job.status === 'CANCELLED') {
@@ -169,7 +182,7 @@ export function useMediaDownload() {
       });
       // The source was moved. A visual reset must never delete Library media.
       localUri.current = null;
-      jobId.current = null;
+      if (operation.current === currentOperation) jobId.current = null;
       void deleteDownloadJob(job.id).catch(() => undefined);
       if (mounted.current && operation.current === currentOperation) {
         setState({
@@ -182,9 +195,9 @@ export function useMediaDownload() {
         });
       }
     } catch (error) {
-      if (jobId.current) {
-        void deleteDownloadJob(jobId.current).catch(() => undefined);
-        jobId.current = null;
+      if (ownedJobId) {
+        void deleteDownloadJob(ownedJobId).catch(() => undefined);
+        if (operation.current === currentOperation) jobId.current = null;
       }
       if (
         mounted.current &&
@@ -211,7 +224,7 @@ export function useMediaDownload() {
 
   async function cancel() {
     if (!active.current) return;
-    ++operation.current;
+    const cancellation = ++operation.current;
     controller.current?.abort();
     const currentJobId = jobId.current;
     jobId.current = null;
@@ -219,7 +232,8 @@ export function useMediaDownload() {
     if (currentJobId) {
       await deleteDownloadJob(currentJobId).catch(() => undefined);
     }
-    if (mounted.current) setState({ status: 'cancelled' });
+    if (mounted.current && operation.current === cancellation)
+      setState({ status: 'cancelled' });
   }
 
   async function share() {
