@@ -8,7 +8,8 @@ import {
 import { requireOptionalNativeModule } from 'expo';
 import * as Clipboard from 'expo-clipboard';
 
-import HomeScreenView from '@/app/index';
+import HomeScreenView from '@/app/download';
+import { MainNavigation } from '@/components/MainNavigation';
 import {
   DownloadSessionProvider,
   useDownloadSession,
@@ -32,6 +33,7 @@ function HomeScreen() {
   return (
     <DownloadSessionProvider>
       <HomeScreenView />
+      <MainNavigation />
     </DownloadSessionProvider>
   );
 }
@@ -50,7 +52,11 @@ jest.mock('@/services/library', () => ({
   ),
 }));
 const mockPush = jest.fn();
-jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush }) }));
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: mockPush, replace: mockPush }),
+  usePathname: () => '/download',
+}));
+jest.mock('@/components/MiniPlayer', () => ({ MiniPlayer: () => null }));
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/jobs', () => ({
   createDownloadJob: jest.fn(),
@@ -957,6 +963,7 @@ function NavigableSession() {
   return (
     <DownloadSessionProvider>
       <SessionRoutes />
+      <MainNavigation />
     </DownloadSessionProvider>
   );
 }

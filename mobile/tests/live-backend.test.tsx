@@ -8,7 +8,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as http from 'node:http';
 import { Alert } from 'react-native';
 
-import HomeScreen from '@/app/index';
+import HomeScreen from '@/app/download';
 import { DownloadSessionProvider } from '@/providers/DownloadSessionProvider';
 import { config } from '@/config';
 

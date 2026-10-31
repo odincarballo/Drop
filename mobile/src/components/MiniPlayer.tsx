@@ -7,7 +7,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePlayback } from '@/providers/PlaybackProvider';
 import { useTheme } from '@/theme';
 
-export function MiniPlayer() {
+export function MiniPlayer({
+  aboveNavigation = false,
+}: {
+  aboveNavigation?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -54,7 +58,7 @@ export function MiniPlayer() {
         {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
-          paddingBottom: Math.max(insets.bottom, 8),
+          paddingBottom: aboveNavigation ? 8 : Math.max(insets.bottom, 8),
         },
       ]}
     >

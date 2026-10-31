@@ -3,12 +3,38 @@
 Actualizado: 31 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Bloque actual: continuidad de descargas 1.5.0 A
+## Bloque actual: navegación principal 1.5.0 B
+
+- Misma rama/worktree de A, HEAD base
+  `cf97ca7baf9e670e6d7c0285364c4427e56a301c`, árbol
+  `f37e046cf4653e55668254c6efcd9b0ede898fda`. B cerrado mediante commit local en esta rama (consultar SHA con Git).
+- Biblioteca abre directamente en `/`; `/library` permanece como acceso directo.
+  Descargar vive en `/download`. Una barra compartida usa `router.replace`,
+  conserva las rutas secundarias y no reemplaza Expo Router. Seleccionar la
+  sección activa conserva sus parámetros (incluida Colecciones).
+- Un único MiniPlayer existente encima de la barra; la barra absorbe el inset
+  inferior en rutas principales. El footer se oculta con teclado y el MiniPlayer
+  conserva su propia política de ocultación en PlayerScreen. No se modifican
+  PlaybackProvider, DownloadSessionProvider, hooks, motores ni contratos nativos.
+- Pruebas nuevas con Expo Router, providers y pantallas reales; solo I/O simulado.
+  Cubren historial, continuidad, selección/progreso, rutas secundarias, regreso
+  del Player, teclado, safe areas y temas. No equivalen a una build o prueba física.
+- Validación ejecutada: 155 pruebas PASS, una integración HTTP opt-in omitida;
+  TypeScript y lint Expo PASS. Jest emite avisos `act` en la suite de Collections
+  sin cambios; no se ocultaron ni se modificaron reglas. Compilación y físico pendientes.
+- Reanudación: Bloque C — búsqueda, filtros combinados y ordenamiento de Biblioteca,
+  pendiente de autorización. Reutilizar este entorno, el snapshot ya cargado,
+  los filtros audio/video existentes y los contratos de reproducción contextual.
+  No integrar A/B en main todavía; no comenzar C durante este cierre.
+  Main, tags, versiones/build, dependencias y apps del iPhone intactos.
+  NOT_READY y validación física siguen pendientes. No iniciar C.
+
+## Bloque A cerrado: continuidad de descargas
 
 - Worktree aislado `v1.5.0-download-continuity`, rama
   `codex/v1.5.0-download-continuity`, base
-  `23873b3ad87fa69f97dff331428a7ce7c5e8871f`. Bloque A cerrado con commit local
-  en esta rama (obtener SHA con Git);
+  `23873b3ad87fa69f97dff331428a7ce7c5e8871f`. Cierre de A:
+  `cf97ca7baf9e670e6d7c0285364c4427e56a301c`;
   main y las apps instaladas no se modifican en este bloque.
 - Implementación: propietario único de la sesión por encima de las rutas,
   reutilizando los tres hooks existentes. URL, selección, progreso y resultado
@@ -21,13 +47,12 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   navegación durante análisis/descarga, modos/formatos, cancelación, resultados
   obsoletos, sesión caducada, promoción única y liberación de observadores.
   No se ejecutó integración HTTP opt-in, compilación iOS ni validación física.
-- Reanudación: Bloque B, navegación Biblioteca/Descargar y composición del
-  MiniPlayer existente, pendiente de autorización. Reutilizar esta rama/worktree
-  mientras sea seguro; no integrar A en main todavía. La navegación real queda
-  pendiente de una candidata iOS y validación física autorizadas. Background
+- Continuidad: B utiliza esta misma rama/worktree (estado actual arriba).
+  No integrar A en main todavía. La navegación real queda pendiente de una
+  candidata iOS y validación física autorizadas. Background
   y fin del proceso conservan las políticas existentes; no se implementó
   persistencia de trabajos fuera del proceso.
-  NOT_READY continúa independiente. No iniciar B durante este cierre.
+  NOT_READY continúa independiente.
 
 ## Snapshot del release instalado (histórico)
 

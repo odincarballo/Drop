@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { DownloadSessionProvider } from '@/providers/DownloadSessionProvider';
-import { MiniPlayer } from '@/components/MiniPlayer';
+import { MainNavigation } from '@/components/MainNavigation';
 import { cleanupAbandonedFilesAtStartup } from '@/services/fileExport';
 import { PlaybackProvider } from '@/providers/PlaybackProvider';
 import { initializeLibrary } from '@/services/library';
@@ -74,7 +74,7 @@ function ThemedRoutes() {
         <View style={{ flex: 1 }}>
           <Slot />
         </View>
-        <MiniPlayer />
+        <MainNavigation />
       </View>
     </DownloadSessionProvider>
   );

@@ -185,11 +185,10 @@ test('rapid transport taps cannot submit duplicate commands', async () => {
   setPlayback(playing(A), item(A));
   await render(<MiniPlayer />);
   const control = screen.getByLabelText('Pausar');
-  await act(async () => {
-    const first = fireEvent.press(control);
-    const second = fireEvent.press(control);
+  await fireEvent.press(control);
+  await fireEvent.press(control);
+  await act(() => {
     finish(playing(A));
-    await Promise.all([first, second]);
   });
   expect(mockToggle).toHaveBeenCalledTimes(1);
 });
@@ -313,4 +312,14 @@ test('mini-player consumes provider state without direct playback subscription',
   await render(<MiniPlayer />);
   expect(usePlayback).toHaveBeenCalled();
   expect(playback.subscribe).not.toHaveBeenCalled();
+});
+
+test('the shared navigation owns the safe area when MiniPlayer is above it', async () => {
+  mockPathname = '/download';
+  setPlayback(playing(A), item(A));
+  await render(<MiniPlayer aboveNavigation />);
+  expect(
+    StyleSheet.flatten(screen.getByTestId('mini-player').props.style)
+      .paddingBottom,
+  ).toBe(8);
 });

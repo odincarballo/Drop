@@ -181,6 +181,7 @@ export default function LibraryScreen() {
 
   return (
     <SafeAreaView
+      edges={['top', 'left', 'right']}
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
       <View style={styles.header}>
@@ -216,25 +217,6 @@ export default function LibraryScreen() {
               />
             </Pressable>
           </View>
-        </View>
-        <View style={styles.navigation}>
-          <Pressable
-            accessibilityRole="tab"
-            accessibilityState={{ selected: false }}
-            onPress={() => router.replace('/' as Href)}
-            style={styles.tab}
-          >
-            <Text style={{ color: colors.secondary, fontWeight: '600' }}>
-              Descargar
-            </Text>
-          </Pressable>
-          <Text
-            accessibilityRole="tab"
-            accessibilityState={{ selected: true }}
-            style={{ color: colors.text, fontWeight: '600' }}
-          >
-            Biblioteca
-          </Text>
         </View>
         <Text style={[styles.heading, { color: colors.text }]}>Biblioteca</Text>
         <View style={styles.sections}>
@@ -476,8 +458,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navigation: { flexDirection: 'row', gap: 20, alignItems: 'center' },
-  tab: { minHeight: 44, justifyContent: 'center' },
   heading: { fontSize: 25, fontWeight: '700' },
   sections: { flexDirection: 'row', gap: 20, marginTop: 4 },
   section: { minHeight: 44, justifyContent: 'center', borderBottomWidth: 2 },
