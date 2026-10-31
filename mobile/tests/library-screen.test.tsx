@@ -472,12 +472,12 @@ test('compatible audio and video open only by library ID', async () => {
   );
   await waitFor(() => expect(mockPush).toHaveBeenCalledTimes(2));
   expect(playback.startInContext).toHaveBeenNthCalledWith(1, item.id, [
-    item.id,
     video.id,
+    item.id,
   ]);
   expect(playback.startInContext).toHaveBeenNthCalledWith(2, video.id, [
-    item.id,
     video.id,
+    item.id,
   ]);
   expect(mockPush).toHaveBeenNthCalledWith(1, `/player/${item.id}`);
   expect(mockPush).toHaveBeenNthCalledWith(2, `/player/${video.id}`);
@@ -506,8 +506,8 @@ test('Videos and Audio taps send only the currently visible filtered order', asy
   );
   await waitFor(() => expect(playback.startInContext).toHaveBeenCalledTimes(1));
   expect(playback.startInContext).toHaveBeenCalledWith(videoA.id, [
-    videoA.id,
     videoB.id,
+    videoA.id,
   ]);
   await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
   await fireEvent.press(
@@ -591,4 +591,94 @@ test('returning to Library rechecks a recovered medium and enables its actions',
     screen.getByRole('button', { name: 'Guardar en Archivos' }),
   ).toBeEnabled();
   expect(playback.startInContext).not.toHaveBeenCalled();
+});
+
+test('query/filter/sort combine locally and explicit playback uses the visible order only', async () => {
+  const data = [
+    { ...item, id: 'a', title: 'Árbol Podcast', durationSeconds: 30 },
+    { ...item, id: 'b', title: 'ÁRBOL entrevista', durationSeconds: 10 },
+    {
+      ...item,
+      id: 'v',
+      title: 'Árbol video',
+      mediaType: 'video',
+      relativeMediaPath: 'Media/v.mp4',
+    },
+    {
+      ...item,
+      id: 'missing',
+      title: 'Árbol ausente',
+      availability: 'missing',
+      uri: null,
+    },
+  ];
+  jest.mocked(listLibrary).mockResolvedValue(data as never);
+  await render(<LibraryScreen />);
+  await screen.findByText('Árbol Podcast');
+  await fireEvent.changeText(
+    screen.getByLabelText('Buscar en Biblioteca'),
+    '  ÁRBOL  ',
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
+  await fireEvent.press(
+    screen.getByRole('radio', { name: 'Duración ascendente' }),
+  );
+  expect(screen.queryByText('Árbol video')).toBeNull();
+  expect(screen.getByText('Árbol ausente')).toBeTruthy();
+  expect(
+    screen.getByRole('button', {
+      name: 'Árbol ausente, archivo no disponible',
+    }),
+  ).toBeDisabled();
+  expect(playback.startInContext).not.toHaveBeenCalled();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reproducir ÁRBOL entrevista' }),
+  );
+  await waitFor(() =>
+    expect(playback.startInContext).toHaveBeenCalledWith('b', ['b', 'a']),
+  );
+  await fireEvent.changeText(
+    screen.getByLabelText('Buscar en Biblioteca'),
+    'Podcast',
+  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Título Z–A' }));
+  expect(playback.startInContext).toHaveBeenCalledTimes(1);
+  expect(listLibrary).toHaveBeenCalledTimes(1);
+});
+
+test('no matches and filter-empty are distinct, and clearing restores the loaded snapshot', async () => {
+  await render(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  await fireEvent.changeText(
+    screen.getByLabelText('Buscar en Biblioteca'),
+    'inexistente',
+  );
+  expect(screen.getByText(/No hay coincidencias/)).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Limpiar búsqueda' }),
+  );
+  expect(screen.getByText('Podcast largo')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Videos' }));
+  expect(screen.getByText('No hay archivos de este tipo.')).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Limpiar búsqueda y filtros' }),
+  );
+  expect(screen.getByText('Podcast largo')).toBeTruthy();
+  expect(listLibrary).toHaveBeenCalledTimes(1);
+});
+
+test('actual empty Library and read error are not presented as an unsuccessful search', async () => {
+  jest.mocked(listLibrary).mockResolvedValue([]);
+  const view = await render(<LibraryScreen />);
+  await screen.findByText('Tu Biblioteca está vacía.');
+  expect(screen.queryByText(/No hay coincidencias/)).toBeNull();
+  await view.unmount();
+  jest
+    .mocked(listLibrary)
+    .mockRejectedValueOnce(new Error('storage unavailable'));
+  await render(<LibraryScreen />);
+  await screen.findByText(
+    'No se pudo abrir la Biblioteca. Inténtalo de nuevo.',
+  );
+  expect(screen.queryByText('Tu Biblioteca está vacía.')).toBeNull();
 });

@@ -3,7 +3,28 @@
 Actualizado: 31 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Bloque actual: navegación principal 1.5.0 B
+## Bloque actual: Biblioteca 1.5.0 C
+
+- Misma rama/worktree; base `b25339944645fede8ef9079fa55680c5fb0b47bc`,
+  árbol `598f2716f8ea8512460455c6eaa34ce0d0ae3338`. C cerrado con commit local en esta rama (consultar SHA con Git).
+- Selector puro sobre el snapshot: palabras combinadas con AND, sin mayúsculas,
+  tildes o espacios sobrantes; título, contenedor, resolución e ID de origen.
+  Filtros audio/video y seis órdenes, con desempates de fecha/ID; duraciones
+  desconocidas al final en ambas direcciones. Predeterminado igual que SQLite:
+  downloadedAt DESC, id DESC. No se persiste consulta ni preferencia.
+- Controles desplazables, estados vacío/sin coincidencias/sin tipo/error distintos.
+  Filas no disponibles, acciones y confirmaciones existentes preservadas.
+  Solo reproducción explícita adopta el orden visible de elementos reproducibles;
+  los cambios de consulta no reescriben CURRENT ni su contexto activo.
+- Pruebas focales: 53 PASS sobre selectores, Biblioteca, rutas reales y Collections.
+  Avisos act de Collections conservados. No hay cambios en servicios, providers,
+  schema, motores, dependencias, versión/build ni acceso al dispositivo.
+- Reanudación: Bloque D — pulido final de interfaz y preparación de validación
+  integrada de 1.5.0, pendiente de autorización; reutilizar esta rama/worktree.
+  Validación física, VoiceOver y NOT_READY pendientes. No iniciar D durante este
+  cierre ni integrar A/B/C en main.
+
+## Bloque B cerrado: navegación principal
 
 - Misma rama/worktree de A, HEAD base
   `cf97ca7baf9e670e6d7c0285364c4427e56a301c`, árbol

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -6,6 +6,8 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
+  ScrollView,
   View,
 } from 'react-native';
 import {
@@ -36,7 +38,13 @@ import { useTheme } from '@/theme';
 import { collectionErrorMessage } from '@/utils/collectionErrors';
 import { formatSize } from '@/utils/format';
 
-type Filter = 'all' | 'video' | 'audio';
+import {
+  librarySortOptions,
+  normalizeLibraryQuery,
+  selectLibraryItems,
+  type LibraryFilter,
+  type LibrarySort,
+} from '@/utils/libraryQuery';
 type Section = 'downloads' | 'collections';
 
 function itemCount(count: number): string {
@@ -52,7 +60,9 @@ export default function LibraryScreen() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
   const [uncollectedCount, setUncollectedCount] = useState(0);
-  const [filter, setFilter] = useState<Filter>('all');
+  const [filter, setFilter] = useState<LibraryFilter>('all');
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<LibrarySort>('recent');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pickerItemId, setPickerItemId] = useState<string | null>(null);
@@ -170,13 +180,113 @@ export default function LibraryScreen() {
     );
   }
 
-  const visible = items.filter(
-    (item) => filter === 'all' || item.mediaType === filter,
+  const visible = useMemo(
+    () => selectLibraryItems(items, query, filter, sort),
+    [items, query, filter, sort],
   );
   const used = items.reduce(
     (total, item) =>
       total + (item.mediaSizeOnDisk ?? 0) + item.artworkSizeBytes,
     0,
+  );
+
+  const queryControls = (
+    <View style={{ gap: 8, paddingBottom: 12 }}>
+      <TextInput
+        accessibilityLabel="Buscar en Biblioteca"
+        placeholder="Buscar título, formato, resolución o ID de origen"
+        value={query}
+        onChangeText={setQuery}
+        autoCorrect={false}
+        autoCapitalize="none"
+        returnKeyType="search"
+        style={{
+          color: colors.text,
+          borderColor: colors.border,
+          borderWidth: 1,
+          borderRadius: 10,
+          padding: 12,
+          minHeight: 44,
+        }}
+        placeholderTextColor={colors.secondary}
+      />
+      {query.length > 0 && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Limpiar búsqueda"
+          onPress={() => setQuery('')}
+          style={{ minHeight: 44, justifyContent: 'center' }}
+        >
+          <Text style={{ color: colors.accent }}>Limpiar búsqueda</Text>
+        </Pressable>
+      )}
+      <Text style={{ color: colors.secondary }}>Ordenar por</Text>
+      <ScrollView
+        horizontal
+        accessibilityRole="radiogroup"
+        accessibilityLabel="Orden de Biblioteca"
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 8 }}
+      >
+        {librarySortOptions.map(([value, label]) => (
+          <Pressable
+            key={value}
+            accessibilityRole="radio"
+            accessibilityLabel={label}
+            accessibilityState={{ checked: sort === value }}
+            onPress={() => setSort(value)}
+            style={[
+              styles.filter,
+              {
+                borderColor: colors.border,
+                backgroundColor:
+                  sort === value ? colors.accent : colors.surface,
+              },
+            ]}
+          >
+            <Text
+              style={{
+                color: sort === value ? colors.onAccent : colors.text,
+              }}
+            >
+              {label}
+            </Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+      <View style={styles.filters}>
+        {(
+          [
+            ['all', 'Todos'],
+            ['video', 'Videos'],
+            ['audio', 'Audio'],
+          ] as const
+        ).map(([value, label]) => (
+          <Pressable
+            key={value}
+            accessibilityRole="button"
+            accessibilityState={{ selected: filter === value }}
+            onPress={() => setFilter(value)}
+            style={[
+              styles.filter,
+              {
+                borderColor: colors.border,
+                backgroundColor:
+                  filter === value ? colors.accent : colors.surface,
+              },
+            ]}
+          >
+            <Text
+              style={{
+                color: filter === value ? colors.onAccent : colors.text,
+              }}
+            >
+              {label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
   );
 
   return (
@@ -256,38 +366,6 @@ export default function LibraryScreen() {
             <Text style={{ color: colors.secondary }}>
               {formatSize(used)} utilizados
             </Text>
-            <View style={styles.filters}>
-              {(
-                [
-                  ['all', 'Todos'],
-                  ['video', 'Videos'],
-                  ['audio', 'Audio'],
-                ] as const
-              ).map(([value, label]) => (
-                <Pressable
-                  key={value}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: filter === value }}
-                  onPress={() => setFilter(value)}
-                  style={[
-                    styles.filter,
-                    {
-                      borderColor: colors.border,
-                      backgroundColor:
-                        filter === value ? colors.accent : colors.surface,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={{
-                      color: filter === value ? colors.onAccent : colors.text,
-                    }}
-                  >
-                    {label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
           </>
         ) : (
           <View style={styles.collectionsHeader}>
@@ -334,14 +412,38 @@ export default function LibraryScreen() {
       )}
       {section === 'downloads' ? (
         <FlatList
+          ListHeaderComponent={queryControls}
           data={visible}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
-            loading ? null : (
-              <Text style={{ color: colors.secondary }}>
-                Todavía no hay descargas en esta sección.
-              </Text>
+            loading || error ? null : (
+              <View style={{ gap: 8 }}>
+                <Text style={{ color: colors.secondary }}>
+                  {items.length === 0
+                    ? 'Tu Biblioteca está vacía.'
+                    : normalizeLibraryQuery(query)
+                      ? 'No hay coincidencias con esta búsqueda y los filtros actuales.'
+                      : 'No hay archivos de este tipo.'}
+                </Text>
+                {items.length > 0 && (query.length > 0 || filter !== 'all') && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Limpiar búsqueda y filtros"
+                    onPress={() => {
+                      setQuery('');
+                      setFilter('all');
+                    }}
+                    style={{ minHeight: 44, justifyContent: 'center' }}
+                  >
+                    <Text style={{ color: colors.accent }}>
+                      Limpiar búsqueda y filtros
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
             )
           }
           renderItem={({ item }) => (
