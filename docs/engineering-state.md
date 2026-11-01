@@ -3,7 +3,52 @@
 Actualizado: 31 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Bloque actual: pulido y cierre 1.5.0 D
+## Release actual: Drop 1.5.0 build 11
+
+- Instalada en la original `com.odincarballo.mediadrop`, Team `HK927RUDLZ`.
+  Código funcional: `66f5ea563e9b7bc1bfe61046dc883e7cc2a729e8`.
+  El commit de cierre consolida únicamente metadatos 1.5.0/build 11 y este estado;
+  se distingue del commit funcional usado para construir. Sin cambios de dependencias.
+- A–D completados: sesión de descarga estable durante navegación, Biblioteca/Descargar,
+  búsqueda combinada, filtros y seis órdenes, acciones del archivo completado.
+  PASS físicos comunicados por el usuario en reprotest: navegación, conservación
+  visual de originales y nuevas descargas, búsquedas en chino/sin distinguir
+  mayúsculas y tonos/múltiples palabras, filtros combinados y controles de orden;
+  autoplay desde Biblioteca, MiniPlayer/pausa/reanudación, reproducción entre
+  pestañas, descarga durante navegación repetida, finalización con una entrada
+  visible, apertura/estado de Cola y teclado sin superposición incorrecta.
+- Autoplay desde «Abrir archivo»: FAIL en build 10; corregido en el commit
+  funcional, 46 + 21 pruebas focales PASS y checks estáticos PASS; PASS físico
+  confirmado por el usuario en reprotest build 11. No se repitieron suites para cerrar Git.
+- Original: una actualización in-place de 1.4.1/build 9 a 1.5.0/build 11, sin
+  desinstalar ni restaurar. Preservados 15 LibraryItems ready, 15 medios,
+  15 portadas y 1 Collection; IDs, metadatos, progreso y preferencias coincidentes.
+  SQLite v3 integrity_check=ok, FK=0, sin archivos faltantes, huérfanos ni duplicados.
+  Se reutilizaron hashes donde los metadatos no cambiaron; cuatro archivos con
+  metadatos distintos se releyeron y coincidieron. Inicio con portadas, reproducción
+  de un archivo existente y apertura de la Collection: PASS observados por el usuario.
+- Evidencia durable bajo `/Users/odincarballo/Library/Application Support/DropValidationEvidence/`:
+  `v1.5.0-build11-original-2026-10-31-_86rrbhc/installation/RESULT.json`;
+  respaldo recuperable `drop-original-v1.4.1-build9-pre-v1.5.0-2026-10-31-jbl7tpzz/`.
+  Respaldo con 30 hashes de medios/portadas verificados, SQLite/WAL/SHM, preferencias;
+  clones APFS independientes y copia de archivos nuevos; restauración física no ensayada.
+- Identidad Expo por `DROP_BUNDLE_IDENTIFIER`; para original:
+  `com.odincarballo.mediadrop`. No fijar reprotest ni sobrescribir la configuración
+  guardada de variantes; los proyectos nativos generados no forman parte del commit.
+- Límites: validación dentro del alcance observado; VoiceOver no verificado y
+  duraciones numéricas del orden no contrastadas. Apertura de Cola no acredita
+  todas sus operaciones; no se infieren PASS físicos de escenarios no documentados.
+  Mejora no bloqueante: indicar mejor el desplazamiento horizontal de los órdenes.
+  NOT_READY y progreso al repetir archivos completados siguen como incidencias
+  independientes, sin diagnóstico/corrección atribuida a esta versión.
+- Próxima acción: renovar aprovisionamiento antes del **06/11/2026, 17:43:54 CDMX**
+  (perfil original `549b057e-e195-4b9a-9315-d6f3241efd9f`). Mantener Bundle ID,
+  Team, certificado, dispositivo y entitlements; proteger datos actuales antes de
+  actualizar in-place. Renovación, nueva firma e instalación requieren autorización.
+  Cierre Git local: commit de metadatos/estado, main por fast-forward y tag anotado
+  v1.5.0; sin push. No iniciar 1.6.0. Las secciones siguientes son snapshots históricos.
+
+## Histórico: pulido y cierre 1.5.0 D
 
 - Misma rama/worktree; base `ae7c5ccb2acb5916eccb9ef7a09932bc9d39dade`,
   árbol `01eafd890524c964c0d5306ce36cda3bfca635f6`. D cerrado con commit local en esta rama (consultar SHA con Git); sin build ni instalación.
