@@ -682,3 +682,141 @@ test('actual empty Library and read error are not presented as an unsuccessful s
   );
   expect(screen.queryByText('Tu Biblioteca está vacía.')).toBeNull();
 });
+
+test('view toggle preserves query, filter, sort and playback context without rereading Library', async () => {
+  const other = {
+    ...item,
+    id: '00000000-0000-0000-0000-000000000002',
+    title: 'Podcast breve',
+  };
+  jest.mocked(listLibrary).mockResolvedValue([item, other] as never);
+  await render(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  expect(
+    screen.getByRole('button', { name: 'Vista de lista', selected: true }),
+  ).toBeTruthy();
+  await fireEvent.changeText(
+    screen.getByLabelText('Buscar en Biblioteca'),
+    'PÓDCAST',
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Título A–Z' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+  );
+  expect(
+    screen.getByRole('button', { name: 'Vista de cuadrícula', selected: true }),
+  ).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Vista de lista' }));
+  expect(screen.getByLabelText('Buscar en Biblioteca').props.value).toBe(
+    'PÓDCAST',
+  );
+  expect(
+    screen.getByRole('button', { name: 'Audio', selected: true }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('radio', { name: 'Título A–Z' }).props.accessibilityState
+      .checked,
+  ).toBe(true);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+  );
+  expect(listLibrary).toHaveBeenCalledTimes(1);
+  expect(playback.startInContext).not.toHaveBeenCalled();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reproducir Podcast breve' }),
+  );
+  expect(playback.startInContext).toHaveBeenCalledWith(other.id, [
+    other.id,
+    item.id,
+  ]);
+});
+
+test('grid adapts to measured width and preserves missing file restrictions', async () => {
+  jest
+    .mocked(listLibrary)
+    .mockResolvedValue([
+      { ...item, availability: 'missing', uri: null },
+    ] as never);
+  await render(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+  );
+  await fireEvent(screen.getByTestId('library-downloads'), 'layout', {
+    nativeEvent: { layout: { width: 390 } },
+  });
+  expect(screen.getByTestId(`library-card-${item.id}`).props.style.width).toBe(
+    167,
+  );
+  await fireEvent(screen.getByTestId('library-downloads'), 'layout', {
+    nativeEvent: { layout: { width: 300 } },
+  });
+  expect(screen.getByTestId(`library-card-${item.id}`).props.style.width).toBe(
+    '100%',
+  );
+  expect(
+    screen.getByRole('button', {
+      name: 'Podcast largo, archivo no disponible',
+    }),
+  ).toBeDisabled();
+  expect(
+    screen.getByRole('button', { name: 'Guardar en Archivos' }),
+  ).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Compartir' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Eliminar' })).toBeEnabled();
+  expect(
+    screen.getByRole('button', { name: 'Colecciones de Podcast largo' }),
+  ).toBeEnabled();
+  expect(playback.startInContext).not.toHaveBeenCalled();
+});
+
+test.each(['empty', 'error'])(
+  'grid retains the existing %s state without extra reads',
+  async (kind) => {
+    if (kind === 'empty') jest.mocked(listLibrary).mockResolvedValue([]);
+    else jest.mocked(listLibrary).mockRejectedValueOnce(new Error('offline'));
+    await render(<LibraryScreen />);
+    const message =
+      kind === 'empty'
+        ? 'Tu Biblioteca está vacía.'
+        : 'No se pudo abrir la Biblioteca. Inténtalo de nuevo.';
+    await screen.findByText(message);
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+    );
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(listLibrary).toHaveBeenCalledTimes(1);
+  },
+);
+
+test('grid keeps video artwork and existing Queue/export actions tied to its ID', async () => {
+  const video = {
+    ...item,
+    mediaType: 'video',
+    relativeMediaPath: 'Media/a.mp4',
+    artworkUri: 'file:///artwork/a.jpg',
+    resolution: '1080p',
+  };
+  jest.mocked(listLibrary).mockResolvedValue([video] as never);
+  await render(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+  );
+  expect(screen.getByLabelText('Portada descargada').props.source.uri).toBe(
+    video.artworkUri,
+  );
+  expect(screen.getByText(/Video · 1080p/)).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', {
+      name: 'Añadir al final de la cola: Podcast largo',
+    }),
+  );
+  expect(enqueueLast).toHaveBeenCalledWith(video.id);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Guardar en Archivos' }),
+  );
+  expect(withLibraryLease).toHaveBeenCalledWith(video.id, expect.any(Function));
+  expect(playback.startInContext).not.toHaveBeenCalled();
+});

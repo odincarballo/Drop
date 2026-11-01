@@ -3,6 +3,22 @@
 Actualizado: 31 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
+## Desarrollo actual: 1.6.0 bloque A — lista/cuadrícula
+
+- Rama `codex/v1.6.0-library-view`, worktree `Library/DropWorktrees/main`, base
+  `9abb6d46da1c00e031081d50222e003d85f4719f`. Main/tag v1.5.0 y el worktree
+  protegido de 1.5.0 no modificados; versión/build permanecen 1.5.0/11.
+- Lista predeterminada y cuadrícula de una/dos columnas por ancho medido.
+  Mismo snapshot, búsqueda/filtros/orden, acciones y contexto; sin persistencia nueva.
+  Selección de vista local a la pantalla; alternar puede reiniciar el scroll.
+- Validación host: 35 pruebas de Biblioteca/Collections PASS (5 nuevas), TypeScript,
+  lint focal de fuentes, formato focal y diff check. Avisos act existentes de Collections.
+  Herramientas 1.5.0 reutilizadas por rutas externas de resolución, sin copiar ni
+  enlazar dependencias; configuración de ejecución conservada en evidencia externa.
+- Pendientes: revisión del diff y autorización de commit; después valorar validación
+  física de portadas, tamaños de texto y VoiceOver. Sin build ni instalación 1.6.0.
+  No iniciar el bloque de ordenamientos. El release estable y su renovación siguen vigentes.
+
 ## Release actual: Drop 1.5.0 build 11
 
 - Instalada en la original `com.odincarballo.mediadrop`, Team `HK927RUDLZ`.

@@ -6,6 +6,7 @@ import { formatSize } from '@/utils/format';
 import { isPlayableLibraryItem } from '@/utils/playbackContext';
 
 type Props = {
+  layout?: 'list' | 'grid';
   item: LibraryItem;
   busy: boolean;
   onOpen: (item: LibraryItem) => void;
@@ -21,6 +22,7 @@ type Props = {
 };
 
 export function LibraryItemRow({
+  layout = 'list',
   item,
   busy,
   onOpen,
@@ -45,7 +47,18 @@ export function LibraryItemRow({
         )
       : 0;
   return (
-    <View style={[styles.item, { borderBottomColor: colors.border }]}>
+    <View
+      style={[
+        styles.item,
+        { borderBottomColor: colors.border },
+        layout === 'grid' && {
+          padding: 12,
+          borderWidth: 1,
+          borderRadius: 12,
+          borderColor: colors.border,
+        },
+      ]}
+    >
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={
@@ -56,9 +69,22 @@ export function LibraryItemRow({
         accessibilityState={{ disabled: !available || busy }}
         disabled={!available || busy}
         onPress={() => onOpen(item)}
-        style={styles.playableRow}
+        style={[
+          styles.playableRow,
+          layout === 'grid' && { flexDirection: 'column' },
+        ]}
       >
-        <View style={[styles.artwork, { backgroundColor: colors.subtle }]}>
+        <View
+          style={[
+            styles.artwork,
+            { backgroundColor: colors.subtle },
+            layout === 'grid' && {
+              width: '100%',
+              height: undefined,
+              aspectRatio: 1,
+            },
+          ]}
+        >
           {item.artworkUri ? (
             <Image
               source={{ uri: item.artworkUri }}
@@ -73,7 +99,7 @@ export function LibraryItemRow({
             />
           )}
         </View>
-        <View style={styles.itemBody}>
+        <View style={[styles.itemBody, layout === 'grid' && { flex: 0 }]}>
           <Text
             numberOfLines={2}
             style={[styles.itemTitle, { color: colors.text }]}
@@ -109,7 +135,15 @@ export function LibraryItemRow({
           </View>
         </View>
       </Pressable>
-      <View style={styles.actions}>
+      <View
+        style={[
+          styles.actions,
+          layout === 'grid' && {
+            flexDirection: 'column',
+            alignItems: 'stretch',
+          },
+        ]}
+      >
         {item.lifecycle === 'ready' && isPlayableLibraryItem(item) && (
           <>
             <Pressable

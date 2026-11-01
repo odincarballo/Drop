@@ -60,6 +60,10 @@ export default function LibraryScreen() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
   const [uncollectedCount, setUncollectedCount] = useState(0);
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const columns = viewMode === 'grid' && viewportWidth >= 356 ? 2 : 1;
+  const cardWidth = columns === 2 ? (viewportWidth - 44 - 12) / 2 : undefined;
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<LibrarySort>('recent');
@@ -192,6 +196,40 @@ export default function LibraryScreen() {
 
   const queryControls = (
     <View style={{ gap: 8, paddingBottom: 12 }}>
+      <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+        {(
+          [
+            ['list', 'Lista'],
+            ['grid', 'Cuadrícula'],
+          ] as const
+        ).map(([value, label]) => (
+          <Pressable
+            key={value}
+            accessibilityRole="button"
+            accessibilityLabel={`Vista de ${label.toLowerCase()}`}
+            accessibilityState={{ selected: viewMode === value }}
+            onPress={() => setViewMode(value)}
+            style={[
+              styles.filter,
+              {
+                minHeight: 44,
+                justifyContent: 'center',
+                borderColor: colors.border,
+                backgroundColor:
+                  viewMode === value ? colors.accent : colors.surface,
+              },
+            ]}
+          >
+            <Text
+              style={{
+                color: viewMode === value ? colors.onAccent : colors.text,
+              }}
+            >
+              {label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
       <TextInput
         accessibilityLabel="Buscar en Biblioteca"
         placeholder="Buscar título, formato, resolución o ID de origen"
@@ -412,6 +450,13 @@ export default function LibraryScreen() {
       )}
       {section === 'downloads' ? (
         <FlatList
+          key={`downloads-${viewMode}-${columns}`}
+          testID="library-downloads"
+          numColumns={columns}
+          columnWrapperStyle={
+            columns > 1 ? { gap: 12, alignItems: 'flex-start' } : undefined
+          }
+          onLayout={(event) => setViewportWidth(event.nativeEvent.layout.width)}
           ListHeaderComponent={queryControls}
           data={visible}
           keyboardShouldPersistTaps="handled"
@@ -447,18 +492,28 @@ export default function LibraryScreen() {
             )
           }
           renderItem={({ item }) => (
-            <LibraryItemRow
-              item={item}
-              busy={actions.busyId === item.id}
-              queueBusy={queueActions.busyId !== null}
-              onQueueNext={queueActions.next}
-              onQueueLast={queueActions.last}
-              onOpen={(selected) => actions.open(selected, visible)}
-              onSave={actions.save}
-              onShare={actions.share}
-              onDelete={actions.confirmDelete}
-              onCollections={(selected) => setPickerItemId(selected.id)}
-            />
+            <View
+              testID={`library-card-${item.id}`}
+              style={
+                viewMode === 'grid'
+                  ? { width: cardWidth ?? '100%', marginBottom: 12 }
+                  : undefined
+              }
+            >
+              <LibraryItemRow
+                layout={viewMode}
+                item={item}
+                busy={actions.busyId === item.id}
+                queueBusy={queueActions.busyId !== null}
+                onQueueNext={queueActions.next}
+                onQueueLast={queueActions.last}
+                onOpen={(selected) => actions.open(selected, visible)}
+                onSave={actions.save}
+                onShare={actions.share}
+                onDelete={actions.confirmDelete}
+                onCollections={(selected) => setPickerItemId(selected.id)}
+              />
+            </View>
           )}
         />
       ) : (
