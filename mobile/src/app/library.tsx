@@ -7,7 +7,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  ScrollView,
   View,
 } from 'react-native';
 import {
@@ -259,12 +258,10 @@ export default function LibraryScreen() {
         </Pressable>
       )}
       <Text style={{ color: colors.secondary }}>Ordenar por</Text>
-      <ScrollView
-        horizontal
+      <View
         accessibilityRole="radiogroup"
         accessibilityLabel="Orden de Biblioteca"
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: 8 }}
+        style={styles.sortOptions}
       >
         {librarySortOptions.map(([value, label]) => (
           <Pressable
@@ -275,6 +272,7 @@ export default function LibraryScreen() {
             onPress={() => setSort(value)}
             style={[
               styles.filter,
+              styles.sortOption,
               {
                 borderColor: colors.border,
                 backgroundColor:
@@ -291,7 +289,7 @@ export default function LibraryScreen() {
             </Text>
           </Pressable>
         ))}
-      </ScrollView>
+      </View>
       <View style={styles.filters}>
         {(
           [
@@ -618,6 +616,8 @@ const styles = StyleSheet.create({
   heading: { fontSize: 25, fontWeight: '700' },
   sections: { flexDirection: 'row', gap: 20, marginTop: 4 },
   section: { minHeight: 44, justifyContent: 'center', borderBottomWidth: 2 },
+  sortOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  sortOption: { minHeight: 44, maxWidth: '100%', paddingVertical: 8 },
   filters: { flexDirection: 'row', gap: 8, paddingVertical: 8 },
   filter: {
     minHeight: 40,

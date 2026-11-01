@@ -3,7 +3,7 @@
 Actualizado: 31 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Desarrollo actual: 1.6.0 bloque A — lista/cuadrícula
+## Desarrollo actual: 1.6.0 bloques A/B — vistas y ordenamientos
 
 - Rama `codex/v1.6.0-library-view`, worktree `Library/DropWorktrees/main`, base
   `9abb6d46da1c00e031081d50222e003d85f4719f`. Main/tag v1.5.0 y el worktree
@@ -15,9 +15,16 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   lint focal de fuentes, formato focal y diff check. Avisos act existentes de Collections.
   Herramientas 1.5.0 reutilizadas por rutas externas de resolución, sin copiar ni
   enlazar dependencias; configuración de ejecución conservada en evidencia externa.
-- Pendientes: revisión del diff y autorización de commit; después valorar validación
-  física de portadas, tamaños de texto y VoiceOver. Sin build ni instalación 1.6.0.
-  No iniciar el bloque de ordenamientos. El release estable y su renovación siguen vigentes.
+- Bloque A confirmado en `8a66007ebe583347b7ba3da6f25aa0d116feff00`.
+- Bloque B: los seis órdenes existentes se distribuyen en filas adaptables, sin
+  desplazamiento horizontal oculto ni menú adicional. Etiquetas/estado radio
+  conservados; área táctil mínima de 44 puntos. Misma lógica en lista/cuadrícula.
+- Validación B host: 4 PASS (2 casos nuevos y 2 regresiones focales), TypeScript,
+  lint focal de fuente, formato y diff check PASS. Sin repetir las 35 pruebas de A.
+- Pendientes: revisión y autorización de commit B; validación física de distribución,
+  altura del encabezado, tamaños de texto y VoiceOver. Las pruebas host verifican
+  estructura/selección, no el layout real de iPhone. Sin build ni instalación 1.6.0.
+  El release estable y su renovación siguen vigentes.
 
 ## Release actual: Drop 1.5.0 build 11
 

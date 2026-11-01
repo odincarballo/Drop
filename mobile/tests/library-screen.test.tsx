@@ -5,7 +5,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
 
 import LibraryScreen from '@/app/library';
 import {
@@ -592,6 +592,66 @@ test('returning to Library rechecks a recovered medium and enables its actions',
   ).toBeEnabled();
   expect(playback.startInContext).not.toHaveBeenCalled();
 });
+
+test.each(['lista', 'cuadrícula'])(
+  'sort controls wrap without horizontal scrolling and keep selection accessible in %s',
+  async (mode) => {
+    await render(<LibraryScreen />);
+    await screen.findByText('Podcast largo');
+    if (mode === 'cuadrícula') {
+      await fireEvent.press(
+        screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+      );
+    }
+    await fireEvent.changeText(
+      screen.getByLabelText('Buscar en Biblioteca'),
+      'Podcast',
+    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
+    const group = screen.getByLabelText('Orden de Biblioteca');
+    expect(group.props.horizontal).not.toBe(true);
+    expect(StyleSheet.flatten(group.props.style)).toMatchObject({
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+    });
+    const labels = [
+      'Más recientes',
+      'Más antiguos',
+      'Título A–Z',
+      'Título Z–A',
+      'Duración ascendente',
+      'Duración descendente',
+    ];
+    expect(screen.getAllByRole('radio')).toHaveLength(labels.length);
+    expect(
+      screen.getByRole('radio', { name: labels[0] }).props.accessibilityState
+        .checked,
+    ).toBe(true);
+    for (const label of labels) {
+      const control = screen.getByRole('radio', { name: label });
+      expect(StyleSheet.flatten(control.props.style)).toMatchObject({
+        minHeight: 44,
+        maxWidth: '100%',
+      });
+      await fireEvent.press(control);
+      for (const candidate of labels) {
+        expect(
+          screen.getByRole('radio', { name: candidate }).props
+            .accessibilityState.checked,
+        ).toBe(candidate === label);
+      }
+    }
+    expect(screen.getByLabelText('Buscar en Biblioteca').props.value).toBe(
+      'Podcast',
+    );
+    expect(
+      screen.getByRole('button', { name: 'Audio', selected: true }),
+    ).toBeTruthy();
+    expect(screen.getByText('Podcast largo')).toBeTruthy();
+    expect(listLibrary).toHaveBeenCalledTimes(1);
+    expect(playback.startInContext).not.toHaveBeenCalled();
+  },
+);
 
 test('query/filter/sort combine locally and explicit playback uses the visible order only', async () => {
   const data = [
