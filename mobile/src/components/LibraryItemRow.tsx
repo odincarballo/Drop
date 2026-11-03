@@ -1,4 +1,12 @@
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ActionSheetIOS,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { isAvailableLibraryItem, type LibraryItem } from '@/models/library';
 import { useTheme } from '@/theme';
@@ -20,6 +28,194 @@ type Props = {
   onRemoveFromCollection?: (item: LibraryItem) => void;
   collectionName?: string;
 };
+
+function CompactLibraryCard(props: Props & { progress: number }) {
+  const { item, busy, queueBusy, progress } = props;
+  const { colors } = useTheme();
+  const available = isAvailableLibraryItem(item);
+  const menuOpen = useRef(false);
+  const latest = useRef(props);
+  useEffect(() => {
+    latest.current = props;
+  }, [props]);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const [expanded, setExpanded] = useState(false);
+  function showActions() {
+    if (menuOpen.current || busy) return;
+    menuOpen.current = true;
+    setExpanded(true);
+    const actions: {
+      label: string;
+      disabled: boolean;
+      run: (item: LibraryItem) => void;
+      requiresFile?: boolean;
+      queueAction?: boolean;
+    }[] = [
+      ...(item.lifecycle === 'ready' && isPlayableLibraryItem(item)
+        ? [
+            {
+              label: 'Reproducir a continuación',
+              disabled: busy || queueBusy,
+              run: props.onQueueNext,
+              requiresFile: true,
+              queueAction: true,
+            },
+            {
+              label: 'Añadir al final de la cola',
+              disabled: busy || queueBusy,
+              run: props.onQueueLast,
+              requiresFile: true,
+              queueAction: true,
+            },
+          ]
+        : []),
+      {
+        label: 'Guardar en Archivos',
+        disabled: busy || !available,
+        run: props.onSave,
+        requiresFile: true,
+      },
+      {
+        label: 'Compartir',
+        disabled: busy || !available,
+        run: props.onShare,
+        requiresFile: true,
+      },
+      { label: 'Colecciones', disabled: busy, run: props.onCollections },
+      ...(props.onRemoveFromCollection && props.collectionName
+        ? [
+            {
+              label: `Quitar de «${props.collectionName}»`,
+              disabled: busy,
+              run: props.onRemoveFromCollection,
+            },
+          ]
+        : []),
+      { label: 'Eliminar', disabled: busy, run: props.onDelete },
+    ];
+    let handled = false;
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        title: item.title,
+        options: ['Cancelar', ...actions.map((action) => action.label)],
+        cancelButtonIndex: 0,
+        destructiveButtonIndex: actions.length,
+        disabledButtonIndices: actions.flatMap((action, index) =>
+          action.disabled ? [index + 1] : [],
+        ),
+      },
+      (index) => {
+        if (handled) return;
+        handled = true;
+        menuOpen.current = false;
+        if (!mounted.current) return;
+        setExpanded(false);
+        const current = latest.current;
+        const action = actions[index - 1];
+        if (
+          !action ||
+          action.disabled ||
+          current.busy ||
+          current.item.id !== item.id
+        )
+          return;
+        if (action.requiresFile && !isAvailableLibraryItem(current.item))
+          return;
+        if (
+          action.queueAction &&
+          (current.queueBusy || !isPlayableLibraryItem(current.item))
+        )
+          return;
+        action.run(current.item);
+      },
+    );
+  }
+  return (
+    <View style={[styles.gridCard, { borderColor: colors.border }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={
+          available
+            ? `Reproducir ${item.title}`
+            : `${item.title}, archivo no disponible`
+        }
+        disabled={!available || busy}
+        accessibilityState={{ disabled: !available || busy }}
+        onPress={() => props.onOpen(item)}
+        style={styles.gridPlayable}
+      >
+        <View style={[styles.gridArtwork, { backgroundColor: colors.subtle }]}>
+          <Image
+            source={
+              item.artworkUri
+                ? { uri: item.artworkUri }
+                : require('../../assets/icon.png')
+            }
+            style={styles.image}
+            resizeMode="contain"
+            accessibilityLabel={
+              item.artworkUri ? 'Portada descargada' : 'Portada de Drop'
+            }
+          />
+        </View>
+        <Text
+          numberOfLines={2}
+          style={[styles.itemTitle, { color: colors.text }]}
+        >
+          {item.title}
+        </Text>
+        <Text
+          numberOfLines={1}
+          style={{ color: colors.secondary, fontSize: 12 }}
+        >
+          {item.mediaType === 'video' ? 'Video' : 'Audio'}
+          {item.resolution ? ` · ${item.resolution}` : ''} ·{' '}
+          {formatSize(item.sizeBytes)}
+        </Text>
+        {!available && (
+          <Text style={{ color: colors.secondary }}>Archivo no disponible</Text>
+        )}
+      </Pressable>
+      {progress > 0 && (
+        <View
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel={`Progreso de ${item.title}`}
+          accessibilityValue={{ min: 0, max: 100, now: Math.round(progress) }}
+          style={[
+            styles.progressTrack,
+            { backgroundColor: colors.progressTrack },
+          ]}
+        >
+          <View
+            style={[
+              styles.progress,
+              { backgroundColor: colors.accent, width: `${progress}%` },
+            ]}
+          />
+        </View>
+      )}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Acciones de ${item.title}`}
+        accessibilityHint="Abre las acciones del archivo"
+        accessibilityState={{ disabled: busy, expanded }}
+        disabled={busy}
+        onPress={showActions}
+        style={styles.gridMenu}
+      >
+        <Text style={{ color: colors.accent }}>Más ···</Text>
+      </Pressable>
+    </View>
+  );
+}
 
 export function LibraryItemRow({
   layout = 'list',
@@ -46,19 +242,29 @@ export function LibraryItemRow({
           (100 * item.playbackPositionSeconds) / item.durationSeconds,
         )
       : 0;
+  if (layout === 'grid') {
+    return (
+      <CompactLibraryCard
+        {...{
+          item,
+          busy,
+          onOpen,
+          onSave,
+          onShare,
+          onDelete,
+          onCollections,
+          onQueueNext,
+          onQueueLast,
+          queueBusy,
+          onRemoveFromCollection,
+          collectionName,
+          progress,
+        }}
+      />
+    );
+  }
   return (
-    <View
-      style={[
-        styles.item,
-        { borderBottomColor: colors.border },
-        layout === 'grid' && {
-          padding: 12,
-          borderWidth: 1,
-          borderRadius: 12,
-          borderColor: colors.border,
-        },
-      ]}
-    >
+    <View style={[styles.item, { borderBottomColor: colors.border }]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={
@@ -69,22 +275,9 @@ export function LibraryItemRow({
         accessibilityState={{ disabled: !available || busy }}
         disabled={!available || busy}
         onPress={() => onOpen(item)}
-        style={[
-          styles.playableRow,
-          layout === 'grid' && { flexDirection: 'column' },
-        ]}
+        style={styles.playableRow}
       >
-        <View
-          style={[
-            styles.artwork,
-            { backgroundColor: colors.subtle },
-            layout === 'grid' && {
-              width: '100%',
-              height: undefined,
-              aspectRatio: 1,
-            },
-          ]}
-        >
+        <View style={[styles.artwork, { backgroundColor: colors.subtle }]}>
           {item.artworkUri ? (
             <Image
               source={{ uri: item.artworkUri }}
@@ -99,7 +292,7 @@ export function LibraryItemRow({
             />
           )}
         </View>
-        <View style={[styles.itemBody, layout === 'grid' && { flex: 0 }]}>
+        <View style={styles.itemBody}>
           <Text
             numberOfLines={2}
             style={[styles.itemTitle, { color: colors.text }]}
@@ -135,15 +328,7 @@ export function LibraryItemRow({
           </View>
         </View>
       </Pressable>
-      <View
-        style={[
-          styles.actions,
-          layout === 'grid' && {
-            flexDirection: 'column',
-            alignItems: 'stretch',
-          },
-        ]}
-      >
+      <View style={styles.actions}>
         {item.lifecycle === 'ready' && isPlayableLibraryItem(item) && (
           <>
             <Pressable
@@ -240,6 +425,21 @@ export function LibraryItemRow({
 }
 
 const styles = StyleSheet.create({
+  gridCard: { padding: 8, borderWidth: 1, borderRadius: 12 },
+  gridPlayable: { gap: 6, minHeight: 44 },
+  gridArtwork: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  gridMenu: {
+    minHeight: 44,
+    minWidth: 44,
+    alignSelf: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   item: { paddingVertical: 16, borderBottomWidth: 1 },
   playableRow: { flexDirection: 'row', gap: 12, minHeight: 80 },
   artwork: { width: 76, height: 76, borderRadius: 10, overflow: 'hidden' },

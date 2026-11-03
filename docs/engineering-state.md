@@ -1,30 +1,34 @@
 # Estado operativo de Drop
 
-Actualizado: 31 de octubre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 3 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Desarrollo actual: 1.6.0 bloques A/B — vistas y ordenamientos
+## Desarrollo actual: 1.6.0 bloque C — cuadrícula compacta
 
-- Rama `codex/v1.6.0-library-view`, worktree `Library/DropWorktrees/main`, base
-  `9abb6d46da1c00e031081d50222e003d85f4719f`. Main/tag v1.5.0 y el worktree
-  protegido de 1.5.0 no modificados; versión/build permanecen 1.5.0/11.
-- Lista predeterminada y cuadrícula de una/dos columnas por ancho medido.
-  Mismo snapshot, búsqueda/filtros/orden, acciones y contexto; sin persistencia nueva.
-  Selección de vista local a la pantalla; alternar puede reiniciar el scroll.
-- Validación host: 35 pruebas de Biblioteca/Collections PASS (5 nuevas), TypeScript,
-  lint focal de fuentes, formato focal y diff check. Avisos act existentes de Collections.
-  Herramientas 1.5.0 reutilizadas por rutas externas de resolución, sin copiar ni
-  enlazar dependencias; configuración de ejecución conservada en evidencia externa.
-- Bloque A confirmado en `8a66007ebe583347b7ba3da6f25aa0d116feff00`.
-- Bloque B: los seis órdenes existentes se distribuyen en filas adaptables, sin
-  desplazamiento horizontal oculto ni menú adicional. Etiquetas/estado radio
-  conservados; área táctil mínima de 44 puntos. Misma lógica en lista/cuadrícula.
-- Validación B host: 4 PASS (2 casos nuevos y 2 regresiones focales), TypeScript,
-  lint focal de fuente, formato y diff check PASS. Sin repetir las 35 pruebas de A.
-- Pendientes: revisión y autorización de commit B; validación física de distribución,
-  altura del encabezado, tamaños de texto y VoiceOver. Las pruebas host verifican
-  estructura/selección, no el layout real de iPhone. Sin build ni instalación 1.6.0.
-  El release estable y su renovación siguen vigentes.
+- Rama `codex/v1.6.0-library-view`, worktree `Library/DropWorktrees/main`, HEAD
+  funcional A/B `79c913a72d84412d82bd4afa2af5da988fd007b5`. Main/tag v1.5.0
+  y el worktree protegido de 1.5.0 no modificados.
+- Reprotest 1.6.0/build 12 instalada con seis registros, medios y portadas
+  preservados; SQLite v3 íntegra. Usuario confirma PASS físico de alternancia
+  lista/cuadrícula, reproducción y seis controles de orden con conservación del orden.
+  No implica contraste numérico de duraciones ni VoiceOver verificado.
+- C sin commit: tarjeta de cuadrícula con portada completa (`contain`, marco 16:9),
+  título de dos líneas, metadatos esenciales, progreso cuando existe y botón Más.
+  Hoja nativa ActionSheetIOS con todas las acciones existentes y sus restricciones;
+  guardas frente a pulsaciones duplicadas, callbacks obsoletos y desmontaje.
+  Lista y contexto de reproducción conservan su comportamiento.
+- Validación C host: 30 pruebas de Biblioteca PASS (3 nuevas), TypeScript,
+  lint focal de fuente, formato y diff check PASS. Herramientas existentes
+  reutilizadas por resolución externa; sin instalación de dependencias.
+- Pendiente: revisión y autorización de commit C; prueba física de densidad,
+  proporciones de portada, texto ampliado y VoiceOver/hoja de acciones.
+  C no está compilado, instalado ni físicamente validado.
+- Preparación anterior conservada sin commit y ajena a C: metadatos 1.6.0/12 en
+  app.json/package.json/package-lock.json y metro.config.js. Metro independiente
+  PASS; la build 12 ya usa esa configuración. No repetir bundling ni build por rutina.
+- La original sigue en 1.5.0/build 11. Reprotest: perfil hasta 04/11/2026,
+  20:22:21 CDMX; original hasta 06/11/2026, 17:43:54 CDMX. Firma/instalaciones
+  futuras requieren autorización. No iniciar otra fase automáticamente.
 
 ## Release actual: Drop 1.5.0 build 11
 

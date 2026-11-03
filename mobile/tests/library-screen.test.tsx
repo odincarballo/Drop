@@ -5,9 +5,10 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react-native';
-import { Alert, StyleSheet } from 'react-native';
+import { ActionSheetIOS, Alert, StyleSheet } from 'react-native';
 
 import LibraryScreen from '@/app/library';
+import { LibraryItemRow } from '@/components/LibraryItemRow';
 import {
   saveLocalFileToFiles,
   withNamedLibraryFile,
@@ -792,6 +793,144 @@ test('view toggle preserves query, filter, sort and playback context without rer
   ]);
 });
 
+test.each(['audio', 'video'] as const)(
+  'compact grid %s keeps cover, two-line title and one guarded action menu',
+  async (mediaType) => {
+    const fixture = {
+      ...item,
+      mediaType,
+      relativeMediaPath: mediaType === 'video' ? 'Media/a.mp4' : 'Media/a.m4a',
+      title:
+        'Título muy largo para comprobar una tarjeta compacta sin desbordamiento',
+      artworkUri: 'file:///wide-or-tall.jpg',
+    };
+    const handlers = {
+      onOpen: jest.fn(),
+      onSave: jest.fn(),
+      onShare: jest.fn(),
+      onDelete: jest.fn(),
+      onCollections: jest.fn(),
+      onQueueNext: jest.fn(),
+      onQueueLast: jest.fn(),
+    };
+    const sheet = jest
+      .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+      .mockImplementation(() => {});
+    await render(
+      <LibraryItemRow
+        layout="grid"
+        item={fixture}
+        busy={false}
+        queueBusy={false}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByText(fixture.title).props.numberOfLines).toBe(2);
+    expect(screen.getByLabelText('Portada descargada').props.resizeMode).toBe(
+      'contain',
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Guardar en Archivos' }),
+    ).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    const menu = () =>
+      screen.getByRole('button', { name: `Acciones de ${fixture.title}` });
+    await fireEvent.press(menu());
+    await fireEvent.press(menu());
+    expect(sheet).toHaveBeenCalledTimes(1);
+    const labels = [
+      'Reproducir a continuación',
+      'Añadir al final de la cola',
+      'Guardar en Archivos',
+      'Compartir',
+      'Colecciones',
+      'Eliminar',
+    ];
+    expect(sheet.mock.calls[0]![0].options).toEqual(['Cancelar', ...labels]);
+    await act(() => sheet.mock.calls[0]![1](0));
+    for (const [index, handler] of [
+      handlers.onQueueNext,
+      handlers.onQueueLast,
+      handlers.onSave,
+      handlers.onShare,
+      handlers.onCollections,
+      handlers.onDelete,
+    ].entries()) {
+      await fireEvent.press(menu());
+      const callback = sheet.mock.calls.at(-1)![1];
+      await act(() => {
+        callback(index + 1);
+        callback(index + 1);
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(fixture);
+    }
+    expect(handlers.onOpen).not.toHaveBeenCalled();
+    await fireEvent.press(
+      screen.getByRole('button', { name: `Reproducir ${fixture.title}` }),
+    );
+    expect(handlers.onOpen).toHaveBeenCalledWith(fixture);
+    sheet.mockRestore();
+  },
+);
+
+test('compact grid progress and collection action stay accessible; stale menu callbacks are ignored', async () => {
+  const sheet = jest
+    .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+    .mockImplementation(() => {});
+  const actions = {
+    onOpen: jest.fn(),
+    onSave: jest.fn(),
+    onShare: jest.fn(),
+    onDelete: jest.fn(),
+    onCollections: jest.fn(),
+    onQueueNext: jest.fn(),
+    onQueueLast: jest.fn(),
+    onRemoveFromCollection: jest.fn(),
+  };
+  const fixture = { ...item, playbackPositionSeconds: 1800 };
+  const view = await render(
+    <LibraryItemRow
+      layout="grid"
+      item={fixture}
+      busy={false}
+      queueBusy={false}
+      collectionName="Prueba"
+      {...actions}
+    />,
+  );
+  expect(screen.getByRole('progressbar').props.accessibilityValue.now).toBe(50);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Acciones de Podcast largo' }),
+  );
+  expect(sheet.mock.calls[0]![0].options).toContain('Quitar de «Prueba»');
+  await act(() => sheet.mock.calls[0]![1](6));
+  expect(actions.onRemoveFromCollection).toHaveBeenCalledWith(fixture);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Acciones de Podcast largo' }),
+  );
+  const stale = sheet.mock.calls[1]![1];
+  await view.rerender(
+    <LibraryItemRow
+      layout="grid"
+      item={{ ...fixture, availability: 'missing', uri: null }}
+      busy={false}
+      queueBusy={false}
+      {...actions}
+    />,
+  );
+  await act(() => stale(3));
+  expect(actions.onSave).not.toHaveBeenCalled();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Acciones de Podcast largo' }),
+  );
+  const removed = sheet.mock.calls[2]![1];
+  await view.unmount();
+  await act(() => removed(4));
+  expect(actions.onDelete).not.toHaveBeenCalled();
+  sheet.mockRestore();
+});
+
 test('grid adapts to measured width and preserves missing file restrictions', async () => {
   jest
     .mocked(listLibrary)
@@ -820,15 +959,25 @@ test('grid adapts to measured width and preserves missing file restrictions', as
       name: 'Podcast largo, archivo no disponible',
     }),
   ).toBeDisabled();
-  expect(
-    screen.getByRole('button', { name: 'Guardar en Archivos' }),
-  ).toBeDisabled();
-  expect(screen.getByRole('button', { name: 'Compartir' })).toBeDisabled();
-  expect(screen.getByRole('button', { name: 'Eliminar' })).toBeEnabled();
-  expect(
-    screen.getByRole('button', { name: 'Colecciones de Podcast largo' }),
-  ).toBeEnabled();
+  const sheet = jest
+    .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+    .mockImplementation(() => {});
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Acciones de Podcast largo' }),
+  );
+  const options = sheet.mock.calls[0]![0];
+  expect(options.options).toEqual([
+    'Cancelar',
+    'Guardar en Archivos',
+    'Compartir',
+    'Colecciones',
+    'Eliminar',
+  ]);
+  expect(options.disabledButtonIndices).toEqual([1, 2]);
+  await act(() => sheet.mock.calls[0]![1](1));
+  expect(withLibraryLease).not.toHaveBeenCalled();
   expect(playback.startInContext).not.toHaveBeenCalled();
+  sheet.mockRestore();
 });
 
 test.each(['empty', 'error'])(
@@ -868,15 +1017,19 @@ test('grid keeps video artwork and existing Queue/export actions tied to its ID'
     video.artworkUri,
   );
   expect(screen.getByText(/Video · 1080p/)).toBeTruthy();
+  const sheet = jest
+    .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+    .mockImplementation(() => {});
   await fireEvent.press(
-    screen.getByRole('button', {
-      name: 'Añadir al final de la cola: Podcast largo',
-    }),
+    screen.getByRole('button', { name: 'Acciones de Podcast largo' }),
   );
+  await act(() => sheet.mock.calls[0]![1](2));
   expect(enqueueLast).toHaveBeenCalledWith(video.id);
   await fireEvent.press(
-    screen.getByRole('button', { name: 'Guardar en Archivos' }),
+    screen.getByRole('button', { name: 'Acciones de Podcast largo' }),
   );
+  await act(() => sheet.mock.calls[1]![1](3));
   expect(withLibraryLease).toHaveBeenCalledWith(video.id, expect.any(Function));
   expect(playback.startInContext).not.toHaveBeenCalled();
+  sheet.mockRestore();
 });
