@@ -7,7 +7,16 @@ import {
 } from '@testing-library/react-native';
 import { ActionSheetIOS, Alert, StyleSheet } from 'react-native';
 
-import LibraryScreen from '@/app/library';
+import LibraryScreenContent from '@/app/library';
+import { LibraryViewProvider } from '@/providers/LibraryViewProvider';
+
+function LibraryScreen() {
+  return (
+    <LibraryViewProvider>
+      <LibraryScreenContent />
+    </LibraryViewProvider>
+  );
+}
 import { LibraryItemRow } from '@/components/LibraryItemRow';
 import {
   saveLocalFileToFiles,

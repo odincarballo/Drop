@@ -3,16 +3,16 @@
 Actualizado: 3 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Desarrollo actual: 1.6.0 bloque C — cuadrícula compacta
+## Desarrollo actual: 1.6.0 — conservar vista durante navegación
 
 - Rama `codex/v1.6.0-library-view`, worktree `Library/DropWorktrees/main`, HEAD
-  funcional A/B `79c913a72d84412d82bd4afa2af5da988fd007b5`. Main/tag v1.5.0
+  previo a la corrección `a24f53053ad0ec85e60f4a367d1868b505136df2`. Main/tag v1.5.0
   y el worktree protegido de 1.5.0 no modificados.
-- Reprotest 1.6.0/build 12 instalada con seis registros, medios y portadas
+- Reprotest 1.6.0/build 13 instalada con seis registros, medios y portadas
   preservados; SQLite v3 íntegra. Usuario confirma PASS físico de alternancia
   lista/cuadrícula, reproducción y seis controles de orden con conservación del orden.
   No implica contraste numérico de duraciones ni VoiceOver verificado.
-- C sin commit: tarjeta de cuadrícula con portada completa (`contain`, marco 16:9),
+- C confirmado en Git: tarjeta de cuadrícula con portada completa (`contain`, marco 16:9),
   título de dos líneas, metadatos esenciales, progreso cuando existe y botón Más.
   Hoja nativa ActionSheetIOS con todas las acciones existentes y sus restricciones;
   guardas frente a pulsaciones duplicadas, callbacks obsoletos y desmontaje.
@@ -20,14 +20,22 @@ No contiene autorizaciones nuevas ni resultados inferidos.
 - Validación C host: 30 pruebas de Biblioteca PASS (3 nuevas), TypeScript,
   lint focal de fuente, formato y diff check PASS. Herramientas existentes
   reutilizadas por resolución externa; sin instalación de dependencias.
-- Pendiente: revisión y autorización de commit C; prueba física de densidad,
-  proporciones de portada, texto ampliado y VoiceOver/hoja de acciones.
-  C no está compilado, instalado ni físicamente validado.
-- Preparación anterior conservada sin commit y ajena a C: metadatos 1.6.0/12 en
+- Build 13: usuario comunica cinco pruebas físicas PASS y un problema: la vista
+  volvía a lista al regresar del reproductor. No se infieren escenarios adicionales.
+- Corrección actual: solo el modo lista/cuadrícula vive en LibraryViewProvider,
+  montado en el layout estable. Comparte selección entre / y /library, mantiene
+  el modo al navegar y vuelve a lista al crear una sesión nueva. Sin persistencia.
+  Búsqueda, filtros y orden no se trasladaron ni se modificaron.
+- Validación focal de esta corrección: 8 PASS (4 casos nuevos con Expo Router real,
+  4 regresiones relacionadas), TypeScript, lint focal, formato y diff check PASS.
+  TDD reprodujo la pérdida antes del cambio. Sin repetir suites completas.
+- Pendiente: validar físicamente el regreso en la siguiente candidata autorizada;
+  esta corrección no está compilada ni instalada. No ampliar funcionalidad.
+- Preparación anterior conservada sin commit y ajena a C: metadatos 1.6.0/13 en
   app.json/package.json/package-lock.json y metro.config.js. Metro independiente
-  PASS; la build 12 ya usa esa configuración. No repetir bundling ni build por rutina.
-- La original sigue en 1.5.0/build 11. Reprotest: perfil hasta 04/11/2026,
-  20:22:21 CDMX; original hasta 06/11/2026, 17:43:54 CDMX. Firma/instalaciones
+  PASS; la build 13 ya usa esa configuración. No repetir bundling ni build por rutina.
+- La original sigue en 1.5.0/build 11. Reprotest: perfil hasta 11/11/2026,
+  07:40:54 CDMX; original hasta 06/11/2026, 17:43:54 CDMX. Firma/instalaciones
   futuras requieren autorización. No iniciar otra fase automáticamente.
 
 ## Release actual: Drop 1.5.0 build 11

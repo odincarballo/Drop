@@ -20,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CollectionPicker } from '@/components/CollectionPicker';
 import { LibraryItemRow } from '@/components/LibraryItemRow';
+import { useLibraryView } from '@/providers/LibraryViewProvider';
 import { useLibraryItemActions } from '@/hooks/useLibraryItemActions';
 import { useQueueEnqueue } from '@/hooks/useQueueEnqueue';
 import type { CollectionSummary } from '@/models/collections';
@@ -59,7 +60,7 @@ export default function LibraryScreen() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
   const [uncollectedCount, setUncollectedCount] = useState(0);
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const { viewMode, setViewMode } = useLibraryView();
   const [viewportWidth, setViewportWidth] = useState(0);
   const columns = viewMode === 'grid' && viewportWidth >= 356 ? 2 : 1;
   const cardWidth = columns === 2 ? (viewportWidth - 44 - 12) / 2 : undefined;

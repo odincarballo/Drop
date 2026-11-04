@@ -26,6 +26,7 @@ import { analyzeMedia } from '@/services/media';
 import { createDownloadJob, downloadJobFile } from '@/services/jobs';
 import {
   initializeLibrary,
+  listLibrary,
   promoteToLibrary,
   getLibraryItem,
 } from '@/services/library';
@@ -207,6 +208,8 @@ function deferred<T>() {
 }
 beforeEach(async () => {
   await AsyncStorage.clear();
+  jest.mocked(listLibrary).mockResolvedValue([mockItem]);
+  jest.mocked(getLibraryItem).mockResolvedValue(mockItem);
   jest.mocked(analyzeMedia).mockReset().mockResolvedValue(downloadMedia);
   jest.mocked(playback.getState).mockResolvedValue(mockPlaying);
   jest.mocked(playback.startInContext).mockResolvedValue(mockPlaying);
@@ -533,4 +536,76 @@ test('selecting the current Library tab preserves its Collections section', asyn
       .selected,
   ).toBe(true);
   expect(router.canGoBack()).toBe(false);
+});
+
+test.each(['cuadrícula', 'lista'] as const)(
+  'Library view session preserves %s through video player and return',
+  async (mode) => {
+    const video: LibraryItem = {
+      ...mockItem,
+      title: 'Video de prueba',
+      mediaType: 'video',
+      relativeMediaPath: 'Media/current.mp4',
+      uri: 'file:///library/current.mp4',
+    };
+    jest.mocked(listLibrary).mockResolvedValue([video]);
+    jest.mocked(getLibraryItem).mockResolvedValue(video);
+    await openApp();
+    await fireEvent.press(
+      screen.getByRole('button', { name: `Vista de ${mode}` }),
+    );
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Reproducir Video de prueba' }),
+    );
+    await screen.findByRole('button', { name: 'Volver a Biblioteca' });
+    expect(playback.startInContext).toHaveBeenCalledWith(video.id, [video.id]);
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Volver a Biblioteca' }),
+    );
+    await screen.findByRole('tab', { name: 'Biblioteca' });
+    expect(
+      screen.getByRole('button', { name: `Vista de ${mode}`, selected: true }),
+    ).toBeTruthy();
+    expect(playback.startInContext).toHaveBeenCalledTimes(1);
+    expect(playback.close).not.toHaveBeenCalled();
+  },
+);
+
+test('Library view session keeps successive choices across route replacements and resets with the app owner', async () => {
+  const view = await openApp();
+  for (const mode of ['cuadrícula', 'lista', 'cuadrícula']) {
+    await fireEvent.press(
+      screen.getByRole('button', { name: `Vista de ${mode}` }),
+    );
+    await tab('Descargar');
+    await tab('Biblioteca');
+    expect(
+      screen.getByRole('button', { name: `Vista de ${mode}`, selected: true }),
+    ).toBeTruthy();
+  }
+  expect(playback.startInContext).not.toHaveBeenCalled();
+  await view.unmount();
+  await openApp();
+  expect(
+    screen.getByRole('button', { name: 'Vista de lista', selected: true }),
+  ).toBeTruthy();
+});
+
+test('Library view session survives Settings and Queue routes without requesting playback', async () => {
+  await openApp('/library');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+  );
+  for (const path of ['/settings', '/queue']) {
+    await act(() => router.push(path));
+    await act(() => router.back());
+    await screen.findByRole('tab', { name: 'Biblioteca' });
+    expect(
+      screen.getByRole('button', {
+        name: 'Vista de cuadrícula',
+        selected: true,
+      }),
+    ).toBeTruthy();
+  }
+  expect(playback.startInContext).not.toHaveBeenCalled();
 });

@@ -7,6 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DownloadSessionProvider } from '@/providers/DownloadSessionProvider';
 import { MainNavigation } from '@/components/MainNavigation';
 import { cleanupAbandonedFilesAtStartup } from '@/services/fileExport';
+import { LibraryViewProvider } from '@/providers/LibraryViewProvider';
 import { PlaybackProvider } from '@/providers/PlaybackProvider';
 import { initializeLibrary } from '@/services/library';
 import { playback } from '@/services/playback';
@@ -85,7 +86,9 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ThemeProvider>
         <PlaybackProvider>
-          <ThemedRoutes />
+          <LibraryViewProvider>
+            <ThemedRoutes />
+          </LibraryViewProvider>
         </PlaybackProvider>
       </ThemeProvider>
     </SafeAreaProvider>
