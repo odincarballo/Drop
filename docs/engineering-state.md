@@ -1,42 +1,45 @@
 # Estado operativo de Drop
 
-Actualizado: 3 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 4 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Desarrollo actual: 1.6.0 — conservar vista durante navegación
+## Estado actual: 1.6.0 validada en reprotest; integración local
 
-- Rama `codex/v1.6.0-library-view`, worktree `Library/DropWorktrees/main`, HEAD
-  previo a la corrección `a24f53053ad0ec85e60f4a367d1868b505136df2`. Main/tag v1.5.0
-  y el worktree protegido de 1.5.0 no modificados.
-- Reprotest 1.6.0/build 13 instalada con seis registros, medios y portadas
-  preservados; SQLite v3 íntegra. Usuario confirma PASS físico de alternancia
-  lista/cuadrícula, reproducción y seis controles de orden con conservación del orden.
-  No implica contraste numérico de duraciones ni VoiceOver verificado.
-- C confirmado en Git: tarjeta de cuadrícula con portada completa (`contain`, marco 16:9),
-  título de dos líneas, metadatos esenciales, progreso cuando existe y botón Más.
-  Hoja nativa ActionSheetIOS con todas las acciones existentes y sus restricciones;
-  guardas frente a pulsaciones duplicadas, callbacks obsoletos y desmontaje.
-  Lista y contexto de reproducción conservan su comportamiento.
-- Validación C host: 30 pruebas de Biblioteca PASS (3 nuevas), TypeScript,
-  lint focal de fuente, formato y diff check PASS. Herramientas existentes
-  reutilizadas por resolución externa; sin instalación de dependencias.
-- Build 13: usuario comunica cinco pruebas físicas PASS y un problema: la vista
-  volvía a lista al regresar del reproductor. No se infieren escenarios adicionales.
-- Corrección actual: solo el modo lista/cuadrícula vive en LibraryViewProvider,
-  montado en el layout estable. Comparte selección entre / y /library, mantiene
-  el modo al navegar y vuelve a lista al crear una sesión nueva. Sin persistencia.
-  Búsqueda, filtros y orden no se trasladaron ni se modificaron.
-- Validación focal de esta corrección: 8 PASS (4 casos nuevos con Expo Router real,
-  4 regresiones relacionadas), TypeScript, lint focal, formato y diff check PASS.
-  TDD reprodujo la pérdida antes del cambio. Sin repetir suites completas.
-- Pendiente: validar físicamente el regreso en la siguiente candidata autorizada;
-  esta corrección no está compilada ni instalada. No ampliar funcionalidad.
-- Preparación anterior conservada sin commit y ajena a C: metadatos 1.6.0/13 en
-  app.json/package.json/package-lock.json y metro.config.js. Metro independiente
-  PASS; la build 13 ya usa esa configuración. No repetir bundling ni build por rutina.
-- La original sigue en 1.5.0/build 11. Reprotest: perfil hasta 11/11/2026,
-  07:40:54 CDMX; original hasta 06/11/2026, 17:43:54 CDMX. Firma/instalaciones
-  futuras requieren autorización. No iniciar otra fase automáticamente.
+- Código funcional validado: `63de2d751c782a71e2d3e20d12760372290fe434`.
+  A lista/cuadrícula `8a66007`; B ordenamientos `79c913a`;
+  C cuadrícula compacta `a24f530`; navegación de sesión `63de2d7`.
+  El commit de configuración/cierre es posterior al código utilizado para compilar.
+- Reprotest `com.odincarballo.drop.reprotest`: 1.6.0/build 14 instalada in-place.
+  Usuario confirma A/B/C PASS y navegación 3/3 PASS. Las verificaciones técnicas
+  preservaron seis LibraryItems, seis medios y seis portadas; IDs, metadatos,
+  progreso y preferencias coincidentes; SQLite v3 integrity=ok, FK=0.
+  Estos resultados no amplían escenarios no documentados, como VoiceOver completo
+  o contraste numérico de todas las duraciones de ordenamiento.
+- Evidencia durable: `DropValidationEvidence/v1.6.0-build14-release-reprotest-2026-11-04-y6_szb97/RESULT.json`
+  y `v1.6.0-build14-install-2026-11-04-haz54hdq/RESULT.json`.
+  Respaldo vigente de seis elementos: `v1.6.0-build14-install-2026-11-04-haz54hdq/backup-current`.
+  Conservados build 13 y respaldos anteriores no declarados redundantes.
+- Validaciones host conservadas: A 35 PASS; B 4 focales PASS; C 30 PASS;
+  navegación 8 focales PASS. Son ejecuciones con solapamientos, no un total acumulable.
+  TypeScript, lint focal, formato y diff check PASS según cada evidencia.
+- Configuración definitiva: Expo/package 1.6.0, buildNumber 14 y plugin explícito
+  `expo-status-bar/app.plugin.js`; lock sin cambios de dependencias. Metro extiende
+  `expo/metro-config`, con resolución local predeterminada y ubicación externa
+  opcional por `DROP_METRO_NODE_MODULES`; ninguna ruta de worktree fijada en Git.
+- Identidad por `DROP_BUNDLE_IDENTIFIER`, Team por entorno/procedimiento de firma.
+  Para original se deberá indicar `com.odincarballo.mediadrop` y Team `HK927RUDLZ`.
+  No se incorpora un Bundle ID fijo de reprotest, perfil, certificado ni proyecto
+  nativo generado. Los overrides de compilación y sus respaldos quedan fuera de Git.
+- Integración autorizada mediante fast-forward local desde main v1.5.0,
+  conservando los commits funcionales. Sin push ni tag v1.6.0; v1.5.0 intacto.
+- Original todavía instalada y validada en 1.5.0/build 11. No se ha preparado ni
+  instalado una candidata 1.6.0 para la original. Siguiente paso: autorización
+  independiente de preflight, protección actualizada de datos y firma original.
+  Perfil original registrado hasta 06/11/2026, 17:43:54 CDMX; reprotest renovado
+  hasta 11/11/2026, 07:40:54 CDMX. Revalidar antes de cualquier operación de firma.
+- Incidencias independientes: NOT_READY no reproducido; reinicio de un medio
+  completado corresponde a PlaybackPolicy.restored(). No se añadió una corrección
+  especulativa. No iniciar otra versión automáticamente.
 
 ## Release actual: Drop 1.5.0 build 11
 
