@@ -3,7 +3,48 @@
 Actualizado: 5 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Estado actual: 1.7.0 validada en reprotest; original sigue en 1.6.0
+## Estado actual: release Drop 1.7.0 build 15 finalizada
+
+- Original com.odincarballo.mediadrop y reprotest com.odincarballo.drop.reprotest:
+  1.7.0/build 15 instaladas in-place. Team HK927RUDLZ. Bloques 0, A1, A2, B y C
+  cerrados. Sin fallos conocidos pendientes dentro del alcance validado.
+- Usuario confirma 11 PASS físicos, cero FAIL. Reprotest (7): encabezado/navegación,
+  ordenamiento compacto, persistencia lista/cuadrícula, integridad/reproducción,
+  Dynamic Type, temas claro/oscuro, VoiceOver/foco. Original (4): Biblioteca/datos,
+  reproducción/progreso, nueva interfaz y persistencia. No se repitieron pruebas.
+  Son resultados del alcance observado, no garantía de todos los escenarios,
+  dispositivos, versiones de iOS ni accesibilidad exhaustiva.
+- Datos originales antes/después: 13 LibraryItems ready, 13 medios, 13 portadas,
+  una Collection, cero memberships y Cola vacía. IDs, metadatos, progreso y
+  preferencias conservados; SQLite v3 integrity_check=ok, FK=0. Las nueve
+  eliminaciones previas fueron confirmadas como intencionales y no se restauraron.
+- Evidencia bajo DropValidationEvidence:
+  original v1.7.0-original-install-2026-11-05-adxnsgax/RESULT.json;
+  respaldo original v1.7.0-original-data-preflight-2026-11-05-ajfvp7x0/backup-current
+  (32 archivos verificados, incluidos 26 hashes de medios/portadas).
+  Reprotest v1.7.0-build15-install-2026-11-05-7nsohzo1/RESULT.json y backup-current
+  (seis elementos, seis medios, seis portadas; 19 archivos protegidos).
+- Código instalado original: 317f9434ac7e17db6b98dc9a3528a92731e38815.
+  Este cierre documental es posterior y no cambia código ni metadatos.
+  Artefactos original y reprotest conservados por separado:
+  v1.7.0-build15-original-2026-11-05-is1n_sro/Drop.app y
+  v1.7.0-build15-auto-reprotest-2026-11-05-cdsq3zva/Drop.app.
+- Firma automática existente, sin renovación: original hasta 11/11/2026,
+  11:56:12 CDMX; reprotest hasta 11/11/2026, 07:40:54 CDMX. Revalidar antes
+  de futuras operaciones. Perfil administrado por Xcode: no imponer firma manual.
+- Metadatos 1.7.0/build 15 consolidados; sin cambios de dependencias. Identidad
+  por entorno, sin Bundle ID fijo de reprotest. Lista/cuadrícula es la única
+  preferencia nueva; no garantiza persistir una escritura fallida/interrumpida.
+- Cierre Git autorizado: commit documental en main, tag anotado v1.7.0 sobre ese
+  commit y push normal exclusivamente de main y ese tag a odincarballo/Drop.
+  Verificar publicación mediante refs remotas. Sin GitHub Release adicional.
+  v1.6.0 se conserva intacto; no iniciar 1.8.0 automáticamente.
+- NOT_READY continúa como observación independiente no reproducida; reinicio de
+  medios completados es comportamiento previsto. No son fallos confirmados de 1.7.0.
+
+Las notas siguientes conservan el historial; no describen el estado vigente.
+
+## Histórico: desarrollo y preflight de 1.7.0 desde 1.6.0
 
 - Release estable: `77f87b352ec9738bc57a5ac0579572d392582409`.
   Main y tag anotado v1.6.0 publicados en `https://github.com/odincarballo/Drop`.
