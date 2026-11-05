@@ -1,47 +1,54 @@
 # Estado operativo de Drop
 
-Actualizado: 4 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 5 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Estado actual: 1.6.0 validada en reprotest; integración local
+## Estado actual: 1.6.0 publicada; 1.7.0 en especificación
 
-- Código funcional validado: `63de2d751c782a71e2d3e20d12760372290fe434`.
-  A lista/cuadrícula `8a66007`; B ordenamientos `79c913a`;
-  C cuadrícula compacta `a24f530`; navegación de sesión `63de2d7`.
-  El commit de configuración/cierre es posterior al código utilizado para compilar.
-- Reprotest `com.odincarballo.drop.reprotest`: 1.6.0/build 14 instalada in-place.
-  Usuario confirma A/B/C PASS y navegación 3/3 PASS. Las verificaciones técnicas
-  preservaron seis LibraryItems, seis medios y seis portadas; IDs, metadatos,
-  progreso y preferencias coincidentes; SQLite v3 integrity=ok, FK=0.
-  Estos resultados no amplían escenarios no documentados, como VoiceOver completo
-  o contraste numérico de todas las duraciones de ordenamiento.
-- Evidencia durable: `DropValidationEvidence/v1.6.0-build14-release-reprotest-2026-11-04-y6_szb97/RESULT.json`
-  y `v1.6.0-build14-install-2026-11-04-haz54hdq/RESULT.json`.
-  Respaldo vigente de seis elementos: `v1.6.0-build14-install-2026-11-04-haz54hdq/backup-current`.
-  Conservados build 13 y respaldos anteriores no declarados redundantes.
-- Validaciones host conservadas: A 35 PASS; B 4 focales PASS; C 30 PASS;
-  navegación 8 focales PASS. Son ejecuciones con solapamientos, no un total acumulable.
-  TypeScript, lint focal, formato y diff check PASS según cada evidencia.
-- Configuración definitiva: Expo/package 1.6.0, buildNumber 14 y plugin explícito
-  `expo-status-bar/app.plugin.js`; lock sin cambios de dependencias. Metro extiende
-  `expo/metro-config`, con resolución local predeterminada y ubicación externa
-  opcional por `DROP_METRO_NODE_MODULES`; ninguna ruta de worktree fijada en Git.
-- Identidad por `DROP_BUNDLE_IDENTIFIER`, Team por entorno/procedimiento de firma.
-  Para original se deberá indicar `com.odincarballo.mediadrop` y Team `HK927RUDLZ`.
-  No se incorpora un Bundle ID fijo de reprotest, perfil, certificado ni proyecto
-  nativo generado. Los overrides de compilación y sus respaldos quedan fuera de Git.
-- Integración autorizada mediante fast-forward local desde main v1.5.0,
-  conservando los commits funcionales. Sin push ni tag v1.6.0; v1.5.0 intacto.
-- Original todavía instalada y validada en 1.5.0/build 11. No se ha preparado ni
-  instalado una candidata 1.6.0 para la original. Siguiente paso: autorización
-  independiente de preflight, protección actualizada de datos y firma original.
-  Perfil original registrado hasta 06/11/2026, 17:43:54 CDMX; reprotest renovado
-  hasta 11/11/2026, 07:40:54 CDMX. Revalidar antes de cualquier operación de firma.
-- Incidencias independientes: NOT_READY no reproducido; reinicio de un medio
-  completado corresponde a PlaybackPolicy.restored(). No se añadió una corrección
-  especulativa. No iniciar otra versión automáticamente.
+- Release estable: `77f87b352ec9738bc57a5ac0579572d392582409`.
+  Main y tag anotado v1.6.0 publicados en `https://github.com/odincarballo/Drop`.
+  v1.5.0 permanece intacto. No se creó GitHub Release.
+- Original `com.odincarballo.mediadrop`, Team `HK927RUDLZ`: 1.6.0/build 14
+  instalada in-place y validada físicamente. Usuario confirma Biblioteca,
+  Colecciones, reproducción, conservación de cuadrícula y navegación a Descargar:
+  cinco PASS dentro de esos escenarios, sin ampliar su alcance.
+- Preservados 18 LibraryItems ready, 18 medios, 18 portadas y una Collection;
+  identificadores, relaciones, progreso y preferencias conservados. SQLite v3:
+  integrity_check=ok y FK=0. Respaldo recuperable vigente y evidencia de instalación
+  bajo `DropValidationEvidence/`:
+  `original-v1.6.0-preflight-2026-11-04-vrflo7g7/backup-current` y
+  `v1.6.0-original-install-2026-11-04-jke7t9q1/RESULT.json`.
+- Artefacto original conservado:
+  `v1.6.0-build14-original-renewal-2026-11-04-a37zu9qz/Drop.app`.
+  Perfil original renovado hasta 11/11/2026, 11:56:12 CDMX;
+  reprotest hasta 11/11/2026, 07:40:54 CDMX. Revalidar antes de firmar/instalar.
+- Reprotest `com.odincarballo.drop.reprotest`: 1.6.0/build 14 instalada;
+  seis elementos, medios y portadas preservados. A/B/C y navegación 3/3 PASS físicos.
+  Artefacto build 14 y respaldo `v1.6.0-build14-install-2026-11-04-haz54hdq/backup-current`
+  conservados. Binarios sustituidos de build 12/13 retirados con autorización;
+  manifiestos, source maps y logs conservados. No asumir que esos binarios existen.
+- Host histórico: A 35 PASS, B 4 focales PASS, C 30 PASS y navegación 8 focales PASS;
+  ejecuciones solapadas, no sumables. Tipos, lint, formato y diff aprobados según
+  sus evidencias. No se repiten para este cambio documental.
+- Configuración estable: 1.6.0/build 14; plugin explícito
+  `expo-status-bar/app.plugin.js`; Metro extiende `expo/metro-config`, resolución
+  local y externa opcional por `DROP_METRO_NODE_MODULES`, sin worktree fijo.
+  Identidad por `DROP_BUNDLE_IDENTIFIER`; original `com.odincarballo.mediadrop`.
+  No incorporar perfiles, certificados ni proyectos nativos generados a Git.
+- Límites: VoiceOver completo y duraciones numéricas de todos los ordenamientos
+  no contrastados físicamente. NOT_READY no reproducido; reinicio de un medio
+  completado es comportamiento previsto de PlaybackPolicy.restored(). Sin 1.5.1.
+- 1.7.0: Bloque 0 exclusivamente documental en `codex/v1.7.0-library-ux`,
+  desde el release estable; [contrato UX/UI](library-ux-v1.7.0.md) aprobado.
+  Composición de Biblioteca y persistencia futura de lista/cuadrícula mediante
+  AsyncStorage existente. No implementada, compilada, instalada ni validada.
+  Metadatos permanecen en 1.6.0/build 14; cierre documental del Bloque 0.
+- Siguiente paso: autorización del Bloque A según el contrato aprobado; no comenzar
+  implementación ni operaciones sobre dispositivos automáticamente.
 
-## Release actual: Drop 1.5.0 build 11
+Las secciones siguientes son snapshots históricos, no instrucciones vigentes.
+
+## Histórico: cierre de Drop 1.5.0 build 11
 
 - Instalada en la original `com.odincarballo.mediadrop`, Team `HK927RUDLZ`.
   Código funcional: `66f5ea563e9b7bc1bfe61046dc883e7cc2a729e8`.
