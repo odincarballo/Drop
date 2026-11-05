@@ -3,7 +3,7 @@
 Actualizado: 5 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Estado actual: 1.6.0 publicada; 1.7.0 A1/A2/B validados en host
+## Estado actual: 1.7.0 validada en reprotest; original sigue en 1.6.0
 
 - Release estable: `77f87b352ec9738bc57a5ac0579572d392582409`.
   Main y tag anotado v1.6.0 publicados en `https://github.com/odincarballo/Drop`.
@@ -35,14 +35,14 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   local y externa opcional por `DROP_METRO_NODE_MODULES`, sin worktree fijo.
   Identidad por `DROP_BUNDLE_IDENTIFIER`; original `com.odincarballo.mediadrop`.
   No incorporar perfiles, certificados ni proyectos nativos generados a Git.
-- Límites: VoiceOver completo y duraciones numéricas de todos los ordenamientos
+- Límites históricos de 1.6.0: VoiceOver completo y duraciones numéricas de todos los ordenamientos
   no contrastados físicamente. NOT_READY no reproducido; reinicio de un medio
   completado es comportamiento previsto de PlaybackPolicy.restored(). Sin 1.5.1.
 - 1.7.0: Bloque 0 exclusivamente documental en `codex/v1.7.0-library-ux`,
   desde el release estable; [contrato UX/UI](library-ux-v1.7.0.md) aprobado.
   Composición de Biblioteca y persistencia futura de lista/cuadrícula mediante
   AsyncStorage existente. Bloque 0 aprobado en `56b2b830f6ca1d4499ebecb30e9d3ecf33fc9f8d`.
-  A1 implementa únicamente un encabezado Biblioteca, accesos Cola/Ajustes y pestañas
+  A1 (`69be727`) implementa un encabezado Biblioteca, accesos Cola/Ajustes y pestañas
   Archivos/Colecciones; rutas y valores internos downloads/collections intactos.
   Encabezado y pestañas permiten ajuste de líneas; objetivos táctiles mínimos
   de 48 puntos en accesos y 44 en pestañas, sin altura fija de los accesos.
@@ -55,11 +55,7 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   mediante resolución explícita de las herramientas, sin instalaciones, copias ni
   enlaces nuevos. Las consultas iniciales de tipos/lint sin resolución externa
   correcta fallaron; no eran defectos de código ni resultados reutilizables.
-- 1.7.0 no compilada, instalada ni validada físicamente. Metadatos siguen en
-  1.6.0/build 14. Dynamic Type, VoiceOver real, temas y disposición en pantallas
-  pequeñas pendientes de candidata física; los tests host no certifican el diseño.
-  Fuera de A2, búsqueda, filtros, vista, persistencia, tarjetas y motores sin cambios.
-- A2 cerrado en este commit: único botón Orden con criterio actual, ActionSheetIOS
+- A2 (`6949bd5`): único botón Orden con criterio actual, ActionSheetIOS
   con las seis etiquetas originales y Cancelar; selección anunciada en el mensaje,
   tema claro/oscuro efectivo y control mínimo de 44 puntos con texto adaptable.
   Guardas de apertura única y generación por foco/sección descartan callbacks
@@ -79,7 +75,7 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   en library-screen y dos en main-navigation conservados. Formato y diff check PASS.
   Dependencias externas existentes reutilizadas por resolución explícita de las
   herramientas, sin instalaciones, copias de dependencias ni enlaces nuevos.
-- B cerrado en este commit: LibraryViewProvider existente persiste exclusivamente
+- B (`47af3e4`): LibraryViewProvider existente persiste exclusivamente
   list/grid mediante AsyncStorage 2.2.0, clave drop.library.view.v1. Lista por defecto
   si falta preferencia, es inválida o falla su lectura. UI inmediata y selección
   del usuario prioritaria frente a hidratación tardía; lecturas pendientes ignoradas
@@ -96,10 +92,48 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   TypeScript cero diagnósticos; lint focal cero errores y 11 avisos preexistentes;
   formato focal y diff check PASS. Sin nuevas dependencias ni cambios a A1/A2,
   SQLite, LibraryItem, tarjetas, reproducción, descargas o navegación.
-- Siguiente paso: autorización de preparación de una candidata integrada en reprotest;
-  no compilar ni instalar automáticamente. Persistencia tras cerrar/reabrir el
-  proceso, VoiceOver, foco, Dynamic Type y disposición real siguen pendientes de
-  validación física. No atribuir PASS físico a las pruebas host.
+- C aprobado: usuario confirma en reprotest 1.7.0/build 15 siete PASS físicos,
+  cero FAIL: encabezado/navegación; ordenamiento compacto; persistencia lista/cuadrícula;
+  integridad básica/reproducción; Dynamic Type; temas claro/oscuro; VoiceOver/foco.
+  Son observaciones del usuario dentro del alcance realizado, no certificación
+  exhaustiva de accesibilidad, todos los dispositivos o duraciones numéricas.
+- Candidata construida desde `47af3e4afd26bdbbd314b56cc47d2cb1c1ed4dde` y los
+  tres metadatos preparados. Primer intento falló por imponer firma manual sobre
+  perfil gestionado por Xcode; reintento autorizado con firma automática PASS,
+  sin renovación. Mantener firma automática para ese perfil; no repetir ese ajuste.
+  Artefacto/evidencia bajo DropValidationEvidence:
+  `v1.7.0-build15-auto-reprotest-2026-11-05-cdsq3zva/RESULT.json`.
+  Reprotest: perfil vigente hasta 11/11/2026, 07:40:54 CDMX.
+- Instalación in-place de reprotest: una ejecución PASS; seis LibraryItems, seis
+  medios y seis portadas preservados; IDs, metadatos, progreso y preferencias
+  coincidentes. SQLite v3 integrity_check=ok, FK=0. Respaldo incremental recuperable
+  `v1.7.0-build15-install-2026-11-05-7nsohzo1/backup-current`, 19 archivos verificados;
+  resultado de instalación en RESULT.json de esa misma carpeta padre.
+- Git: rama codex/v1.7.0-library-ux; base main/v1.6.0
+  `77f87b352ec9738bc57a5ac0579572d392582409`. Bloque 0 `56b2b83`, A1 `69be727`,
+  A2 `6949bd5`, B `47af3e4`; este cierre es solo documental. Metadatos pendientes
+  app.json/package.json/package-lock.json: exclusivamente 1.7.0/build 15, sin
+  cambios de dependencias ni identidad fija de reprotest. Son comunes a la release;
+  Bundle ID/Team/perfil y overrides nativos son configuración de variante separada.
+- Plan mínimo pendiente, sujeto a autorizaciones: consolidar los tres metadatos;
+  verificar rama/main limpios y ascendencia, integrar por fast-forward sin tag;
+  preparar original con DROP_BUNDLE_IDENTIFIER=com.odincarballo.mediadrop,
+  Team HK927RUDLZ, firma automática y perfil original vigente (no el de reprotest).
+  Revalidar versión instalada para confirmar actualización 1.6.0/14 a 1.7.0/15.
+  Una build incremental Release ARM64 con recursos existentes, >=24 GiB iniciales,
+  dos jobs y vigilancia cada cinco segundos, parada a 15 GiB; sin clean/prebuild.
+  Verificar identidad, versión, firma/perfil/entitlements/dispositivo, Hermes,
+  fuentes y hashes; archivar candidata original sin reutilizar el binario reprotest.
+- Antes de instalar: inventariar original cerrada y comparar con respaldo reciente;
+  no asumir que siga teniendo 18 elementos. Proteger diferencias incrementalmente
+  y verificar recuperación, SQLite/FK, medios/portadas, relaciones, progreso y
+  preferencias. Una instalación in-place autorizada, sin desinstalar ni restaurar;
+  comparar después y validar físicamente la original. Solo tras su aprobación:
+  cierre documental, tag anotado v1.7.0 y publicación GitHub con autorización.
+- No se integra, compila, instala ni renueva en este preflight. La original
+  permanece en 1.6.0/build 14 según última evidencia; su inventario y perfil deberán
+  revalidarse antes de las operaciones futuras. No existe release original 1.7.0
+  desplegada ni tag v1.7.0 creado por esta intervención.
 
 Las secciones siguientes son snapshots históricos, no instrucciones vigentes.
 
