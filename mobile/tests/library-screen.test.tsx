@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   act,
   fireEvent,
@@ -127,7 +128,8 @@ const item = {
   thumbnailUrl: null,
 } as const;
 
-beforeEach(() => {
+beforeEach(async () => {
+  await AsyncStorage.clear();
   jest.clearAllMocks();
   jest
     .mocked(getQueuePlaybackSyncState)

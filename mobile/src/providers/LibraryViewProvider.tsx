@@ -1,5 +1,9 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   createContext,
+  useCallback,
+  useEffect,
+  useRef,
   useContext,
   useState,
   type PropsWithChildren,
@@ -13,9 +17,44 @@ const LibraryViewContext = createContext<{
   setViewMode: Dispatch<SetStateAction<ViewMode>>;
 } | null>(null);
 
-// UI-only session state. A new app owner starts in list mode; nothing is persisted.
+const VIEW_PREFERENCE_KEY = 'drop.library.view.v1';
 export function LibraryViewProvider({ children }: PropsWithChildren) {
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [viewMode, setSelectedMode] = useState<ViewMode>('list');
+  const currentMode = useRef<ViewMode>('list');
+  const revision = useRef(0);
+  const pending = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => {
+    let active = true;
+    pending.current = pending.current
+      .then(() => AsyncStorage.getItem(VIEW_PREFERENCE_KEY))
+      .then((saved) => {
+        if (!active || revision.current !== 0) return;
+        const mode = saved === 'grid' ? 'grid' : 'list';
+        currentMode.current = mode;
+        setSelectedMode(mode);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const setViewMode = useCallback<Dispatch<SetStateAction<ViewMode>>>(
+    (next) => {
+      const mode =
+        typeof next === 'function' ? next(currentMode.current) : next;
+      revision.current += 1;
+      currentMode.current = mode;
+      setSelectedMode(mode);
+      // Wait for hydration and previous writes; failed writes must not poison the queue.
+      // UI selection is optimistic, not an assertion that storage succeeded.
+      pending.current = pending.current
+        .then(() => AsyncStorage.setItem(VIEW_PREFERENCE_KEY, mode))
+        .catch(() => undefined);
+    },
+    [],
+  );
   return (
     <LibraryViewContext.Provider value={{ viewMode, setViewMode }}>
       {children}

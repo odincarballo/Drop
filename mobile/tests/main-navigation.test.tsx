@@ -608,7 +608,7 @@ test.each(['cuadrícula', 'lista'] as const)(
   },
 );
 
-test('Library view session keeps successive choices across route replacements and resets with the app owner', async () => {
+test('Library view session keeps successive choices across route replacements and restores with the app owner', async () => {
   const view = await openApp();
   for (const mode of ['cuadrícula', 'lista', 'cuadrícula']) {
     await fireEvent.press(
@@ -621,11 +621,15 @@ test('Library view session keeps successive choices across route replacements an
     ).toBeTruthy();
   }
   expect(playback.startInContext).not.toHaveBeenCalled();
+  await waitFor(async () =>
+    expect(await AsyncStorage.getItem('drop.library.view.v1')).toBe('grid'),
+  );
   await view.unmount();
   await openApp();
-  expect(
-    screen.getByRole('button', { name: 'Vista de lista', selected: true }),
-  ).toBeTruthy();
+  await screen.findByRole('button', {
+    name: 'Vista de cuadrícula',
+    selected: true,
+  });
 });
 
 test('Library view session survives Settings and Queue routes without requesting playback', async () => {

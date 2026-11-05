@@ -3,7 +3,7 @@
 Actualizado: 5 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Estado actual: 1.6.0 publicada; 1.7.0 A1/A2 validados en host
+## Estado actual: 1.6.0 publicada; 1.7.0 A1/A2/B validados en host
 
 - Release estable: `77f87b352ec9738bc57a5ac0579572d392582409`.
   Main y tag anotado v1.6.0 publicados en `https://github.com/odincarballo/Drop`.
@@ -79,10 +79,27 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   en library-screen y dos en main-navigation conservados. Formato y diff check PASS.
   Dependencias externas existentes reutilizadas por resolución explícita de las
   herramientas, sin instalaciones, copias de dependencias ni enlaces nuevos.
-- Siguiente paso: autorización de B (preferencia de vista y carreras AsyncStorage)
-  según el contrato aprobado. No iniciar B, compilación ni operaciones sobre
-  dispositivos automáticamente. VoiceOver, foco y disposición del selector con
-  Dynamic Type siguen pendientes de validación física integrada.
+- B cerrado en este commit: LibraryViewProvider existente persiste exclusivamente
+  list/grid mediante AsyncStorage 2.2.0, clave drop.library.view.v1. Lista por defecto
+  si falta preferencia, es inválida o falla su lectura. UI inmediata y selección
+  del usuario prioritaria frente a hidratación tardía; lecturas pendientes ignoradas
+  tras desmontaje. Escrituras serializadas después de la lectura inicial, sin
+  escribir valores predeterminados ni permitir finalizaciones fuera de orden.
+  Los errores no rompen la UI, no declaran éxito y no bloquean escrituras posteriores.
+  No se garantiza persistencia de una escritura fallida o interrumpida al terminar
+  el proceso. No se persisten búsqueda, filtros, ordenamiento ni desplazamiento.
+- B TDD: 10 fallos y dos PASS iniciales sobre el provider previo; validación final:
+  19 PASS, cero FAIL, 48 no seleccionadas en tres archivos (12 casos del provider,
+  cuatro de navegación de vista y tres de Biblioteca directamente afectados).
+  Caso histórico de nuevo propietario actualizado deliberadamente para restaurar
+  cuadrícula; almacenamiento simulado aislado entre pruebas de Biblioteca.
+  TypeScript cero diagnósticos; lint focal cero errores y 11 avisos preexistentes;
+  formato focal y diff check PASS. Sin nuevas dependencias ni cambios a A1/A2,
+  SQLite, LibraryItem, tarjetas, reproducción, descargas o navegación.
+- Siguiente paso: autorización de preparación de una candidata integrada en reprotest;
+  no compilar ni instalar automáticamente. Persistencia tras cerrar/reabrir el
+  proceso, VoiceOver, foco, Dynamic Type y disposición real siguen pendientes de
+  validación física. No atribuir PASS físico a las pruebas host.
 
 Las secciones siguientes son snapshots históricos, no instrucciones vigentes.
 
