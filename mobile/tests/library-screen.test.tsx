@@ -304,10 +304,44 @@ test('Queue save failures are sanitized and keep the existing Library intact', a
   expect(screen.queryByText('/private/library.sqlite')).toBeNull();
 });
 
-test('Descargas is initial and switching preserves filters and opens Collections', async () => {
+test('Library header is unique and keeps accessible Queue and Settings routes', async () => {
+  await render(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  expect(screen.getAllByRole('header')).toHaveLength(1);
+  expect(screen.getByRole('header', { name: 'Biblioteca' })).toBeTruthy();
+  expect(screen.getAllByText('Biblioteca')).toHaveLength(1);
+  expect(screen.queryByText('Drop')).toBeNull();
+  expect(screen.queryByRole('tab', { name: 'Descargas' })).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'Ver cola' }));
+  expect(mockPush).toHaveBeenLastCalledWith('/queue');
+  await fireEvent.press(screen.getByRole('button', { name: 'Ajustes' }));
+  expect(mockPush).toHaveBeenLastCalledWith('/settings');
+  expect(playback.startInContext).not.toHaveBeenCalled();
+});
+
+test('Library header controls allow enlarged text and minimum touch targets', async () => {
+  await render(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  const title = screen.getByRole('header', { name: 'Biblioteca' });
+  expect(title.props.allowFontScaling).not.toBe(false);
+  expect(title.props.numberOfLines).toBeUndefined();
+  for (const control of [
+    screen.getByRole('button', { name: 'Ver cola' }),
+    screen.getByRole('button', { name: 'Ajustes' }),
+    screen.getByRole('tab', { name: 'Archivos' }),
+    screen.getByRole('tab', { name: 'Colecciones' }),
+  ]) {
+    const style = StyleSheet.flatten(control.props.style);
+    expect(style.minWidth).toBeGreaterThanOrEqual(44);
+    expect(style.minHeight).toBeGreaterThanOrEqual(44);
+    expect(style.height).toBeUndefined();
+  }
+});
+
+test('Archivos is initial and switching preserves internal sections and opens Collections', async () => {
   const view = await render(<LibraryScreen />);
   expect(
-    screen.getByRole('tab', { name: 'Descargas' }).props.accessibilityState
+    screen.getByRole('tab', { name: 'Archivos' }).props.accessibilityState
       .selected,
   ).toBe(true);
   expect(screen.getByRole('button', { name: 'Todos' })).toBeTruthy();
@@ -317,10 +351,15 @@ test('Descargas is initial and switching preserves filters and opens Collections
   await view.rerender(<LibraryScreen />);
   await waitFor(() => expect(screen.getByText('Sin colección')).toBeTruthy());
   expect(screen.getByText('1 elemento · Vista automática')).toBeTruthy();
-  await fireEvent.press(screen.getByRole('tab', { name: 'Descargas' }));
+  await fireEvent.press(screen.getByRole('tab', { name: 'Archivos' }));
+  expect(mockSetParams).toHaveBeenLastCalledWith({ section: 'downloads' });
   mockSection = 'downloads';
   await view.rerender(<LibraryScreen />);
   await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  expect(
+    screen.getByRole('tab', { name: 'Archivos' }).props.accessibilityState
+      .selected,
+  ).toBe(true);
 });
 
 test('Collections include empty rows, create, rename and delete without deleting media', async () => {

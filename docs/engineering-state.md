@@ -3,7 +3,7 @@
 Actualizado: 5 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Estado actual: 1.6.0 publicada; 1.7.0 en especificación
+## Estado actual: 1.6.0 publicada; 1.7.0 A1 implementado en host
 
 - Release estable: `77f87b352ec9738bc57a5ac0579572d392582409`.
   Main y tag anotado v1.6.0 publicados en `https://github.com/odincarballo/Drop`.
@@ -41,10 +41,26 @@ No contiene autorizaciones nuevas ni resultados inferidos.
 - 1.7.0: Bloque 0 exclusivamente documental en `codex/v1.7.0-library-ux`,
   desde el release estable; [contrato UX/UI](library-ux-v1.7.0.md) aprobado.
   Composición de Biblioteca y persistencia futura de lista/cuadrícula mediante
-  AsyncStorage existente. No implementada, compilada, instalada ni validada.
-  Metadatos permanecen en 1.6.0/build 14; cierre documental del Bloque 0.
-- Siguiente paso: autorización del Bloque A según el contrato aprobado; no comenzar
-  implementación ni operaciones sobre dispositivos automáticamente.
+  AsyncStorage existente. Bloque 0 aprobado en `56b2b830f6ca1d4499ebecb30e9d3ecf33fc9f8d`.
+  A1 implementa únicamente un encabezado Biblioteca, accesos Cola/Ajustes y pestañas
+  Archivos/Colecciones; rutas y valores internos downloads/collections intactos.
+  Encabezado y pestañas permiten ajuste de líneas; objetivos táctiles mínimos
+  de 48 puntos en accesos y 44 en pestañas, sin altura fija de los accesos.
+- A1: TDD inicial con tres fallos esperados de composición/etiquetas; después
+  seis casos PASS, cero FAIL y 46 no seleccionados en library-screen y
+  main-navigation (encabezado, pestañas y navegación/contexto de vista).
+  TypeScript: cero diagnósticos. ESLint focal con configuración Expo: cero errores;
+  nueve advertencias preexistentes en imports/require del archivo de pruebas.
+  Formato focal y diff check PASS. Dependencias externas existentes reutilizadas
+  mediante resolución explícita de las herramientas, sin instalaciones, copias ni
+  enlaces nuevos. Las consultas iniciales de tipos/lint sin resolución externa
+  correcta fallaron; no eran defectos de código ni resultados reutilizables.
+- 1.7.0 no compilada, instalada ni validada físicamente. Metadatos siguen en
+  1.6.0/build 14. Dynamic Type, VoiceOver real, temas y disposición en pantallas
+  pequeñas pendientes de candidata física; los tests host no certifican el diseño.
+  Búsqueda, filtros, órdenes, vista, persistencia, tarjetas y motores sin cambios.
+- Siguiente paso: autorización de A2 para los controles restantes según el contrato;
+  no iniciar persistencia, compilación ni operaciones sobre dispositivos automáticamente.
 
 Las secciones siguientes son snapshots históricos, no instrucciones vigentes.
 

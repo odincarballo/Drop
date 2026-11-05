@@ -337,7 +337,7 @@ export default function LibraryScreen() {
             accessibilityRole="header"
             style={[styles.title, { color: colors.text }]}
           >
-            Drop
+            Biblioteca
           </Text>
           <View style={styles.headerActions}>
             <Pressable
@@ -365,11 +365,10 @@ export default function LibraryScreen() {
             </Pressable>
           </View>
         </View>
-        <Text style={[styles.heading, { color: colors.text }]}>Biblioteca</Text>
         <View style={styles.sections}>
           {(
             [
-              ['downloads', 'Descargas'],
+              ['downloads', 'Archivos'],
               ['collections', 'Colecciones'],
             ] as const
           ).map(([value, label]) => (
@@ -601,22 +600,35 @@ export default function LibraryScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   header: { paddingHorizontal: 22, paddingTop: 18, gap: 8 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    maxWidth: '100%',
+    gap: 8,
+  },
   titleRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  title: { fontSize: 34, fontWeight: '700' },
+  title: { fontSize: 25, fontWeight: '700', flexShrink: 1, maxWidth: '100%' },
   settings: {
-    width: 48,
-    height: 48,
+    minWidth: 48,
+    minHeight: 48,
+    padding: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  heading: { fontSize: 25, fontWeight: '700' },
-  sections: { flexDirection: 'row', gap: 20, marginTop: 4 },
-  section: { minHeight: 44, justifyContent: 'center', borderBottomWidth: 2 },
+  sections: { flexDirection: 'row', flexWrap: 'wrap', gap: 20, marginTop: 4 },
+  section: {
+    minWidth: 44,
+    minHeight: 44,
+    justifyContent: 'center',
+    borderBottomWidth: 2,
+  },
   sortOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   sortOption: { minHeight: 44, maxWidth: '100%', paddingVertical: 8 },
   filters: { flexDirection: 'row', gap: 8, paddingVertical: 8 },
