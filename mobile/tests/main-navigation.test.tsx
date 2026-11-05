@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react';
 import {
   act,
   fireEvent,
@@ -5,7 +6,12 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react-native';
-import { Keyboard, StyleSheet, type KeyboardEvent } from 'react-native';
+import {
+  ActionSheetIOS,
+  Keyboard,
+  StyleSheet,
+  type KeyboardEvent,
+} from 'react-native';
 import { ExpoRoot, router } from 'expo-router';
 import { getMockContext } from 'expo-router/testing-library';
 
@@ -165,17 +171,27 @@ const downloadMedia: MediaAnalysis = {
 };
 let playbackSnapshot: ReturnType<typeof usePlayback>;
 function LibraryRoute() {
-  playbackSnapshot = usePlayback();
+  const current = usePlayback();
+  useLayoutEffect(() => {
+    playbackSnapshot = current;
+  }, [current]);
   return <LibraryScreen />;
 }
 function LandingRoute() {
-  playbackSnapshot = usePlayback();
+  const current = usePlayback();
+  useLayoutEffect(() => {
+    playbackSnapshot = current;
+  }, [current]);
   return <LandingScreen />;
 }
 let session: ReturnType<typeof useDownloadSession>;
 function DownloadRoute() {
-  playbackSnapshot = usePlayback();
-  session = useDownloadSession();
+  const current = usePlayback();
+  const currentSession = useDownloadSession();
+  useLayoutEffect(() => {
+    playbackSnapshot = current;
+    session = currentSession;
+  }, [current, currentSession]);
   return <DownloadScreen />;
 }
 const context = getMockContext({
@@ -361,7 +377,12 @@ test.each([false, true])(
       screen.getByLabelText('Buscar en Biblioteca'),
       'ÁUDIO actual',
     );
-    await fireEvent.press(screen.getByRole('radio', { name: 'Título A–Z' }));
+    const sortMenu = jest
+      .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+      .mockImplementation(() => undefined);
+    await fireEvent.press(screen.getByRole('button', { name: /^Orden: / }));
+    const [options, choose] = sortMenu.mock.calls.at(-1)!;
+    await act(() => choose(options.options.indexOf('Título A–Z')));
     expect(
       screen.getByRole('button', { name: 'Reproducir Audio actual' }),
     ).toBeTruthy();
@@ -376,6 +397,22 @@ test.each([false, true])(
     expect(playback.close).not.toHaveBeenCalled();
   },
 );
+
+test('sort menu callback is ignored after leaving Library through the router', async () => {
+  await openApp('/library');
+  const show = jest
+    .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+    .mockImplementation(() => undefined);
+  await fireEvent.press(screen.getByRole('button', { name: /^Orden: / }));
+  const choose = show.mock.calls.at(-1)![1];
+  await tab('Descargar');
+  await act(() => choose(1));
+  await tab('Biblioteca');
+  expect(
+    screen.getByRole('button', { name: 'Orden: Más recientes' }),
+  ).toBeTruthy();
+  expect(playback.startInContext).not.toHaveBeenCalled();
+});
 
 test('opening and leaving the full player preserves CURRENT and uses leavePlayerScreen', async () => {
   await openApp();

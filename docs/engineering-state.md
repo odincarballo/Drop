@@ -3,7 +3,7 @@
 Actualizado: 5 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Estado actual: 1.6.0 publicada; 1.7.0 A1 implementado en host
+## Estado actual: 1.6.0 publicada; 1.7.0 A1/A2 validados en host
 
 - Release estable: `77f87b352ec9738bc57a5ac0579572d392582409`.
   Main y tag anotado v1.6.0 publicados en `https://github.com/odincarballo/Drop`.
@@ -58,9 +58,31 @@ No contiene autorizaciones nuevas ni resultados inferidos.
 - 1.7.0 no compilada, instalada ni validada físicamente. Metadatos siguen en
   1.6.0/build 14. Dynamic Type, VoiceOver real, temas y disposición en pantallas
   pequeñas pendientes de candidata física; los tests host no certifican el diseño.
-  Búsqueda, filtros, órdenes, vista, persistencia, tarjetas y motores sin cambios.
-- Siguiente paso: autorización de A2 para los controles restantes según el contrato;
-  no iniciar persistencia, compilación ni operaciones sobre dispositivos automáticamente.
+  Fuera de A2, búsqueda, filtros, vista, persistencia, tarjetas y motores sin cambios.
+- A2 cerrado en este commit: único botón Orden con criterio actual, ActionSheetIOS
+  con las seis etiquetas originales y Cancelar; selección anunciada en el mensaje,
+  tema claro/oscuro efectivo y control mínimo de 44 puntos con texto adaptable.
+  Guardas de apertura única y generación por foco/sección descartan callbacks
+  repetidos, tardíos o posteriores al desmontaje. Algoritmos libraryQuery intactos;
+  búsqueda, filtros, vista, tarjetas, motores y persistencia sin cambios.
+- A2 TDD: tres fallos iniciales esperados por ausencia del selector; nueve casos
+  focales PASS antes del cierre. Bloqueo de lint preexistente confirmado contra HEAD:
+  cuatro asignaciones durante render en LibraryRoute, LandingRoute y DownloadRoute
+  (playbackSnapshot y session), regla react-hooks/globals. Corrección expresamente
+  autorizada: capturar los valores de hooks en useLayoutEffect, sin alterar rutas,
+  aserciones ni providers y sin desactivar reglas. Sin cambios adicionales de producción.
+- Validación final tras corregir el mock: 21 pruebas de navegación PASS y seis
+  focales de Biblioteca PASS (28 no seleccionadas); 27 casos distintos, cero FAIL.
+  Incluye seis correspondencias en lista/cuadrícula, cancelación, reproducción
+  contextual, aperturas repetidas, fallo nativo y callbacks tardíos/desmontaje.
+  TypeScript cero diagnósticos; ESLint focal cero errores, con nueve avisos previos
+  en library-screen y dos en main-navigation conservados. Formato y diff check PASS.
+  Dependencias externas existentes reutilizadas por resolución explícita de las
+  herramientas, sin instalaciones, copias de dependencias ni enlaces nuevos.
+- Siguiente paso: autorización de B (preferencia de vista y carreras AsyncStorage)
+  según el contrato aprobado. No iniciar B, compilación ni operaciones sobre
+  dispositivos automáticamente. VoiceOver, foco y disposición del selector con
+  Dynamic Type siguen pendientes de validación física integrada.
 
 Las secciones siguientes son snapshots históricos, no instrucciones vigentes.
 

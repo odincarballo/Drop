@@ -8,6 +8,7 @@ import {
 import { ActionSheetIOS, Alert, StyleSheet } from 'react-native';
 
 import LibraryScreenContent from '@/app/library';
+import { librarySortOptions, selectLibraryItems } from '@/utils/libraryQuery';
 import { LibraryViewProvider } from '@/providers/LibraryViewProvider';
 
 function LibraryScreen() {
@@ -642,65 +643,176 @@ test('returning to Library rechecks a recovered medium and enables its actions',
   expect(playback.startInContext).not.toHaveBeenCalled();
 });
 
+async function openSortMenu() {
+  const show = jest
+    .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+    .mockImplementation(() => undefined);
+  await fireEvent.press(screen.getByRole('button', { name: /^Orden: / }));
+  const call = show.mock.calls.at(-1)!;
+  return { show, options: call[0], choose: call[1] };
+}
+
+async function chooseSort(label: string) {
+  const menu = await openSortMenu();
+  await act(() => menu.choose(menu.options.options.indexOf(label)));
+}
+
 test.each(['lista', 'cuadrícula'])(
-  'sort controls wrap without horizontal scrolling and keep selection accessible in %s',
+  'compact sort exposes all existing options and preserves filtered results in %s',
   async (mode) => {
+    const data = [
+      {
+        ...item,
+        id: 'a',
+        title: 'Podcast Z',
+        durationSeconds: 30,
+        downloadedAt: '2026-10-01',
+      },
+      {
+        ...item,
+        id: 'b',
+        title: 'Podcast A',
+        durationSeconds: 10,
+        downloadedAt: '2026-10-02',
+      },
+      {
+        ...item,
+        id: 'c',
+        title: 'Podcast M',
+        durationSeconds: null,
+        downloadedAt: '2026-10-03',
+      },
+    ];
+    jest.mocked(listLibrary).mockResolvedValue(data as never);
     await render(<LibraryScreen />);
-    await screen.findByText('Podcast largo');
-    if (mode === 'cuadrícula') {
+    await screen.findByText('Podcast Z');
+    if (mode === 'cuadrícula')
       await fireEvent.press(
         screen.getByRole('button', { name: 'Vista de cuadrícula' }),
       );
-    }
     await fireEvent.changeText(
       screen.getByLabelText('Buscar en Biblioteca'),
       'Podcast',
     );
     await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
-    const group = screen.getByLabelText('Orden de Biblioteca');
-    expect(group.props.horizontal).not.toBe(true);
-    expect(StyleSheet.flatten(group.props.style)).toMatchObject({
-      flexDirection: 'row',
-      flexWrap: 'wrap',
+    const button = screen.getByRole('button', { name: 'Orden: Más recientes' });
+    expect(button.props.accessibilityValue).toEqual({ text: 'Más recientes' });
+    const label = screen.getByText('Orden: Más recientes');
+    expect(label.props.allowFontScaling).not.toBe(false);
+    expect(label.props.numberOfLines).toBeUndefined();
+    expect(StyleSheet.flatten(button.props.style)).toMatchObject({
+      minHeight: 44,
+      minWidth: 44,
+      maxWidth: '100%',
     });
-    const labels = [
-      'Más recientes',
-      'Más antiguos',
-      'Título A–Z',
-      'Título Z–A',
-      'Duración ascendente',
-      'Duración descendente',
-    ];
-    expect(screen.getAllByRole('radio')).toHaveLength(labels.length);
-    expect(
-      screen.getByRole('radio', { name: labels[0] }).props.accessibilityState
-        .checked,
-    ).toBe(true);
-    for (const label of labels) {
-      const control = screen.getByRole('radio', { name: label });
-      expect(StyleSheet.flatten(control.props.style)).toMatchObject({
-        minHeight: 44,
-        maxWidth: '100%',
-      });
-      await fireEvent.press(control);
-      for (const candidate of labels) {
-        expect(
-          screen.getByRole('radio', { name: candidate }).props
-            .accessibilityState.checked,
-        ).toBe(candidate === label);
-      }
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
+    let current = 'Más recientes';
+    for (const [key, label] of librarySortOptions) {
+      const menu = await openSortMenu();
+      expect(menu.options.options).toEqual([
+        ...librarySortOptions.map(([, name]) => name),
+        'Cancelar',
+      ]);
+      expect(menu.options.cancelButtonIndex).toBe(6);
+      expect(menu.options.message).toBe(`Seleccionado: ${current}`);
+      await act(() => menu.choose(menu.options.options.indexOf(label)));
+      expect(
+        screen.getByRole('button', { name: `Orden: ${label}` }).props
+          .accessibilityValue,
+      ).toEqual({ text: label });
+      expect(
+        screen
+          .getAllByRole('button', { name: /^(Reproducir )?Podcast [AMZ]$/ })
+          .map((row) =>
+            row.props.accessibilityLabel.replace(/^Reproducir /, ''),
+          ),
+      ).toEqual(
+        selectLibraryItems(data as never, 'Podcast', 'audio', key).map(
+          (entry) => entry.title,
+        ),
+      );
+      current = label;
     }
+    const before = screen
+      .getAllByRole('button', { name: /^(Reproducir )?Podcast [AMZ]$/ })
+      .map((row) => row.props.accessibilityLabel);
+    const cancel = await openSortMenu();
+    await act(() => cancel.choose(cancel.options.cancelButtonIndex!));
+    expect(
+      screen.getByRole('button', { name: `Orden: ${current}` }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole('button', { name: /^(Reproducir )?Podcast [AMZ]$/ })
+        .map((row) => row.props.accessibilityLabel),
+    ).toEqual(before);
     expect(screen.getByLabelText('Buscar en Biblioteca').props.value).toBe(
       'Podcast',
     );
     expect(
       screen.getByRole('button', { name: 'Audio', selected: true }),
     ).toBeTruthy();
-    expect(screen.getByText('Podcast largo')).toBeTruthy();
     expect(listLibrary).toHaveBeenCalledTimes(1);
     expect(playback.startInContext).not.toHaveBeenCalled();
   },
 );
+
+test('sort menu ignores rapid presses, repeated and obsolete callbacks', async () => {
+  const view = await render(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  const first = await openSortMenu();
+  await fireEvent.press(screen.getByRole('button', { name: /^Orden: / }));
+  expect(first.show).toHaveBeenCalledTimes(1);
+  await act(() => {
+    first.choose(2);
+    first.choose(3);
+  });
+  expect(
+    screen.getByRole('button', { name: 'Orden: Título A–Z' }),
+  ).toBeTruthy();
+  const second = await openSortMenu();
+  await act(() => first.choose(1));
+  await fireEvent.press(screen.getByRole('button', { name: /^Orden: / }));
+  expect(second.show).toHaveBeenCalledTimes(2);
+  await fireEvent.press(screen.getByRole('tab', { name: 'Colecciones' }));
+  mockSection = 'collections';
+  await view.rerender(<LibraryScreen />);
+  await screen.findByText('Sin colección');
+  await act(() => second.choose(1));
+  mockSection = 'downloads';
+  await view.rerender(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  expect(
+    screen.getByRole('button', { name: 'Orden: Título A–Z' }),
+  ).toBeTruthy();
+  const third = await openSortMenu();
+  await view.unmount();
+  await act(() => third.choose(1));
+  expect(playback.startInContext).not.toHaveBeenCalled();
+});
+
+test('sort menu failure leaves selection intact and allows opening again', async () => {
+  await render(<LibraryScreen />);
+  await screen.findByText('Podcast largo');
+  jest
+    .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+    .mockImplementationOnce(() => {
+      throw new Error('native failure');
+    });
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Orden: Más recientes' }),
+  );
+  expect(
+    screen.getByText(
+      'No se pudo abrir el selector de orden. Inténtalo de nuevo.',
+    ),
+  ).toBeTruthy();
+  const menu = await openSortMenu();
+  await act(() => menu.choose(1));
+  expect(
+    screen.getByRole('button', { name: 'Orden: Más antiguos' }),
+  ).toBeTruthy();
+});
 
 test('query/filter/sort combine locally and explicit playback uses the visible order only', async () => {
   const data = [
@@ -729,9 +841,7 @@ test('query/filter/sort combine locally and explicit playback uses the visible o
     '  ÁRBOL  ',
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
-  await fireEvent.press(
-    screen.getByRole('radio', { name: 'Duración ascendente' }),
-  );
+  await chooseSort('Duración ascendente');
   expect(screen.queryByText('Árbol video')).toBeNull();
   expect(screen.getByText('Árbol ausente')).toBeTruthy();
   expect(
@@ -750,7 +860,7 @@ test('query/filter/sort combine locally and explicit playback uses the visible o
     screen.getByLabelText('Buscar en Biblioteca'),
     'Podcast',
   );
-  await fireEvent.press(screen.getByRole('radio', { name: 'Título Z–A' }));
+  await chooseSort('Título Z–A');
   expect(playback.startInContext).toHaveBeenCalledTimes(1);
   expect(listLibrary).toHaveBeenCalledTimes(1);
 });
@@ -809,7 +919,7 @@ test('view toggle preserves query, filter, sort and playback context without rer
     'PÓDCAST',
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
-  await fireEvent.press(screen.getByRole('radio', { name: 'Título A–Z' }));
+  await chooseSort('Título A–Z');
   await fireEvent.press(
     screen.getByRole('button', { name: 'Vista de cuadrícula' }),
   );
@@ -824,9 +934,9 @@ test('view toggle preserves query, filter, sort and playback context without rer
     screen.getByRole('button', { name: 'Audio', selected: true }),
   ).toBeTruthy();
   expect(
-    screen.getByRole('radio', { name: 'Título A–Z' }).props.accessibilityState
-      .checked,
-  ).toBe(true);
+    screen.getByRole('button', { name: 'Orden: Título A–Z' }).props
+      .accessibilityValue.text,
+  ).toBe('Título A–Z');
   await fireEvent.press(
     screen.getByRole('button', { name: 'Vista de cuadrícula' }),
   );

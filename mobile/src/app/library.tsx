@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   FlatList,
@@ -56,7 +57,7 @@ export default function LibraryScreen() {
   const params = useLocalSearchParams<{ section?: string }>();
   const section: Section =
     params.section === 'collections' ? 'collections' : 'downloads';
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
   const [uncollectedCount, setUncollectedCount] = useState(0);
@@ -67,6 +68,8 @@ export default function LibraryScreen() {
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<LibrarySort>('recent');
+  const sortLabel = librarySortOptions.find(([value]) => value === sort)![1];
+  const sortMenu = useRef({ active: false, open: false, generation: 0 });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pickerItemId, setPickerItemId] = useState<string | null>(null);
@@ -120,6 +123,50 @@ export default function LibraryScreen() {
       };
     }, [section]),
   );
+
+  useFocusEffect(
+    useCallback(() => {
+      const menu = sortMenu.current;
+      menu.active = section === 'downloads';
+      return () => {
+        menu.active = false;
+        menu.open = false;
+        menu.generation += 1;
+      };
+    }, [section]),
+  );
+
+  function showSortMenu() {
+    const menu = sortMenu.current;
+    if (!menu.active || menu.open) return;
+    menu.open = true;
+    const generation = ++menu.generation;
+    let handled = false;
+    try {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: 'Ordenar archivos',
+          message: `Seleccionado: ${sortLabel}`,
+          options: [
+            ...librarySortOptions.map(([, label]) => label),
+            'Cancelar',
+          ],
+          cancelButtonIndex: librarySortOptions.length,
+          userInterfaceStyle: isDark ? 'dark' : 'light',
+        },
+        (index) => {
+          if (handled || !menu.active || generation !== menu.generation) return;
+          handled = true;
+          menu.open = false;
+          const option = librarySortOptions[index];
+          if (option) setSort(option[0]);
+        },
+      );
+    } catch {
+      menu.open = false;
+      setError('No se pudo abrir el selector de orden. Inténtalo de nuevo.');
+    }
+  }
 
   function chooseSection(next: Section) {
     setError(null);
@@ -258,39 +305,19 @@ export default function LibraryScreen() {
           <Text style={{ color: colors.accent }}>Limpiar búsqueda</Text>
         </Pressable>
       )}
-      <Text style={{ color: colors.secondary }}>Ordenar por</Text>
-      <View
-        accessibilityRole="radiogroup"
-        accessibilityLabel="Orden de Biblioteca"
-        style={styles.sortOptions}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Orden: ${sortLabel}`}
+        accessibilityValue={{ text: sortLabel }}
+        accessibilityHint="Abre los seis criterios de ordenamiento y Cancelar"
+        onPress={showSortMenu}
+        style={[
+          styles.sortControl,
+          { borderColor: colors.border, backgroundColor: colors.surface },
+        ]}
       >
-        {librarySortOptions.map(([value, label]) => (
-          <Pressable
-            key={value}
-            accessibilityRole="radio"
-            accessibilityLabel={label}
-            accessibilityState={{ checked: sort === value }}
-            onPress={() => setSort(value)}
-            style={[
-              styles.filter,
-              styles.sortOption,
-              {
-                borderColor: colors.border,
-                backgroundColor:
-                  sort === value ? colors.accent : colors.surface,
-              },
-            ]}
-          >
-            <Text
-              style={{
-                color: sort === value ? colors.onAccent : colors.text,
-              }}
-            >
-              {label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+        <Text style={{ color: colors.text }}>Orden: {sortLabel}</Text>
+      </Pressable>
       <View style={styles.filters}>
         {(
           [
@@ -629,8 +656,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderBottomWidth: 2,
   },
-  sortOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  sortOption: { minHeight: 44, maxWidth: '100%', paddingVertical: 8 },
+  sortControl: {
+    minWidth: 44,
+    minHeight: 44,
+    maxWidth: '100%',
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderRadius: 10,
+  },
   filters: { flexDirection: 'row', gap: 8, paddingVertical: 8 },
   filter: {
     minHeight: 40,
