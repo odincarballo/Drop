@@ -55,7 +55,16 @@ No contiene autorizaciones nuevas ni resultados inferidos.
 - RED: siete fallos esperados. GREEN: 72 PASS en Biblioteca, detalle de
   Colecciones y navegación. TypeScript y lint focal sin errores.
   Formato y diff verificados. Logs en DropValidationEvidence/v1.7.1-library-recovery-2026-11-06-pepqbu2n.
-  Validación física pendiente. La versión instalada sigue en 1.7.0/build 15.
+- Reprotest com.odincarballo.drop.reprotest actualizada in-place a 1.7.1/build 16
+  desde 1.7.0/build 15 en una ejecución. Conservados los seis LibraryItems,
+  seis medios, seis portadas, identificadores, progreso y preferencias.
+  SQLite v3 íntegro, cero violaciones FK, respaldo incremental de 20 archivos
+  verificado. Evidencia en DropValidationEvidence/v1.7.1-build16-install-2026-11-06-kwp9auq9.
+- Validación física confirmada por el usuario en reprotest: 4 PASS, 0 FAIL
+  en Biblioteca, Colecciones, navegación y controles, y reproducción.
+  La recuperación de errores se cubrió en la suite automatizada de 72 PASS.
+  La prueba física se limitó al funcionamiento normal y no provocó un error real.
+  La original sigue en 1.7.0/build 15.
 
 Las notas siguientes conservan el historial; no describen el estado vigente.
 
