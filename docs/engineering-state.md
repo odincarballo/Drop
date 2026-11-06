@@ -3,7 +3,47 @@
 Actualizado: 6 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Estado actual: release Drop 1.7.0 build 15 finalizada
+## Estado actual de Drop 1.7.1 build 16
+
+- Rama `codex/v1.7.1-library-recovery` desde v1.7.0
+  `cfdc271f37325264bbb46f3f2e2e27b8c9bafb13`. Archivos y Colecciones
+  conservaban un error de lectura tras una recarga exitosa. El detalle
+  de colección borraba también los errores de operación al refrescar.
+- El error de lectura de la pestaña o colección vigente tiene una acción
+  accesible de reintento. La lectura exitosa retira ese error y recupera
+  el resultado o el estado vacío. Las respuestas obsoletas se descartan
+  y la recarga conserva consulta, filtros, orden y modo de vista.
+- RED con siete fallos esperados. GREEN con 72 PASS y 0 FAIL en Biblioteca, detalle de
+  Colecciones y navegación. TypeScript y lint focal sin errores.
+  Formato y diff verificados. Logs en DropValidationEvidence/v1.7.1-library-recovery-2026-11-06-pepqbu2n.
+- Reprotest com.odincarballo.drop.reprotest actualizada in-place a 1.7.1/build 16
+  desde 1.7.0/build 15 en una ejecución. Conservados los seis LibraryItems,
+  seis medios, seis portadas, identificadores, progreso y preferencias.
+  SQLite v3 íntegro, cero violaciones FK, respaldo incremental de 20 archivos
+  verificado. Evidencia en DropValidationEvidence/v1.7.1-build16-install-2026-11-06-kwp9auq9.
+- Validación física confirmada por el usuario en reprotest: 4 PASS, 0 FAIL
+  en Biblioteca, Colecciones, navegación y controles, y reproducción.
+  La recuperación de errores se cubrió en la suite automatizada de 72 PASS.
+  La prueba física se limitó al funcionamiento normal y no provocó un error real.
+- Original com.odincarballo.mediadrop actualizada in-place a 1.7.1/build 16
+  desde 1.7.0/build 15 en una ejecución. Conservados 14 LibraryItems,
+  14 medios, 14 portadas, una colección, identificadores, progreso y preferencias.
+  SQLite v3 íntegro y cero violaciones FK. Respaldo incremental de 34 archivos
+  verificado. Se conservaron las eliminaciones intencionales y los respaldos
+  históricos. Evidencia en DropValidationEvidence/v1.7.1-original-install-2026-11-06-4kgx7t06.
+- El usuario confirmó 4 PASS y 0 FAIL físicos en la original para Biblioteca
+  y archivos, Colecciones, reproducción, y navegación y preferencias.
+  Total físico de las dos aplicaciones instaladas y validadas de 8 PASS y 0 FAIL.
+  Los escenarios de recuperación ante errores se verificaron con pruebas
+  automatizadas. En iPhone se comprobó el funcionamiento normal, sin provocar
+  un error de lectura real. Sin fallos confirmados pendientes dentro del alcance probado.
+- La build original corresponde a 74fa2ed6660f94f72b22015892f550bb518a9d51.
+  El cierre posterior registra los resultados físicos en un commit documental.
+  La publicación en odincarballo/Drop se comprueba con main y el tag anotado v1.7.1.
+
+Las notas siguientes conservan el historial; no describen el estado vigente.
+
+## Histórico de Drop 1.7.0 build 15
 
 - Original com.odincarballo.mediadrop y reprotest com.odincarballo.drop.reprotest:
   1.7.0/build 15 instaladas in-place. Team HK927RUDLZ. Bloques 0, A1, A2, B y C
@@ -41,32 +81,6 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   v1.6.0 se conserva intacto; no iniciar 1.8.0 automáticamente.
 - NOT_READY continúa como observación independiente no reproducida; reinicio de
   medios completados es comportamiento previsto. No son fallos confirmados de 1.7.0.
-
-## Parche 1.7.1 de recuperación de Biblioteca
-
-- Rama `codex/v1.7.1-library-recovery` desde v1.7.0
-  `cfdc271f37325264bbb46f3f2e2e27b8c9bafb13`. Archivos y Colecciones
-  conservaban un error de lectura tras una recarga exitosa. El detalle
-  de colección borraba también los errores de operación al refrescar.
-- El error de lectura de la pestaña o colección vigente tiene una acción
-  accesible de reintento. La lectura exitosa retira ese error y recupera
-  el resultado o el estado vacío. Las respuestas obsoletas se descartan
-  y la recarga conserva consulta, filtros, orden y modo de vista.
-- RED: siete fallos esperados. GREEN: 72 PASS en Biblioteca, detalle de
-  Colecciones y navegación. TypeScript y lint focal sin errores.
-  Formato y diff verificados. Logs en DropValidationEvidence/v1.7.1-library-recovery-2026-11-06-pepqbu2n.
-- Reprotest com.odincarballo.drop.reprotest actualizada in-place a 1.7.1/build 16
-  desde 1.7.0/build 15 en una ejecución. Conservados los seis LibraryItems,
-  seis medios, seis portadas, identificadores, progreso y preferencias.
-  SQLite v3 íntegro, cero violaciones FK, respaldo incremental de 20 archivos
-  verificado. Evidencia en DropValidationEvidence/v1.7.1-build16-install-2026-11-06-kwp9auq9.
-- Validación física confirmada por el usuario en reprotest: 4 PASS, 0 FAIL
-  en Biblioteca, Colecciones, navegación y controles, y reproducción.
-  La recuperación de errores se cubrió en la suite automatizada de 72 PASS.
-  La prueba física se limitó al funcionamiento normal y no provocó un error real.
-  La original sigue en 1.7.0/build 15.
-
-Las notas siguientes conservan el historial; no describen el estado vigente.
 
 ## Histórico: desarrollo y preflight de 1.7.0 desde 1.6.0
 
