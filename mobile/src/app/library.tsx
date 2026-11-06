@@ -19,6 +19,7 @@ import {
 import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ActionButton } from '@/components/ActionButton';
 import { CollectionPicker } from '@/components/CollectionPicker';
 import { LibraryItemRow } from '@/components/LibraryItemRow';
 import { useLibraryView } from '@/providers/LibraryViewProvider';
@@ -70,7 +71,15 @@ export default function LibraryScreen() {
   const [sort, setSort] = useState<LibrarySort>('recent');
   const sortLabel = librarySortOptions.find(([value]) => value === sort)![1];
   const sortMenu = useRef({ active: false, open: false, generation: 0 });
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setError] = useState<string | null>(null);
+  const [failedSection, setFailedSection] = useState<Section | null>(null);
+  const refreshRef = useRef<(() => void) | null>(null);
+  const readError =
+    failedSection !== section
+      ? null
+      : section === 'downloads'
+        ? 'No se pudo abrir la Biblioteca. Inténtalo de nuevo.'
+        : 'No se pudieron cargar las colecciones.';
   const [loading, setLoading] = useState(true);
   const [pickerItemId, setPickerItemId] = useState<string | null>(null);
   const actions = useLibraryItemActions(setError);
@@ -81,16 +90,18 @@ export default function LibraryScreen() {
       let active = true;
       let generation = 0;
       const refresh = () => {
+        if (!active) return;
         const current = ++generation;
         setLoading(true);
         if (section === 'downloads') {
           void listLibrary()
             .then((found) => {
-              if (active && current === generation) setItems(found);
+              if (!active || current !== generation) return;
+              setItems(found);
+              setFailedSection(null);
             })
             .catch(() => {
-              if (active && current === generation)
-                setError('No se pudo abrir la Biblioteca. Inténtalo de nuevo.');
+              if (active && current === generation) setFailedSection(section);
             })
             .finally(() => {
               if (active && current === generation) setLoading(false);
@@ -101,16 +112,17 @@ export default function LibraryScreen() {
               if (!active || current !== generation) return;
               setCollections(found);
               setUncollectedCount(count);
+              setFailedSection(null);
             })
             .catch(() => {
-              if (active && current === generation)
-                setError('No se pudieron cargar las colecciones.');
+              if (active && current === generation) setFailedSection(section);
             })
             .finally(() => {
               if (active && current === generation) setLoading(false);
             });
         }
       };
+      refreshRef.current = refresh;
       refresh();
       const unsubscribe =
         section === 'downloads'
@@ -118,7 +130,7 @@ export default function LibraryScreen() {
           : observeCollections(refresh);
       return () => {
         active = false;
-        generation += 1;
+        refreshRef.current = null;
         unsubscribe();
       };
     }, [section]),
@@ -462,13 +474,30 @@ export default function LibraryScreen() {
           {queueActions.error}
         </Text>
       )}
-      {error && (
+      {actionError && (
         <Text
           accessibilityRole="alert"
           style={[styles.error, { color: colors.error }]}
         >
-          {error}
+          {actionError}
         </Text>
+      )}
+      {readError && (
+        <View style={styles.error}>
+          <Text accessibilityRole="alert" style={{ color: colors.error }}>
+            {readError}
+          </Text>
+          <ActionButton
+            label={
+              section === 'downloads'
+                ? 'Reintentar cargar Biblioteca'
+                : 'Reintentar cargar colecciones'
+            }
+            onPress={() => refreshRef.current?.()}
+            disabled={loading}
+            secondary
+          />
+        </View>
       )}
       {loading && (
         <ActivityIndicator accessibilityLabel="Cargando Biblioteca" />
@@ -489,7 +518,7 @@ export default function LibraryScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
-            loading || error ? null : (
+            loading || readError ? null : (
               <View style={{ gap: 8 }}>
                 <Text style={{ color: colors.secondary }}>
                   {items.length === 0
@@ -560,12 +589,13 @@ export default function LibraryScreen() {
                 Sin colección
               </Text>
               <Text style={{ color: colors.secondary }}>
-                {itemCount(uncollectedCount)} · Vista automática
+                {!loading && !readError && `${itemCount(uncollectedCount)} · `}
+                Vista automática
               </Text>
             </Pressable>
           }
           ListEmptyComponent={
-            loading ? null : (
+            loading || readError ? null : (
               <Text style={{ color: colors.secondary, paddingTop: 20 }}>
                 No hay colecciones todavía.
               </Text>

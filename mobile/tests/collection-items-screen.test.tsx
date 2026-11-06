@@ -12,6 +12,7 @@ import {
   getCollection,
   listCollectionItems,
   listUncollectedItems,
+  observeCollections,
   removeItemFromCollection,
 } from '@/services/collections';
 import { deleteLibraryItem, withLibraryLease } from '@/services/library';
@@ -309,3 +310,56 @@ test.each(['collection', 'uncollected'] as const)(
     expect(playback.startInContext).not.toHaveBeenCalled();
   },
 );
+
+test.each(['collection', 'uncollected'] as const)(
+  'recovery retries a failed %s read and shows the real empty state',
+  async (kind) => {
+    jest
+      .mocked(
+        kind === 'collection' ? listCollectionItems : listUncollectedItems,
+      )
+      .mockRejectedValueOnce(new Error('read failed'))
+      .mockResolvedValueOnce([]);
+    const empty =
+      kind === 'collection'
+        ? 'Esta colección está vacía.'
+        : 'No hay descargas sin colección.';
+    await render(
+      kind === 'collection' ? (
+        <CollectionItemsView kind="collection" collectionId="c" />
+      ) : (
+        <CollectionItemsView kind="uncollected" />
+      ),
+    );
+    await screen.findByText('No se pudieron cargar las descargas.');
+    expect(screen.queryByText(empty)).toBeNull();
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Reintentar cargar descargas' }),
+    );
+    await screen.findByText(empty);
+    expect(
+      screen.queryByText('No se pudieron cargar las descargas.'),
+    ).toBeNull();
+  },
+);
+
+test('recovery preserves an export error across a successful collection refresh', async () => {
+  let refresh!: () => void;
+  jest.mocked(observeCollections).mockImplementationOnce((listener) => {
+    refresh = listener;
+    return jest.fn();
+  });
+  jest
+    .mocked(saveLocalFileToFiles)
+    .mockRejectedValueOnce(new Error('Exportación fallida'));
+  await render(<CollectionItemsView kind="collection" collectionId="c" />);
+  await fireEvent.press(
+    await screen.findByRole('button', { name: 'Guardar en Archivos' }),
+  );
+  await screen.findByText('Exportación fallida');
+  await act(async () => refresh());
+  expect(screen.getByText('Exportación fallida')).toBeTruthy();
+  expect(
+    screen.queryByRole('button', { name: 'Reintentar cargar descargas' }),
+  ).toBeNull();
+});

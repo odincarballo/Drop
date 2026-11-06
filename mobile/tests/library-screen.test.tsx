@@ -28,6 +28,7 @@ import { shareLocalFile } from '@/services/jobs';
 import {
   deleteLibraryItem,
   listLibrary,
+  observeLibrary,
   withLibraryLease,
 } from '@/services/library';
 import {
@@ -1192,4 +1193,100 @@ test('grid keeps video artwork and existing Queue/export actions tied to its ID'
   expect(withLibraryLease).toHaveBeenCalledWith(video.id, expect.any(Function));
   expect(playback.startInContext).not.toHaveBeenCalled();
   sheet.mockRestore();
+});
+
+test.each(['downloads', 'collections'] as const)(
+  'recovery clears the %s read error after an empty observer refresh',
+  async (section) => {
+    mockSection = section;
+    const read = section === 'downloads' ? listLibrary : listCollections;
+    const observe =
+      section === 'downloads' ? observeLibrary : observeCollections;
+    const message =
+      section === 'downloads'
+        ? 'No se pudo abrir la Biblioteca. Inténtalo de nuevo.'
+        : 'No se pudieron cargar las colecciones.';
+    const empty =
+      section === 'downloads'
+        ? 'Tu Biblioteca está vacía.'
+        : 'No hay colecciones todavía.';
+    let refresh!: () => void;
+    jest.mocked(observe).mockImplementationOnce((listener) => {
+      refresh = listener;
+      return jest.fn();
+    });
+    jest
+      .mocked(read)
+      .mockRejectedValueOnce(new Error('read failed'))
+      .mockResolvedValueOnce([]);
+    await render(<LibraryScreen />);
+    await screen.findByText(message);
+    await act(async () => refresh());
+    expect(screen.queryByText(message)).toBeNull();
+    expect(screen.getByText(empty)).toBeTruthy();
+  },
+);
+
+test('recovery retries in place and preserves the active query and view', async () => {
+  jest.mocked(listLibrary).mockRejectedValueOnce(new Error('read failed'));
+  await render(<LibraryScreen />);
+  await screen.findByText(
+    'No se pudo abrir la Biblioteca. Inténtalo de nuevo.',
+  );
+  await fireEvent.changeText(
+    screen.getByLabelText('Buscar en Biblioteca'),
+    'Podcast',
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Audio' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+  );
+  await chooseSort('Título A–Z');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reintentar cargar Biblioteca' }),
+  );
+  await screen.findByText('Podcast largo');
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByLabelText('Buscar en Biblioteca').props.value).toBe(
+    'Podcast',
+  );
+  expect(
+    screen.getByRole('button', { name: 'Audio', selected: true }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('button', { name: 'Vista de cuadrícula', selected: true }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('button', { name: 'Orden: Título A–Z' }),
+  ).toBeTruthy();
+  expect(mockSetParams).not.toHaveBeenCalled();
+  expect(listLibrary).toHaveBeenCalledTimes(2);
+});
+
+test('recovery ignores a pending retry failure after switching to Collections', async () => {
+  let rejectRetry!: (error: Error) => void;
+  jest
+    .mocked(listLibrary)
+    .mockRejectedValueOnce(new Error('first read failed'))
+    .mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRetry = reject;
+        }),
+    );
+  const view = await render(<LibraryScreen />);
+  await screen.findByText(
+    'No se pudo abrir la Biblioteca. Inténtalo de nuevo.',
+  );
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reintentar cargar Biblioteca' }),
+  );
+  await fireEvent.press(screen.getByRole('tab', { name: 'Colecciones' }));
+  expect(mockSetParams).toHaveBeenCalledWith({ section: 'collections' });
+  mockSection = 'collections';
+  await view.rerender(<LibraryScreen />);
+  await screen.findByText('No hay colecciones todavía.');
+  await act(async () => rejectRetry(new Error('stale failure')));
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByText('No hay colecciones todavía.')).toBeTruthy();
 });

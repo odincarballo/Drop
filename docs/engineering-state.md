@@ -1,6 +1,6 @@
 # Estado operativo de Drop
 
-Actualizado: 5 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 6 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
 ## Estado actual: release Drop 1.7.0 build 15 finalizada
@@ -41,6 +41,21 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   v1.6.0 se conserva intacto; no iniciar 1.8.0 automáticamente.
 - NOT_READY continúa como observación independiente no reproducida; reinicio de
   medios completados es comportamiento previsto. No son fallos confirmados de 1.7.0.
+
+## Parche 1.7.1 de recuperación de Biblioteca
+
+- Rama `codex/v1.7.1-library-recovery` desde v1.7.0
+  `cfdc271f37325264bbb46f3f2e2e27b8c9bafb13`. Archivos y Colecciones
+  conservaban un error de lectura tras una recarga exitosa. El detalle
+  de colección borraba también los errores de operación al refrescar.
+- El error de lectura de la pestaña o colección vigente tiene una acción
+  accesible de reintento. La lectura exitosa retira ese error y recupera
+  el resultado o el estado vacío. Las respuestas obsoletas se descartan
+  y la recarga conserva consulta, filtros, orden y modo de vista.
+- RED: siete fallos esperados. GREEN: 72 PASS en Biblioteca, detalle de
+  Colecciones y navegación. TypeScript y lint focal sin errores.
+  Formato y diff verificados. Logs en DropValidationEvidence/v1.7.1-library-recovery-2026-11-06-pepqbu2n.
+  Validación física pendiente. La versión instalada sigue en 1.7.0/build 15.
 
 Las notas siguientes conservan el historial; no describen el estado vigente.
 

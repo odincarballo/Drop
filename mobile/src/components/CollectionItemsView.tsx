@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -10,6 +10,7 @@ import {
 import { useFocusEffect, useRouter, type Href } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ActionButton } from '@/components/ActionButton';
 import { CollectionPicker } from '@/components/CollectionPicker';
 import { LibraryItemRow } from '@/components/LibraryItemRow';
 import { useLibraryItemActions } from '@/hooks/useLibraryItemActions';
@@ -35,17 +36,23 @@ export function CollectionItemsView(props: Props) {
   const [collection, setCollection] = useState<Collection | null>(null);
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setError] = useState<string | null>(null);
+  const [failedRead, setFailedRead] = useState<{
+    collectionId: string | null;
+  } | null>(null);
+  const refreshRef = useRef<(() => void) | null>(null);
   const [pickerItemId, setPickerItemId] = useState<string | null>(null);
   const actions = useLibraryItemActions(setError);
   const queueActions = useQueueEnqueue();
   const collectionId = props.kind === 'collection' ? props.collectionId : null;
+  const readError = failedRead?.collectionId === collectionId;
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
       let generation = 0;
       const refresh = () => {
+        if (!active) return;
         const current = ++generation;
         setLoading(true);
         const request = collectionId
@@ -59,21 +66,22 @@ export function CollectionItemsView(props: Props) {
             if (!active || current !== generation) return;
             setCollection(found);
             setItems(found || !collectionId ? listed : []);
-            setError(null);
+            setFailedRead(null);
           })
           .catch(() => {
             if (active && current === generation)
-              setError('No se pudieron cargar las descargas.');
+              setFailedRead({ collectionId });
           })
           .finally(() => {
             if (active && current === generation) setLoading(false);
           });
       };
+      refreshRef.current = refresh;
       refresh();
       const unsubscribe = observeCollections(refresh);
       return () => {
         active = false;
-        generation += 1;
+        refreshRef.current = null;
         unsubscribe();
       };
     }, [collectionId]),
@@ -90,7 +98,7 @@ export function CollectionItemsView(props: Props) {
     );
   }
 
-  const missing = !!collectionId && !collection && !loading && !error;
+  const missing = !!collectionId && !collection && !loading && !readError;
   const title = collectionId
     ? (collection?.name ?? 'Colección')
     : 'Sin colección';
@@ -123,13 +131,26 @@ export function CollectionItemsView(props: Props) {
           </Text>
         )}
       </View>
-      {error && (
+      {actionError && (
         <Text
           accessibilityRole="alert"
           style={[styles.message, { color: colors.error }]}
         >
-          {error}
+          {actionError}
         </Text>
+      )}
+      {readError && (
+        <View style={styles.message}>
+          <Text accessibilityRole="alert" style={{ color: colors.error }}>
+            No se pudieron cargar las descargas.
+          </Text>
+          <ActionButton
+            label="Reintentar cargar descargas"
+            onPress={() => refreshRef.current?.()}
+            disabled={loading}
+            secondary
+          />
+        </View>
       )}
       {queueActions.message && (
         <Text
@@ -161,7 +182,7 @@ export function CollectionItemsView(props: Props) {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
-            loading || error ? null : (
+            loading || readError ? null : (
               <Text style={{ color: colors.secondary }}>{empty}</Text>
             )
           }
