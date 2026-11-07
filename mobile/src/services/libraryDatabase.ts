@@ -22,25 +22,15 @@ type ForeignKey = {
   on_delete: string;
 };
 
-const SCHEMA_VERSION = 3;
-const DROP_OBJECTS = [
-  'library_items',
-  'library_items_recent',
-  'collections',
-  'collection_items',
-  'collection_items_by_item',
-  'collection_items_recent',
-  'playback_queue',
-  'playback_queue_position',
-  'playback_queue_by_item',
-] as const;
+const SCHEMA_VERSION = 4;
+const LIBRARY_INDEX = `CREATE INDEX library_items_recent
+  ON library_items(lifecycle, downloadedAt DESC);`;
 
-// The v1 definition is unchanged. A fresh installation creates it alongside
-// v2/v3 in one transaction; an existing v1 installation never recreates it.
-const LIBRARY_SCHEMA = `
-  CREATE TABLE library_items (
+function libraryTable(name: string, version: number): string {
+  const local = version >= 4 ? ",'local'" : '';
+  return `CREATE TABLE ${name} (
     id TEXT PRIMARY KEY NOT NULL,
-    sourceKind TEXT NOT NULL CHECK(sourceKind IN ('youtube','direct')),
+    sourceKind TEXT NOT NULL CHECK(sourceKind IN ('youtube','direct'${local})),
     sourceVideoId TEXT,
     title TEXT NOT NULL,
     mediaType TEXT NOT NULL CHECK(mediaType IN ('video','audio')),
@@ -60,10 +50,8 @@ const LIBRARY_SCHEMA = `
     playbackPositionSeconds REAL NOT NULL DEFAULT 0,
     completedAt TEXT,
     lifecycle TEXT NOT NULL CHECK(lifecycle IN ('pending','ready','deleting'))
-  );
-  CREATE INDEX library_items_recent
-    ON library_items(lifecycle, downloadedAt DESC);
-`;
+  )`;
+}
 
 const COLLECTIONS_SCHEMA = `
   CREATE TABLE collections (
@@ -165,9 +153,7 @@ function identifier(value: string): string {
 
 async function objects(db: SqlAccess): Promise<Map<string, SchemaObject>> {
   const rows = await db.getAllAsync<SchemaObject>(
-    `SELECT name, type, sql FROM sqlite_master WHERE name IN (${DROP_OBJECTS.map(
-      (name) => `'${name}'`,
-    ).join(',')})`,
+    "SELECT name, type, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'",
   );
   return new Map(rows.map((row) => [row.name, row]));
 }
@@ -277,6 +263,15 @@ async function expectUnique(
   invalidSchema();
 }
 
+function normalizeDefinition(sql: string): string {
+  return sql
+    .replaceAll(/'[^']*'|[^']+/g, (part) =>
+      part.startsWith("'") ? part : part.toLowerCase().replaceAll(/\s+/g, ''),
+    )
+    .replace(/^createtable"library_items"\(/, 'createtablelibrary_items(')
+    .replace(/;$/, '');
+}
+
 async function validateStructure(
   db: SqlAccess,
   version: number,
@@ -290,14 +285,12 @@ async function validateStructure(
       ['downloadedAt', 1],
     ]);
     await expectUnique(db, 'library_items', 'relativeMediaPath');
-    const definition = found
-      .get('library_items')
-      ?.sql?.toLowerCase()
-      .replaceAll(/\s+/g, '');
+    // Rebuilding would discard unrecognized table or index constraints.
     if (
-      !definition?.includes("check(sourcekindin('youtube','direct'))") ||
-      !definition.includes("check(mediatypein('video','audio'))") ||
-      !definition.includes("check(lifecyclein('pending','ready','deleting'))")
+      normalizeDefinition(found.get('library_items')?.sql ?? '') !==
+        normalizeDefinition(libraryTable('library_items', version)) ||
+      normalizeDefinition(found.get('library_items_recent')?.sql ?? '') !==
+        normalizeDefinition(LIBRARY_INDEX)
     )
       invalidSchema();
   }
@@ -368,6 +361,95 @@ async function validateStructure(
   }
 }
 
+async function readVersion(db: SqlAccess): Promise<number> {
+  const row = await db.getFirstAsync<{ user_version: number }>(
+    'PRAGMA user_version',
+  );
+  const version = row?.user_version;
+  if (version === undefined || !Number.isInteger(version) || version < 0)
+    invalidSchema();
+  if (version > SCHEMA_VERSION)
+    throw new Error('La Biblioteca usa una versión de datos más reciente.');
+  return version;
+}
+
+async function checkForeignKeys(db: SqlAccess): Promise<void> {
+  if ((await db.getAllAsync('PRAGMA foreign_key_check')).length !== 0)
+    invalidSchema();
+}
+
+async function migrate(databaseDirectoryURL: string): Promise<void> {
+  const db = await SQLite.openDatabaseAsync(
+    'library.sqlite',
+    { useNewConnection: true },
+    databaseDirectoryURL,
+  );
+  let previousForeignKeys: 0 | 1 | undefined;
+  let inTransaction = false;
+  try {
+    const setting = await db.getFirstAsync<{ foreign_keys: 0 | 1 }>(
+      'PRAGMA foreign_keys',
+    );
+    previousForeignKeys = setting?.foreign_keys;
+    if (previousForeignKeys !== 0 && previousForeignKeys !== 1) invalidSchema();
+    // Dropping the old parent with foreign keys enabled would cascade to
+    // collection_items and playback_queue. The PRAGMA must precede BEGIN.
+    await db.execAsync('PRAGMA foreign_keys = OFF');
+    const disabled = await db.getFirstAsync<{ foreign_keys: number }>(
+      'PRAGMA foreign_keys',
+    );
+    if (disabled?.foreign_keys !== 0) invalidSchema();
+    await db.execAsync('PRAGMA busy_timeout = 5000');
+    await db.execAsync('BEGIN IMMEDIATE');
+    inTransaction = true;
+    const version = await readVersion(db);
+    await validateStructure(db, version);
+
+    if (version < SCHEMA_VERSION) {
+      if (version === 0) {
+        await db.execAsync(libraryTable('library_items', SCHEMA_VERSION));
+      } else {
+        const columns = LIBRARY_COLUMNS.map(({ name }) =>
+          identifier(name),
+        ).join(', ');
+        await db.execAsync(libraryTable('library_items_v4', SCHEMA_VERSION));
+        await db.execAsync(`
+          INSERT INTO library_items_v4 (rowid, ${columns})
+          SELECT rowid, ${columns} FROM library_items;
+          DROP TABLE library_items;
+          ALTER TABLE library_items_v4 RENAME TO library_items;
+        `);
+      }
+      await db.execAsync(LIBRARY_INDEX);
+      if (version < 2) await db.execAsync(COLLECTIONS_SCHEMA);
+      if (version < 3) await db.execAsync(QUEUE_SCHEMA);
+      await validateStructure(db, SCHEMA_VERSION);
+      await checkForeignKeys(db);
+      await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    }
+    await db.execAsync('COMMIT');
+    inTransaction = false;
+  } catch (error) {
+    if (inTransaction) {
+      try {
+        await db.execAsync('ROLLBACK');
+      } catch {
+        // Closing the private connection also discards an open transaction.
+      }
+    }
+    throw error;
+  } finally {
+    try {
+      if (previousForeignKeys !== undefined)
+        await db.execAsync(
+          `PRAGMA foreign_keys = ${previousForeignKeys ? 'ON' : 'OFF'}`,
+        );
+    } finally {
+      await db.closeAsync();
+    }
+  }
+}
+
 async function open(): Promise<SQLite.SQLiteDatabase> {
   const storage = requireOptionalNativeModule<{
     prepare(): Promise<{ databaseDirectoryURL: string }>;
@@ -383,14 +465,7 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   try {
     // Inspect version before any persistent PRAGMA or schema write. In particular,
     // never switch a future database to WAL while rejecting it.
-    const row = await db.getFirstAsync<{ user_version: number }>(
-      'PRAGMA user_version',
-    );
-    const version = row?.user_version;
-    if (version === undefined || !Number.isInteger(version) || version < 0)
-      invalidSchema();
-    if (version > SCHEMA_VERSION)
-      throw new Error('La Biblioteca usa una versión de datos más reciente.');
+    const version = await readVersion(db);
 
     await db.execAsync('PRAGMA foreign_keys = ON');
     const foreignKeys = await db.getFirstAsync<{ foreign_keys: number }>(
@@ -400,23 +475,17 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       throw new Error('No se pudo activar la integridad de la Biblioteca.');
 
     await validateStructure(db, version);
-    await db.execAsync('PRAGMA journal_mode = WAL');
-    if (version === SCHEMA_VERSION) {
-      preparedDirectoryURL = databaseDirectoryURL;
-      return db;
+    if (version < SCHEMA_VERSION) {
+      await migrate(databaseDirectoryURL);
+      if ((await readVersion(db)) !== SCHEMA_VERSION) invalidSchema();
+      await validateStructure(db, SCHEMA_VERSION);
+      await checkForeignKeys(db);
     }
-    await db.withExclusiveTransactionAsync(async (txn) => {
-      await validateStructure(txn, version);
-      if (version < 1) await txn.execAsync(LIBRARY_SCHEMA);
-      if (version < 2) await txn.execAsync(COLLECTIONS_SCHEMA);
-      if (version < 3) await txn.execAsync(QUEUE_SCHEMA);
-      await validateStructure(txn, SCHEMA_VERSION);
-      await txn.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-    });
-    const upgraded = await db.getFirstAsync<{ user_version: number }>(
-      'PRAGMA user_version',
+    const journal = await db.getFirstAsync<{ journal_mode: string }>(
+      'PRAGMA journal_mode',
     );
-    if (upgraded?.user_version !== SCHEMA_VERSION) invalidSchema();
+    if (journal?.journal_mode !== 'wal')
+      await db.execAsync('PRAGMA journal_mode = WAL');
     preparedDirectoryURL = databaseDirectoryURL;
     return db;
   } catch (error) {

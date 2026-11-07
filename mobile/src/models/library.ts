@@ -1,4 +1,4 @@
-export type LibrarySourceKind = 'youtube' | 'direct';
+export type LibrarySourceKind = 'youtube' | 'direct' | 'local';
 export type LibraryMediaType = 'video' | 'audio';
 export type LibraryLifecycle = 'pending' | 'ready' | 'deleting';
 

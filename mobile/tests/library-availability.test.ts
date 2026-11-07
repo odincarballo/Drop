@@ -12,7 +12,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { RealSQLite } from './support/realSQLite';
+import {
+  RealSQLite,
+  V1_SCHEMA,
+  V2_COLLECTIONS_SCHEMA,
+} from './support/realSQLite';
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
 jest.mock('@/services/playback', () => ({
   beginPlaybackDeletion: jest.fn(async () => undefined),
@@ -20,6 +24,7 @@ jest.mock('@/services/playback', () => ({
 }));
 type Library = typeof import('@/services/library');
 let directory: string,
+  databasePath: string,
   connections: RealSQLite[],
   library: Library,
   db: RealSQLite,
@@ -82,7 +87,7 @@ const storage = {
 async function load() {
   require('expo').requireOptionalNativeModule.mockReturnValue(storage);
   require('expo-sqlite').openDatabaseAsync.mockImplementation(async () => {
-    const c = new RealSQLite(join(directory, 'library.sqlite'));
+    const c = new RealSQLite(databasePath);
     connections.push(c);
     return c;
   });
@@ -110,28 +115,32 @@ async function seed(
     source,
   );
 }
-async function fixture() {
+async function fixture(version = 4) {
   await seed(A);
   await seed(B);
-  await db.runAsync(
-    "INSERT INTO collections VALUES (?,'Synthetic','synthetic','2026-01-01','2026-01-01')",
-    collection,
-  );
-  for (const id of [A, B])
+  if (version >= 2) {
     await db.runAsync(
-      'INSERT INTO collection_items VALUES (?,?,?)',
+      "INSERT INTO collections VALUES (?,'Synthetic','synthetic','2026-01-01','2026-01-01')",
       collection,
-      id,
-      '2026-01-01',
     );
-  for (let i = 0; i < entries.length; i++)
-    await db.runAsync(
-      'INSERT INTO playback_queue VALUES (?,?,?,?)',
-      entries[i]!,
-      i === 1 ? B : A,
-      i,
-      '2026-01-01',
-    );
+    for (const id of [A, B])
+      await db.runAsync(
+        'INSERT INTO collection_items VALUES (?,?,?)',
+        collection,
+        id,
+        '2026-01-01',
+      );
+  }
+  if (version >= 3) {
+    for (let i = 0; i < entries.length; i++)
+      await db.runAsync(
+        'INSERT INTO playback_queue VALUES (?,?,?,?)',
+        entries[i]!,
+        i === 1 ? B : A,
+        i,
+        '2026-01-01',
+      );
+  }
   for (const id of [A, B]) {
     put(mediaPath(id));
     put(`Artwork/${id}.jpg`, 'VALID-JPEG');
@@ -144,13 +153,14 @@ async function intact(before: unknown) {
     integrity_check: 'ok',
   });
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 3,
+    user_version: 4,
   });
 }
 beforeEach(async () => {
   jest.resetModules();
   jest.clearAllMocks();
   directory = mkdtempSync(join(tmpdir(), 'drop-availability-'));
+  databasePath = join(directory, 'library.sqlite');
   for (const n of ['Media', 'Artwork', 'Cache']) mkdirSync(join(directory, n));
   connections = [];
   unreadable = null;
@@ -356,18 +366,28 @@ test('explicit Delete removes a retained truncated medium and invalid artwork', 
 test.each([1, 2])(
   'a synthetic schema v%s migrates without purging absent confirmed media',
   async (version) => {
-    await fixture();
-    const originalItems = await db.getAllAsync(
+    databasePath = join(directory, 'legacy.sqlite');
+    db = new RealSQLite(databasePath);
+    try {
+      await db.execAsync(V1_SCHEMA);
+      if (version === 2)
+        await db.execAsync(`${V2_COLLECTIONS_SCHEMA} PRAGMA user_version = 2;`);
+      await fixture(version);
+    } finally {
+      await db.closeAsync();
+    }
+    const legacy = new RealSQLite(databasePath);
+    connections.push(legacy);
+    const originalItems = await legacy.getAllAsync(
       'SELECT * FROM library_items ORDER BY id',
     );
-    const originalMemberships = await db.getAllAsync(
-      'SELECT * FROM collection_items ORDER BY itemId',
-    );
-    // Downgrade only this disposable fixture's shape to a pre-Queue schema.
-    await db.execAsync('DROP TABLE playback_queue');
-    if (version === 1)
-      await db.execAsync('DROP TABLE collection_items; DROP TABLE collections');
-    await db.execAsync(`PRAGMA user_version = ${version}`);
+    const originalMemberships =
+      version === 2
+        ? await legacy.getAllAsync(
+            'SELECT * FROM collection_items ORDER BY itemId',
+          )
+        : [];
+    await legacy.closeAsync();
     rmSync(join(directory, mediaPath(A)));
     rmSync(join(directory, mediaPath(B)));
     jest.resetModules();
@@ -393,7 +413,7 @@ test.each([1, 2])(
       await db.getAllAsync('SELECT * FROM collection_items ORDER BY itemId'),
     ).toEqual(version === 2 ? originalMemberships : []);
     expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-      user_version: 3,
+      user_version: 4,
     });
     expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
   },

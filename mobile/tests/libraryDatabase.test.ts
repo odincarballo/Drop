@@ -5,43 +5,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { RealSQLite } from './support/realSQLite';
+import {
+  RealSQLite,
+  V1_SCHEMA,
+  V2_COLLECTIONS_SCHEMA,
+} from './support/realSQLite';
 
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
-
-const V1_SCHEMA = `
-  CREATE TABLE library_items (
-    id TEXT PRIMARY KEY NOT NULL,
-    sourceKind TEXT NOT NULL CHECK(sourceKind IN ('youtube','direct')),
-    sourceVideoId TEXT,
-    title TEXT NOT NULL,
-    mediaType TEXT NOT NULL CHECK(mediaType IN ('video','audio')),
-    relativeMediaPath TEXT NOT NULL UNIQUE,
-    relativeArtworkPath TEXT,
-    sourceCacheRelativePath TEXT,
-    durationSeconds REAL,
-    sizeBytes INTEGER NOT NULL,
-    artworkSizeBytes INTEGER NOT NULL DEFAULT 0,
-    resolution TEXT,
-    height INTEGER,
-    fps REAL,
-    videoCodec TEXT,
-    audioCodec TEXT,
-    container TEXT,
-    downloadedAt TEXT NOT NULL,
-    playbackPositionSeconds REAL NOT NULL DEFAULT 0,
-    completedAt TEXT,
-    lifecycle TEXT NOT NULL CHECK(lifecycle IN ('pending','ready','deleting'))
-  );
-  CREATE INDEX library_items_recent ON library_items(lifecycle, downloadedAt DESC);
-  PRAGMA user_version = 1;
-`;
 
 let directory: string;
 let path: string;
 let connections: RealSQLite[];
 let injectFailure: boolean;
 let injectQueueFailure: boolean;
+let injectRebuildFailure: boolean;
 let unavailableForeignKeys: boolean;
 
 function raw(): DatabaseSync {
@@ -111,19 +88,7 @@ function seedV2(): void {
   seedV1();
   const db = raw();
   try {
-    db.exec(`
-      CREATE TABLE collections (
-        id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL,
-        normalizedName TEXT NOT NULL UNIQUE, createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
-      );
-      CREATE TABLE collection_items (
-        collectionId TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-        itemId TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
-        addedAt TEXT NOT NULL, PRIMARY KEY (collectionId, itemId)
-      );
-      CREATE INDEX collection_items_by_item ON collection_items(itemId, collectionId);
-      CREATE INDEX collection_items_recent ON collection_items(collectionId, addedAt DESC, itemId DESC);
+    db.exec(`${V2_COLLECTIONS_SCHEMA}
       INSERT INTO collections VALUES ('c1', 'Courses', 'courses', '2026-01-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z');
       INSERT INTO collection_items VALUES ('c1', 'video-a', '2026-02-02T00:00:00.000Z');
       PRAGMA user_version = 2;
@@ -133,10 +98,41 @@ function seedV2(): void {
   }
 }
 
-function snapshot(): Record<string, unknown>[] {
+function seedV3(): void {
+  seedV2();
   const db = raw();
   try {
-    return db.prepare('SELECT * FROM library_items ORDER BY id').all();
+    db.exec(`
+      CREATE TABLE playback_queue (
+        id TEXT PRIMARY KEY NOT NULL,
+        itemId TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL CHECK(position >= 0),
+        addedAt TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX playback_queue_position ON playback_queue(position);
+      CREATE INDEX playback_queue_by_item ON playback_queue(itemId, position);
+      INSERT INTO playback_queue VALUES ('q2', 'video-a', 2, 'second');
+      INSERT INTO playback_queue VALUES ('q1', 'video-a', 0, 'first');
+      INSERT INTO playback_queue VALUES ('q3', 'audio-b', 3, 'third');
+      INSERT INTO library_items (
+        id, sourceKind, title, mediaType, relativeMediaPath,
+        sourceCacheRelativePath, sizeBytes, downloadedAt, lifecycle
+      ) VALUES
+        ('pending', 'direct', 'Pending', 'audio', 'Media/pending.m4a',
+          'MediaDrop/staged.m4a', 100, 'now', 'pending'),
+        ('deleting', 'direct', 'Deleting', 'video', 'Media/deleting.mp4',
+          NULL, 200, 'now', 'deleting');
+      PRAGMA user_version = 3;
+    `);
+  } finally {
+    db.close();
+  }
+}
+
+function snapshot(table = 'library_items'): Record<string, unknown>[] {
+  const db = raw();
+  try {
+    return db.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all();
   } finally {
     db.close();
   }
@@ -154,23 +150,27 @@ function configureMocks(): void {
     prepare: async () => ({ databaseDirectoryURL: `file://${directory}/` }),
   });
   const sqlite = require('expo-sqlite') as { openDatabaseAsync: jest.Mock };
-  sqlite.openDatabaseAsync.mockImplementation(async () => {
+  sqlite.openDatabaseAsync.mockImplementation(async (_name, options) => {
     const connection = new RealSQLite(path);
     connection.failAfterCollectionsTable = injectFailure;
     connection.failAfterQueueTable = injectQueueFailure;
+    connection.failAfterLibraryDrop = injectRebuildFailure;
     connection.foreignKeysUnavailable = unavailableForeignKeys;
     connections.push(connection);
+    if (options?.useNewConnection)
+      await connection.execAsync('PRAGMA foreign_keys = ON');
     return connection;
   });
 }
 
 beforeEach(() => {
   jest.resetModules();
-  directory = mkdtempSync(join(tmpdir(), 'drop-schema-v3-'));
+  directory = mkdtempSync(join(tmpdir(), 'drop-schema-v4-'));
   path = join(directory, 'library.sqlite');
   connections = [];
   injectFailure = false;
   injectQueueFailure = false;
+  injectRebuildFailure = false;
   unavailableForeignKeys = false;
   configureMocks();
 });
@@ -180,10 +180,10 @@ afterEach(async () => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-test('clean v0 becomes complete v3 with foreign keys and WAL', async () => {
+test('clean v0 becomes complete v4 with foreign keys and WAL', async () => {
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 3,
+    user_version: 4,
   });
   expect(await db.getFirstAsync('PRAGMA foreign_keys')).toEqual({
     foreign_keys: 1,
@@ -246,7 +246,7 @@ test('v1 migration preserves every library field and starts with no memberships 
   const before = snapshot();
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 3,
+    user_version: 4,
   });
   expect(snapshot()).toEqual(before);
   expect(
@@ -260,7 +260,7 @@ test('v1 migration preserves every library field and starts with no memberships 
   ).toEqual({ count: 0 });
 });
 
-test('v2 to v3 preserves Library, progress, completion, Collections and memberships', async () => {
+test('v2 to v4 preserves Library, progress, completion, Collections and memberships', async () => {
   seedV2();
   const before = snapshot();
   const legacy = raw();
@@ -269,7 +269,7 @@ test('v2 to v3 preserves Library, progress, completion, Collections and membersh
   legacy.close();
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 3,
+    user_version: 4,
   });
   expect(snapshot()).toEqual(before);
   expect(await db.getAllAsync('SELECT * FROM collections')).toEqual(
@@ -281,7 +281,7 @@ test('v2 to v3 preserves Library, progress, completion, Collections and membersh
   expect(await db.getAllAsync('SELECT * FROM playback_queue')).toEqual([]);
 });
 
-test('v2 to v3 failure rolls back entirely and can retry', async () => {
+test('v2 to v4 failure rolls back entirely and can retry', async () => {
   seedV2();
   const before = snapshot();
   injectQueueFailure = true;
@@ -303,13 +303,134 @@ test('v2 to v3 failure rolls back entirely and can retry', async () => {
   injectQueueFailure = false;
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 3,
+    user_version: 4,
   });
   expect(await db.getAllAsync('SELECT * FROM playback_queue')).toEqual([]);
   expect(snapshot()).toEqual(before);
 });
 
-test('v3 queue has cascade FK, nonnegative positions and authoritative indexes', async () => {
+const localItemSQL = `
+  INSERT INTO library_items (
+    id, sourceKind, title, mediaType, relativeMediaPath, sizeBytes, downloadedAt, lifecycle
+  ) VALUES ('local-item', 'local', 'Imported', 'audio', 'ImportedMedia/a.m4a', 50, 'now', 'ready')
+`;
+
+test('clean installation accepts local and creates v4 directly', async () => {
+  const db = await openProduction();
+  await db.execAsync(localItemSQL);
+  expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
+    user_version: 4,
+  });
+  expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
+  expect(await db.getFirstAsync('PRAGMA integrity_check')).toEqual({
+    integrity_check: 'ok',
+  });
+  expect(
+    connections.flatMap((connection) => connection.executed).join(' '),
+  ).not.toMatch(/DROP TABLE/);
+});
+
+const existingTables = [
+  'library_items',
+  'collections',
+  'collection_items',
+  'playback_queue',
+];
+
+test('v3 to v4 preserves every field and relation and permits a local item', async () => {
+  seedV3();
+  const before = existingTables.map(snapshot);
+  const db = await openProduction();
+  expect(existingTables.map(snapshot)).toEqual(before);
+  await db.execAsync(localItemSQL);
+  expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
+    user_version: 4,
+  });
+  expect(await db.getFirstAsync('PRAGMA foreign_keys')).toEqual({
+    foreign_keys: 1,
+  });
+  expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
+  expect(await db.getFirstAsync('PRAGMA integrity_check')).toEqual({
+    integrity_check: 'ok',
+  });
+  await expect(
+    db.execAsync(localItemSQL.replace("'local-item'", "'duplicate'")),
+  ).rejects.toThrow(/UNIQUE/);
+  await expect(
+    db.execAsync(
+      localItemSQL
+        .replace("'local'", "'unknown'")
+        .replaceAll('local-item', 'invalid')
+        .replace('a.m4a', 'b.m4a'),
+    ),
+  ).rejects.toThrow(/CHECK/);
+  await db.execAsync("DELETE FROM library_items WHERE id = 'video-a'");
+  expect(snapshot('collection_items')).toEqual([]);
+  expect(snapshot('playback_queue')).toEqual([
+    { id: 'q3', itemId: 'audio-b', position: 3, addedAt: 'third' },
+  ]);
+  expect(snapshot('collections')).toEqual(before[1]);
+});
+
+test('v3 rebuild rolls back after dropping the parent and can be retried', async () => {
+  seedV3();
+  const before = existingTables.map(snapshot);
+  const schemaBefore = snapshot('sqlite_master');
+  injectRebuildFailure = true;
+  await expect(openProduction()).rejects.toThrow('injected migration failure');
+  expect(existingTables.map(snapshot)).toEqual(before);
+  expect(snapshot('sqlite_master')).toEqual(schemaBefore);
+  const check = raw();
+  try {
+    expect(check.prepare('PRAGMA user_version').get()).toEqual({
+      user_version: 3,
+    });
+    expect(check.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect(check.prepare('PRAGMA integrity_check').get()).toEqual({
+      integrity_check: 'ok',
+    });
+  } finally {
+    check.close();
+  }
+  expect(connections.every((connection) => connection.closed)).toBe(true);
+  expect(connections.at(-1)?.executed.at(-1)).toBe('PRAGMA foreign_keys = ON');
+  injectRebuildFailure = false;
+  const db = await openProduction();
+  expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
+    user_version: 4,
+  });
+  expect(existingTables.map(snapshot)).toEqual(before);
+});
+
+test.each([
+  'CREATE INDEX unexpected_index ON library_items(title)',
+  'CREATE TRIGGER unexpected_trigger AFTER INSERT ON library_items BEGIN SELECT 1; END',
+  "PRAGMA foreign_keys = OFF; INSERT INTO playback_queue VALUES ('bad', 'missing', 10, 'now')",
+])(
+  'unsafe v3 is rejected with every schema object and row preserved: %s',
+  async (mutation) => {
+    seedV3();
+    const check = raw();
+    try {
+      check.exec(mutation);
+      const before = existingTables.map(snapshot);
+      const schemaBefore = snapshot('sqlite_master');
+      await expect(openProduction()).rejects.toThrow('inconsistente');
+      expect(check.prepare('PRAGMA user_version').get()).toEqual({
+        user_version: 3,
+      });
+      expect(check.prepare('PRAGMA journal_mode').get()).toEqual({
+        journal_mode: 'delete',
+      });
+      expect(existingTables.map(snapshot)).toEqual(before);
+      expect(snapshot('sqlite_master')).toEqual(schemaBefore);
+    } finally {
+      check.close();
+    }
+  },
+);
+
+test('v4 queue has cascade FK, nonnegative positions and authoritative indexes', async () => {
   seedV2();
   await openProduction();
   const db = raw();
@@ -362,7 +483,7 @@ test.each([
    CREATE UNIQUE INDEX playback_queue_position ON playback_queue(position);
    CREATE INDEX playback_queue_by_item ON playback_queue(itemId, position)`,
 ])(
-  'malformed v3 Queue schema is rejected without repair: %s',
+  'malformed v4 Queue schema is rejected without repair: %s',
   async (mutation) => {
     await openProduction();
     await connections[0]?.closeAsync();
@@ -372,22 +493,20 @@ test.each([
     jest.resetModules();
     configureMocks();
     await expect(openProduction()).rejects.toThrow('inconsistente');
-    expect(connections[1]?.executed).toEqual(['PRAGMA foreign_keys = ON']);
+    expect(connections.at(-1)?.executed).toEqual(['PRAGMA foreign_keys = ON']);
   },
 );
 
-test('v3 reopen validates without rerunning DDL', async () => {
+test('v4 reopen validates without any persistent write', async () => {
   await openProduction();
   await connections[0]?.closeAsync();
   jest.resetModules();
   configureMocks();
   const reopened = await openProduction();
   expect(await reopened.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 3,
+    user_version: 4,
   });
-  expect(
-    connections[1]?.executed.some((sql) => sql.includes('CREATE TABLE')),
-  ).toBe(false);
+  expect(connections.at(-1)?.executed).toEqual(['PRAGMA foreign_keys = ON']);
 });
 
 test('LibraryItem deletion cascades membership but retains Collection', async () => {
@@ -422,7 +541,7 @@ test('Collection deletion cascades membership but retains LibraryItem', async ()
 
 test('future version is rejected before WAL or any schema write', async () => {
   const db = raw();
-  db.exec('PRAGMA user_version = 4');
+  db.exec('PRAGMA user_version = 5');
   db.close();
   await expect(openProduction()).rejects.toThrow(
     'versión de datos más reciente',
@@ -431,7 +550,7 @@ test('future version is rejected before WAL or any schema write', async () => {
   expect(connections[0]?.executed).toEqual([]);
   const check = raw();
   expect(check.prepare('PRAGMA user_version').get()).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(check.prepare('PRAGMA journal_mode').get()).toEqual({
     journal_mode: 'delete',
@@ -469,7 +588,7 @@ test('v1 without its required Library index fails closed', async () => {
   expect(connections[0]?.executed).toEqual(['PRAGMA foreign_keys = ON']);
 });
 
-test('v3 missing collections is rejected without repair', async () => {
+test('v4 missing collections is rejected without repair', async () => {
   await openProduction();
   await connections[0]?.closeAsync();
   const db = raw();
@@ -478,10 +597,10 @@ test('v3 missing collections is rejected without repair', async () => {
   jest.resetModules();
   configureMocks();
   await expect(openProduction()).rejects.toThrow('inconsistente');
-  expect(connections[1]?.executed).toEqual(['PRAGMA foreign_keys = ON']);
+  expect(connections.at(-1)?.executed).toEqual(['PRAGMA foreign_keys = ON']);
 });
 
-test('v3 missing required index is rejected without repair', async () => {
+test('v4 missing required index is rejected without repair', async () => {
   await openProduction();
   await connections[0]?.closeAsync();
   const db = raw();
@@ -490,10 +609,10 @@ test('v3 missing required index is rejected without repair', async () => {
   jest.resetModules();
   configureMocks();
   await expect(openProduction()).rejects.toThrow('inconsistente');
-  expect(connections[1]?.executed).toEqual(['PRAGMA foreign_keys = ON']);
+  expect(connections.at(-1)?.executed).toEqual(['PRAGMA foreign_keys = ON']);
 });
 
-test('v3 wrong collection foreign key is rejected without repair', async () => {
+test('v4 wrong collection foreign key is rejected without repair', async () => {
   await openProduction();
   await connections[0]?.closeAsync();
   const db = raw();
@@ -510,7 +629,7 @@ test('v3 wrong collection foreign key is rejected without repair', async () => {
   jest.resetModules();
   configureMocks();
   await expect(openProduction()).rejects.toThrow('inconsistente');
-  expect(connections[1]?.executed).toEqual(['PRAGMA foreign_keys = ON']);
+  expect(connections.at(-1)?.executed).toEqual(['PRAGMA foreign_keys = ON']);
 });
 
 test('failure after first v2 DDL rolls back and a new connection retries', async () => {
@@ -544,9 +663,9 @@ test('failure after first v2 DDL rolls back and a new connection retries', async
   expect(snapshot()).toEqual(before);
   injectFailure = false;
   const db = await openProduction();
-  expect(connections).toHaveLength(2);
+  expect(connections.filter((connection) => !connection.closed)).toEqual([db]);
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 3,
+    user_version: 4,
   });
   expect(snapshot()).toEqual(before);
 });
@@ -573,7 +692,7 @@ test('failed clean creation leaves no v1, v2 or v3 objects and can retry', async
   injectFailure = false;
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 3,
+    user_version: 4,
   });
 });
 
@@ -583,7 +702,9 @@ test('concurrent callers share the one prepared Expo connection', async () => {
     openProduction(),
   ]);
   expect(first).toBe(second);
-  expect(connections).toHaveLength(1);
+  expect(connections.filter((connection) => !connection.closed)).toEqual([
+    first,
+  ]);
 });
 
 test('foreign key activation failure closes and leaves v1 untouched', async () => {

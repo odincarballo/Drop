@@ -41,6 +41,25 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   El cierre posterior registra los resultados físicos en un commit documental.
   La publicación en odincarballo/Drop se comprueba con main y el tag anotado v1.7.1.
 
+## Drop 1.8.0 · Bloque A de importación local
+
+- Rama `codex/v1.8.0-local-import` desde `v1.7.1`
+  (`0b1a0bc82d57c7f0ee616124a788816f7e5c6c57`). Contratos en la
+  [especificación](local-import-v1.8.0.md), el [plan](local-import-plan-v1.8.0.md)
+  y la [matriz de tareas y pruebas](local-import-tasks-v1.8.0.md).
+- SQLite v4 admite `sourceKind = 'local'`. La reconstrucción conserva
+  identificadores, metadatos, progreso, estados, Colecciones y ocurrencias
+  ordenadas de Cola. SQLite verifica las claves foráneas antes de confirmar
+  y al abrir la base migrada. Un fallo revierte la actualización.
+- RED con 13 fallos esperados. GREEN con 105 pruebas en cinco suites
+  afectadas. TypeScript, ESLint focal y formato aprobados. Evidencia en
+  `DropValidationEvidence/v1.8.0-sqlite-v4-2026-11-06-5sI3GX`.
+- Siguiente paso sujeto a autorización. En B, extender el resolver Swift
+  y la promoción a `ImportedMedia/<uuid>.<ext>` para origen local.
+  Actualmente ambos usan `Media/`. El plan mantiene las descargas en
+  su ruta actual y conserva una ruta elegible para backup en importados.
+  La validación integrada en iOS queda para reprotest.
+
 Las notas siguientes conservan el historial; no describen el estado vigente.
 
 ## Histórico de Drop 1.7.0 build 15
