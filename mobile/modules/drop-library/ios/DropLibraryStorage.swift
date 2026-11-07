@@ -298,7 +298,8 @@ public final class DropLibraryStorage {
   // Native callers must hold access to the selected URL for the duration of this operation.
   // The bridge accepts only the resulting sandbox URL and never opens a provider URL.
   func stageLocalFile(from source: URL,
-                      capacity: @Sendable (URL) throws -> Int64? = { try DropLibraryStorage.availableCapacity(at: $0) })
+                      capacity: @Sendable (URL) throws -> Int64? = { try DropLibraryStorage.availableCapacity(at: $0) },
+                      progress: @Sendable (Int64, Int64) -> Void = { _, _ in })
     async throws -> (uri: String, title: String, mediaType: String, durationSeconds: Double) {
     try Task.checkCancellation()
     guard source.isFileURL, (source.host ?? "").isEmpty,
@@ -320,7 +321,7 @@ public final class DropLibraryStorage {
     var coordinationError: NSError?
     var copyResult: Result<Int64, Error>?
     NSFileCoordinator().coordinate(readingItemAt: source, options: .withoutChanges, error: &coordinationError) { url in
-      copyResult = Result { try copyLocalFile(from: url, to: partial, capacity: capacity) }
+      copyResult = Result { try copyLocalFile(from: url, to: partial, capacity: capacity, progress: progress) }
     }
     if let coordinationError { throw coordinationError }
     guard let expectedSize = try copyResult?.get() else { throw DropLibraryStorageError.invalidSource }
@@ -339,7 +340,8 @@ public final class DropLibraryStorage {
   }
 
   private func copyLocalFile(from source: URL, to destination: URL,
-                             capacity: @Sendable (URL) throws -> Int64?) throws -> Int64 {
+                             capacity: @Sendable (URL) throws -> Int64?,
+                             progress: @Sendable (Int64, Int64) -> Void) throws -> Int64 {
     let parent = source.deletingLastPathComponent().standardizedFileURL
     let inputURL = parent.appendingPathComponent(source.lastPathComponent)
     guard let expected = try regularSize(inputURL), expected > 0 else {
@@ -360,6 +362,7 @@ public final class DropLibraryStorage {
     let writer = FileHandle(fileDescriptor: outputDescriptor, closeOnDealloc: true)
     defer { try? writer.close() }
     var copied: Int64 = 0
+    progress(0, expected)
     while let bytes = try reader.read(upToCount: 1_048_576), !bytes.isEmpty {
       try Task.checkCancellation()
       guard Int64(bytes.count) <= expected - copied else { throw DropLibraryStorageError.invalidSource }
@@ -369,6 +372,7 @@ public final class DropLibraryStorage {
       }
       try writer.write(contentsOf: bytes)
       copied += Int64(bytes.count)
+      progress(copied, expected)
     }
     try writer.synchronize()
     try writer.close()

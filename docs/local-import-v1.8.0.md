@@ -4,8 +4,8 @@ Especificación aprobada. Base publicada: `v1.7.1`, build 16,
 `0b1a0bc82d57c7f0ee616124a788816f7e5c6c57`. Esta documentación vive en
 `codex/v1.8.0-local-import`. Reprotest 1.7.1 build 17 sigue siendo la
 instalación del diagnóstico, cuyo código queda fuera de esta rama.
-A, B y C están implementados en host. La [lista de tareas](local-import-tasks-v1.8.0.md)
-reserva D para selector y UI, y E para validación integrada con autorización
+A, B, C y D están implementados en host. La [lista de tareas](local-import-tasks-v1.8.0.md)
+registra D como selector y UI, y E como validación integrada con autorización
 independiente. Consultar el estado operativo antes de continuar.
 
 ## Alcance y experiencia

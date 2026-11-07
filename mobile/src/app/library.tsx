@@ -1,5 +1,13 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import {
+  AccessibilityInfo,
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
@@ -36,6 +44,13 @@ import {
   renameCollection,
 } from '@/services/collections';
 import { listLibrary, observeLibrary } from '@/services/library';
+import {
+  getLocalImportState,
+  observeLocalImport,
+  startLocalImport,
+  retryLocalImport,
+  cancelLocalImport,
+} from '@/services/localImport';
 import { useTheme } from '@/theme';
 import { collectionErrorMessage } from '@/utils/collectionErrors';
 import { formatSize } from '@/utils/format';
@@ -82,6 +97,14 @@ export default function LibraryScreen() {
         : 'No se pudieron cargar las colecciones.';
   const [loading, setLoading] = useState(true);
   const [pickerItemId, setPickerItemId] = useState<string | null>(null);
+  const importState = useSyncExternalStore(
+    observeLocalImport,
+    getLocalImportState,
+    getLocalImportState,
+  );
+  const importButton = useRef<View>(null);
+  const importStatus = useRef<View>(null);
+  const previousImportPhase = useRef(importState.phase);
   const actions = useLibraryItemActions(setError);
   const queueActions = useQueueEnqueue();
 
@@ -247,6 +270,78 @@ export default function LibraryScreen() {
     () => selectLibraryItems(items, query, filter, sort),
     [items, query, filter, sort],
   );
+  const importBusy = [
+    'selecting',
+    'preparing',
+    'copying',
+    'validating',
+    'cancelling',
+    'saving',
+  ].includes(importState.phase);
+  const importCanCancel = [
+    'selecting',
+    'preparing',
+    'copying',
+    'validating',
+  ].includes(importState.phase);
+  const importHidden =
+    importState.item &&
+    selectLibraryItems([importState.item], query, filter, sort).length === 0;
+  let importMessage = '';
+  switch (importState.phase) {
+    case 'selecting':
+      importMessage = 'Seleccionando archivo…';
+      break;
+    case 'preparing':
+      importMessage = 'Preparando archivo…';
+      break;
+    case 'copying':
+      importMessage = `Copiando archivo… ${Math.floor((importState.copiedBytes! / importState.totalBytes!) * 100)}%`;
+      break;
+    case 'validating':
+      importMessage = 'Validando archivo…';
+      break;
+    case 'cancelling':
+      importMessage = 'Cancelando importación…';
+      break;
+    case 'saving':
+      importMessage = 'Guardando en Biblioteca…';
+      break;
+    case 'cancelled':
+      importMessage = 'Importación cancelada.';
+      break;
+    case 'error':
+      importMessage = importState.message ?? 'No se pudo importar el archivo.';
+      break;
+    case 'completed':
+      importMessage =
+        section === 'collections'
+          ? 'Archivo importado en Biblioteca. Disponible en Archivos.'
+          : importHidden
+            ? 'Archivo importado. La búsqueda o los filtros actuales lo ocultan.'
+            : 'Archivo importado en Biblioteca.';
+  }
+  // Progress is visual. VoiceOver announces phase changes and the final outcome once.
+  useEffect(() => {
+    const previous = previousImportPhase.current;
+    if (previous === importState.phase) return;
+    previousImportPhase.current = importState.phase;
+    if (importMessage)
+      AccessibilityInfo.announceForAccessibility(
+        importState.phase === 'copying' ? 'Copiando archivo…' : importMessage,
+      );
+    const target =
+      importState.phase === 'cancelled'
+        ? (importButton.current ?? importStatus.current)
+        : importStatus.current;
+    if (
+      target &&
+      (previous === 'selecting' ||
+        ['completed', 'error', 'cancelled'].includes(importState.phase))
+    )
+      AccessibilityInfo.sendAccessibilityEvent(target, 'focus');
+  }, [importState.phase, importMessage]);
+
   const used = items.reduce(
     (total, item) =>
       total + (item.mediaSizeOnDisk ?? 0) + item.artworkSizeBytes,
@@ -437,11 +532,29 @@ export default function LibraryScreen() {
           ))}
         </View>
         {section === 'downloads' ? (
-          <>
+          <View style={styles.importTools}>
             <Text style={{ color: colors.secondary }}>
               {formatSize(used)} utilizados
             </Text>
-          </>
+            <Pressable
+              ref={importButton}
+              accessibilityRole="button"
+              accessibilityLabel="Importar archivo"
+              accessibilityState={{ disabled: importBusy, busy: importBusy }}
+              disabled={importBusy}
+              onPress={() => {
+                void startLocalImport();
+              }}
+              style={[
+                styles.importButton,
+                { borderColor: colors.border, opacity: importBusy ? 0.55 : 1 },
+              ]}
+            >
+              <Text style={{ color: colors.accent, flexShrink: 1 }}>
+                Importar archivo
+              </Text>
+            </Pressable>
+          </View>
         ) : (
           <View style={styles.collectionsHeader}>
             <Text style={{ color: colors.secondary }}>
@@ -458,6 +571,53 @@ export default function LibraryScreen() {
           </View>
         )}
       </View>
+      {importMessage !== '' && (
+        <View style={styles.importStatus}>
+          <View
+            ref={importStatus}
+            accessible
+            accessibilityLabel={importMessage}
+            accessibilityRole={
+              importState.phase === 'error' ? 'alert' : undefined
+            }
+          >
+            <Text
+              style={{
+                color:
+                  importState.phase === 'error'
+                    ? colors.error
+                    : colors.secondary,
+              }}
+            >
+              {importMessage}
+            </Text>
+          </View>
+          {importCanCancel && (
+            <ActionButton
+              label="Cancelar importación"
+              secondary
+              onPress={() => {
+                void cancelLocalImport();
+              }}
+            />
+          )}
+          {importState.canRetry && (
+            <ActionButton
+              label="Reintentar importación"
+              secondary
+              onPress={() => {
+                void retryLocalImport();
+              }}
+            />
+          )}
+          {importState.phase === 'completed' && (
+            <Text style={{ color: colors.secondary }}>
+              Conserva el original. Puedes guardar otra copia con Guardar en
+              Archivos.
+            </Text>
+          )}
+        </View>
+      )}
       {queueActions.message && (
         <Text
           accessibilityLiveRegion="polite"
@@ -656,6 +816,24 @@ export default function LibraryScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  importTools: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  importButton: {
+    minHeight: 44,
+    minWidth: 44,
+    maxWidth: '100%',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    justifyContent: 'center',
+  },
+  importStatus: { paddingHorizontal: 22, paddingVertical: 8, gap: 8 },
   header: { paddingHorizontal: 22, paddingTop: 18, gap: 8 },
   headerActions: {
     flexDirection: 'row',

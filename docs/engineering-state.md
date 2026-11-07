@@ -100,7 +100,35 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   La reproducción de host ejercitó apertura y preparación del sucesor en el
   motor existente. La integración y ejecución en iPhone siguen pendientes.
 - Correspondencia actualizada. D incorpora selector y UI. E verifica integración
-  y candidata reprotest con autorización independiente. Próximo bloque D pendiente.
+  y candidata reprotest con autorización independiente. D se cierra abajo.
+
+## Drop 1.8.0 · Bloque D de selector e interfaz
+
+- Biblioteca incorpora **Importar archivo** en Archivos, debajo de las pestañas
+  y junto al uso de espacio. El estado de la operación se comparte entre
+  montajes. Se conservan filtros, búsqueda, orden, vista y reproducción actual.
+- Selector `UIDocumentPickerViewController`, `asCopy: false`, una selección,
+  delegado retenido y callbacks duplicados ignorados. La tarea de preparación
+  equilibra el acceso al original y reutiliza lectura coordinada y almacenamiento.
+  La cancelación espera al lector y descarta una preparación tardía propia.
+- Progreso basado en bytes medidos, validación y guardado diferenciados.
+  Los errores se presentan sin rutas personales y el reintento de guardado
+  conserva la preparación y su identidad. Foco y anuncios accesibles comprobados
+  con mocks, sin anunciar cada porcentaje. El éxito informa de filtros activos.
+- RED con cuatro fallos de UI contra la pantalla de C y contrato nativo ausente.
+  GREEN con 80 pruebas Jest en tres suites afectadas y dos suites Swift de host.
+  TypeScript, ESLint focal sin errores (nueve advertencias preexistentes), formato
+  de fuentes, enlaces y diff aprobados. Selector, operación y almacenamiento
+  tipados para iOS ARM64 con SDK propio en Swift 5 y 6.
+  Host Swift requiere SDK y destino macOS explícitos: el destino implícito
+  del sistema (28.0) no tiene biblioteca estándar en el SDK instalado.
+  Evidencia en `DropValidationEvidence/v1.8.0-native-import-ui-2026-11-07-yor_fch2`.
+- La presentación real, scopes de iCloud/proveedores, foco/VoiceOver, Dynamic Type
+  y cancelación durante esperas del proveedor quedan pendientes de iPhone.
+  El bridge Expo completo queda para la integración E. No se reutilizaron
+  recursos del worktree de diagnóstico ni se generó candidata integrada.
+- E requiere autorización independiente. Ambas aplicaciones, datos y respaldos
+  permanecen fuera de esta intervención. No se modificaron versión ni build.
 
 Las notas siguientes conservan el historial; no describen el estado vigente.
 

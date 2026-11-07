@@ -68,7 +68,7 @@ La matriz incluye aceptación física todavía pendiente.
 
 ### D · Selector y experiencia en Biblioteca
 
-- [ ] Conectar el selector iOS y los estados de UI al flujo aprobado en B.
+- [x] Conectar el selector iOS y los estados de UI al flujo de B/C, con pruebas de host.
 - **Archivos previstos** — `DropLibraryModule.swift`, el auxiliar del selector
   si hace falta, `mobile/src/app/library.tsx` y
   `mobile/tests/library-screen.test.tsx`. Reutilizar componentes y anuncios
@@ -81,6 +81,7 @@ La matriz incluye aceptación física todavía pendiente.
 - **GREEN y cierre** — Una operación activa. Selección, cancelación, errores
   y progreso accesibles. Lista y cuadrícula refrescan sin alterar filtros,
   reproducción o Cola. Sin importación masiva ni cambios de dependencias.
+  UIKit y los proveedores reales quedan pendientes del checklist físico E.
 
 ### E · Integración y candidata reprotest
 

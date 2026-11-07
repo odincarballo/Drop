@@ -133,6 +133,35 @@ Las carpetas finales importadas sin fila se identifican por la enumeración
 administrada y un diagnóstico de cantidad. Se conservan para inspección o
 recuperación futura. La integración no les inventa una fila `ready`.
 
+## Selector nativo y estados de Biblioteca
+
+D conecta `pickLocalFile` y `cancelLocalFileImport` al módulo existente.
+`DropLocalImportPicker` retiene el delegado y presenta una selección única con
+los tipos `.mp3`, `.mpeg4Audio` y `.mpeg4Movie`, usando `asCopy: false`.
+Las notificaciones contienen solo un ID de operación, fase y bytes de progreso.
+El tipo sugerido por Archivos no sustituye la validación multimedia de B/C.
+
+`DropLocalImportOperation` inicia una tarea fuera del hilo principal. Equilibra
+el acceso security-scoped con `defer` y mantiene la lectura coordinada de B.
+Cancelar espera el resultado del lector. Un resultado preparado tardío se
+retira de la caché propia antes de confirmar la cancelación. Durante la espera
+la operación sigue ocupada. Los errores enviados a JavaScript son códigos
+sin rutas personales. El original permanece en solo lectura.
+
+`localImport.ts` comparte el estado entre montajes de Biblioteca. Espera
+reconciliación antes de abrir el selector y filtra eventos obsoletos. Guardar
+usa `importPreparedLocalFile`. Un reintento conserva esa misma preparación.
+La UI muestra selección, preparación, copia medida, validación, guardado,
+resultado y error. Cancelar solo se ofrece antes de guardar. VoiceOver recibe
+cambios de fase y resultado, mientras los porcentajes se muestran visualmente.
+Los controles de cancelación y reintento son accesibles por separado.
+
+El botón está en Archivos, debajo de las pestañas y junto al uso de espacio.
+El éxito indica si búsqueda o filtros ocultan el elemento, conservando esos
+criterios, el orden y la vista. La presentación real de UIKit, proveedores,
+VoiceOver y Dynamic Type se validará en E. El bridge Expo completo requiere
+los recursos nativos autorizados de la candidata y sigue pendiente.
+
 ## SQLite v4 y coordinación con Swift
 
 [El modelo TypeScript](../mobile/src/models/library.ts) y el
@@ -174,8 +203,10 @@ de esquema sigue en `libraryDatabase.ts`, que es su dueño actual.
 
 ## Fuentes oficiales
 
-- [Apple · UIDocumentPickerViewController](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller)
-  y [acceso temporal a documentos](https://developer.apple.com/documentation/foundation/nsurl).
+- [Apple · UIDocumentPickerViewController](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller),
+  [inicializador de apertura](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller/init(foropeningcontenttypes:ascopy:)),
+  [delegado](https://developer.apple.com/documentation/uikit/uidocumentpickerdelegate)
+  y [acceso temporal a documentos](https://developer.apple.com/documentation/foundation/nsurl/startaccessingsecurityscopedresource()).
 - [Apple · Carga asíncrona de AVFoundation](https://developer.apple.com/documentation/avfoundation/loading-media-data-asynchronously),
   [restricciones de referencias](https://developer.apple.com/documentation/avfoundation/avassetreferencerestrictions)
   y [capacidad del volumen](https://developer.apple.com/documentation/foundation/checking-volume-storage-capacity).

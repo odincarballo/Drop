@@ -6,11 +6,23 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react-native';
-import { ActionSheetIOS, Alert, StyleSheet } from 'react-native';
+import {
+  AccessibilityInfo,
+  ActionSheetIOS,
+  Alert,
+  StyleSheet,
+} from 'react-native';
 
 import LibraryScreenContent from '@/app/library';
 import { librarySortOptions, selectLibraryItems } from '@/utils/libraryQuery';
 import { LibraryViewProvider } from '@/providers/LibraryViewProvider';
+
+import {
+  startLocalImport,
+  retryLocalImport,
+  cancelLocalImport,
+  type LocalImportState,
+} from '@/services/localImport';
 
 function LibraryScreen() {
   return (
@@ -40,6 +52,26 @@ import {
   renameCollection,
 } from '@/services/collections';
 import { playback } from '@/services/playback';
+let mockImportState: LocalImportState = { phase: 'idle', canRetry: false };
+const mockImportListeners = new Set<() => void>();
+function updateImport(state: LocalImportState) {
+  mockImportState = state;
+  for (const listener of mockImportListeners) listener();
+}
+jest.mock(
+  '@/services/localImport',
+  () => ({
+    getLocalImportState: () => mockImportState,
+    observeLocalImport: (listener: () => void) => {
+      mockImportListeners.add(listener);
+      return () => mockImportListeners.delete(listener);
+    },
+    startLocalImport: jest.fn(),
+    retryLocalImport: jest.fn(),
+    cancelLocalImport: jest.fn(),
+  }),
+  { virtual: true },
+);
 import {
   enqueueLast,
   enqueueNext,
@@ -130,6 +162,8 @@ const item = {
 } as const;
 
 beforeEach(async () => {
+  mockImportState = { phase: 'idle', canRetry: false };
+  mockImportListeners.clear();
   await AsyncStorage.clear();
   jest.clearAllMocks();
   jest
@@ -1289,4 +1323,147 @@ test('recovery ignores a pending retry failure after switching to Collections', 
   await act(async () => rejectRetry(new Error('stale failure')));
   expect(screen.queryByRole('alert')).toBeNull();
   expect(screen.getByText('No hay colecciones todavía.')).toBeTruthy();
+});
+
+test('the Files header offers accessible import with duplicate activation disabled', async () => {
+  jest.mocked(startLocalImport).mockImplementation(async () => {
+    updateImport({ phase: 'selecting', canRetry: false });
+  });
+  await render(<LibraryScreen />);
+  const button = screen.getByRole('button', { name: 'Importar archivo' });
+  await fireEvent.press(button);
+  expect(
+    screen.getByRole('button', { name: 'Importar archivo' }).props
+      .accessibilityState.disabled,
+  ).toBe(true);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Importar archivo' }),
+  );
+  expect(startLocalImport).toHaveBeenCalledTimes(1);
+  expect(playback.startInContext).not.toHaveBeenCalled();
+});
+
+test('import presents measured preparation, safe cancellation and saving as distinct states', async () => {
+  await render(<LibraryScreen />);
+  await act(async () => updateImport({ phase: 'preparing', canRetry: false }));
+  expect(screen.getByText('Preparando archivo…')).toBeTruthy();
+  expect(screen.queryByText(/\d+%/)).toBeNull();
+  await act(async () =>
+    updateImport({
+      phase: 'copying',
+      copiedBytes: 25,
+      totalBytes: 100,
+      canRetry: false,
+    }),
+  );
+  expect(screen.getByText('Copiando archivo… 25%')).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Cancelar importación' }),
+  );
+  expect(cancelLocalImport).toHaveBeenCalledTimes(1);
+  await act(async () => updateImport({ phase: 'saving', canRetry: false }));
+  expect(screen.getByText('Guardando en Biblioteca…')).toBeTruthy();
+  expect(
+    screen.queryByRole('button', { name: 'Cancelar importación' }),
+  ).toBeNull();
+  await act(async () => updateImport({ phase: 'cancelled', canRetry: false }));
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Importar archivo' }).props
+      .accessibilityState.disabled,
+  ).toBe(false);
+});
+
+test('a completed hidden import preserves the selected filter, query and grid', async () => {
+  await render(<LibraryScreen />);
+  await waitFor(() =>
+    expect(screen.getByLabelText('Buscar en Biblioteca')).toBeTruthy(),
+  );
+  await fireEvent.changeText(
+    screen.getByLabelText('Buscar en Biblioteca'),
+    'Podcast',
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Videos' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Vista de cuadrícula' }),
+  );
+  await act(async () =>
+    updateImport({
+      phase: 'completed',
+      item: { ...item, id: 'imported', title: 'Archivo local' } as never,
+      canRetry: false,
+    }),
+  );
+  expect(
+    screen.getByText(/La búsqueda o los filtros actuales lo ocultan/),
+  ).toBeTruthy();
+  expect(screen.getByLabelText('Buscar en Biblioteca').props.value).toBe(
+    'Podcast',
+  );
+  expect(
+    screen.getByRole('button', { name: 'Videos' }).props.accessibilityState
+      .selected,
+  ).toBe(true);
+  expect(
+    screen.getByRole('button', { name: 'Vista de cuadrícula' }).props
+      .accessibilityState.selected,
+  ).toBe(true);
+});
+
+test('a recoverable import failure exposes retry without removing the existing Library', async () => {
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  await act(async () =>
+    updateImport({
+      phase: 'error',
+      message: 'No se pudo guardar el archivo.',
+      canRetry: true,
+    }),
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent(/No se pudo guardar/);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reintentar importación' }),
+  );
+  expect(retryLocalImport).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('Podcast largo')).toBeTruthy();
+});
+
+test('import announces phase changes without reading every percentage and restores accessible focus', async () => {
+  const announce = jest
+    .spyOn(AccessibilityInfo, 'announceForAccessibility')
+    .mockImplementation(() => undefined);
+  const focus = jest
+    .spyOn(AccessibilityInfo, 'sendAccessibilityEvent')
+    .mockImplementation(() => undefined);
+  await render(<LibraryScreen />);
+  await waitFor(() => expect(screen.getByText('Podcast largo')).toBeTruthy());
+  await act(async () => updateImport({ phase: 'selecting', canRetry: false }));
+  await act(async () => updateImport({ phase: 'preparing', canRetry: false }));
+  expect(focus).toHaveBeenCalled();
+  expect(
+    screen.getByRole('button', { name: 'Cancelar importación' }),
+  ).toBeTruthy();
+  await act(async () =>
+    updateImport({
+      phase: 'copying',
+      canRetry: false,
+      copiedBytes: 10,
+      totalBytes: 100,
+    }),
+  );
+  const calls = announce.mock.calls.length;
+  await act(async () =>
+    updateImport({
+      phase: 'copying',
+      canRetry: false,
+      copiedBytes: 30,
+      totalBytes: 100,
+    }),
+  );
+  expect(announce).toHaveBeenCalledTimes(calls);
+  await act(async () =>
+    updateImport({ phase: 'completed', canRetry: false, item: item as never }),
+  );
+  expect(announce).toHaveBeenLastCalledWith('Archivo importado en Biblioteca.');
+  expect(focus.mock.calls.at(-1)?.[1]).toBe('focus');
 });

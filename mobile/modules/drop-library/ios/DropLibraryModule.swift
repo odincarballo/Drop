@@ -77,9 +77,61 @@ private final class ArtworkTransfer: NSObject, URLSessionDataDelegate, URLSessio
 public final class DropLibraryModule: Module {
   private var artworkTransfers: [String: ArtworkTransfer] = [:]
   private let artworkLock = NSLock()
+  @MainActor private var localImportPicker: DropLocalImportPicker?
 
   public func definition() -> ModuleDefinition {
     Name("DropLibrary")
+    Events("onLocalImportProgress")
+
+    OnDestroy {
+      Task { @MainActor [self] in localImportPicker?.cancel() }
+    }
+
+    AsyncFunction("pickLocalFile") { (requestID: Int, promise: Promise) in
+      Task { @MainActor [self] in
+        guard requestID > 0, localImportPicker == nil else {
+          promise.resolve(["status": "failed", "code": DropLocalImportFailure.busy.rawValue])
+          return
+        }
+        guard let presenter = appContext?.utilities?.currentViewController() else {
+          promise.resolve(["status": "failed", "code": DropLocalImportFailure.pickerUnavailable.rawValue])
+          return
+        }
+        let picker = DropLocalImportPicker(requestID: requestID, onUpdate: { [weak self] update in
+          var event: [String: Any] = ["requestId": requestID, "phase": update.phase.rawValue]
+          if let copied = update.copiedBytes, let total = update.totalBytes {
+            event["copiedBytes"] = copied
+            event["totalBytes"] = total
+          }
+          self?.sendEvent("onLocalImportProgress", event)
+        }, completion: { [weak self] result in
+          if self?.localImportPicker?.requestID == requestID { self?.localImportPicker = nil }
+          switch result {
+          case let .prepared(value):
+            promise.resolve(["status": "prepared", "uri": value.uri, "title": value.title,
+              "mediaType": value.mediaType, "durationSeconds": value.durationSeconds])
+          case .cancelled: promise.resolve(["status": "cancelled"])
+          case let .failed(error): promise.resolve(["status": "failed", "code": error.rawValue])
+          }
+        })
+        localImportPicker = picker
+        do { try picker.present(from: presenter) }
+        catch {
+          localImportPicker = nil
+          promise.resolve(["status": "failed", "code": DropLocalImportFailure.pickerUnavailable.rawValue])
+        }
+      }
+    }
+
+    AsyncFunction("cancelLocalFileImport") { (requestID: Int, promise: Promise) in
+      Task { @MainActor [self] in
+        guard let picker = localImportPicker, picker.requestID == requestID else {
+          promise.resolve(false)
+          return
+        }
+        promise.resolve(picker.cancel())
+      }
+    }
 
     AsyncFunction("normalizeCollectionName") { (raw: String) -> [String: String] in
       do {
