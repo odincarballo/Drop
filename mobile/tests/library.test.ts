@@ -91,7 +91,7 @@ const db = {
       if (failReady) throw new Error('database write failed');
       beforeReady?.();
       const row = rows.get(String(values[1]));
-      if (row)
+      if (row?.lifecycle === 'pending')
         Object.assign(row, {
           lifecycle: 'ready',
           sourceCacheRelativePath: null,
@@ -121,7 +121,7 @@ const native = {
   prepare: jest.fn(async () => ({
     databaseDirectoryURL: 'file:///app/Library/Application%20Support/Drop/',
   })),
-  inspectSource: jest.fn(async (uri: string) => {
+  inspectSource: jest.fn(async (uri: string, kind = 'direct') => {
     const relative = uri.replace('file:///cache/', '');
     const size = cache.get(relative);
     if (
@@ -130,26 +130,35 @@ const native = {
       relative.includes('..')
     )
       throw new Error('invalid source');
+    const id =
+      kind === 'local'
+        ? relative.split('/')[1]!
+        : `00000000-0000-0000-0000-${String(nextId++).padStart(12, '0')}`;
+    const ext = relative.split('.').at(-1);
+    const directory = kind === 'local' ? 'ImportedMedia' : 'Media';
     return {
-      id: `00000000-0000-0000-0000-${String(nextId++).padStart(12, '0')}`,
+      id,
       cacheRelativePath: relative,
-      extension: relative.split('.').at(-1),
+      extension: ext,
+      relativeMediaPath: `${directory}/${id}.${ext}`,
       sizeBytes: size,
     };
   }),
-  movePrepared: jest.fn(async (relative: string, id: string, ext: string) => {
-    if (failMove) throw new Error('move failed');
-    const size = cache.get(relative);
-    if (size === undefined) throw new Error('source missing');
-    cache.delete(relative);
-    const path = `Media/${id}.${ext}`;
-    media.set(path, size);
-    return {
-      relativeMediaPath: path,
-      uri: `file:///library/${path}`,
-      sizeBytes: size,
-    };
-  }),
+  movePrepared: jest.fn(
+    async (relative: string, id: string, ext: string, kind = 'direct') => {
+      if (failMove) throw new Error('move failed');
+      const size = cache.get(relative);
+      if (size === undefined) throw new Error('source missing');
+      cache.delete(relative);
+      const path = `${kind === 'local' ? 'ImportedMedia' : 'Media'}/${id}.${ext}`;
+      media.set(path, size);
+      return {
+        relativeMediaPath: path,
+        uri: `file:///library/${path}`,
+        sizeBytes: size,
+      };
+    },
+  ),
   statPreparedSource: jest.fn(async (relative: string) =>
     cache.has(relative)
       ? { exists: true, sizeBytes: cache.get(relative) }
@@ -173,6 +182,11 @@ const native = {
         }
       : { exists: false },
   ),
+  confirmImported: jest.fn(
+    async (_relative: string, _id: string, _size: number, _type: string) =>
+      undefined,
+  ),
+  cleanupImportStaging: jest.fn(async (_protectedPaths: string[]) => undefined),
   listMedia: jest.fn(async () => [...media.keys()]),
   listArtwork: jest.fn(async () => [...artwork.keys()]),
   removeMedia: jest.fn(async (relative: string) => {
@@ -460,4 +474,122 @@ test('concurrent Delete requests share one coordinated operation', async () => {
   expect(second).toBe(first);
   await Promise.all([first, second]);
   expect(native.removeMedia).toHaveBeenCalledTimes(1);
+});
+
+const importID = '00000000-0000-0000-0000-000000000099';
+const importSource = `DropImport/${importID}/payload.mp3`;
+const imported = `ImportedMedia/${importID}.mp3`;
+const localMetadata = {
+  sourceKind: 'local',
+  title: 'Podcast original',
+  mediaType: 'audio',
+} as const;
+
+test('local promotion persists the native destination with the staging UUID', async () => {
+  cache.set(importSource, 100);
+  const library = service();
+  const item = await library.promoteToLibrary(
+    `file:///cache/${importSource}`,
+    localMetadata,
+  );
+  expect(item).toMatchObject({
+    id: importID,
+    sourceKind: 'local',
+    relativeMediaPath: imported,
+    title: 'Podcast original',
+    lifecycle: 'ready',
+    availability: 'available',
+  });
+  expect(native.movePrepared).toHaveBeenCalledWith(
+    importSource,
+    importID,
+    'mp3',
+    'local',
+    100,
+    imported,
+  );
+  expect(
+    await library.withLibraryLease(importID, async (value) => value.uri),
+  ).toContain(imported);
+});
+
+test('startup preserves an imported file restored without its database row', async () => {
+  media.set(imported, 100);
+  media.set(`Media/${importID}.mp3`, 100);
+  await service().initializeLibrary();
+  expect(media.has(imported)).toBe(true);
+  expect(media.has(`Media/${importID}.mp3`)).toBe(false);
+});
+
+function pendingImport() {
+  rows.set(importID, {
+    id: importID,
+    sourceKind: 'local',
+    mediaType: 'audio',
+    sizeBytes: 100,
+    lifecycle: 'pending',
+    relativeMediaPath: imported,
+    sourceCacheRelativePath: importSource,
+  });
+}
+
+test('startup verifies a moved import before finalizing the pending row', async () => {
+  cache.set(importSource, 100);
+  failReady = true;
+  await expect(
+    service().promoteToLibrary(`file:///cache/${importSource}`, localMetadata),
+  ).rejects.toThrow('database write failed');
+  expect(rows.get(importID)?.lifecycle).toBe('pending');
+  expect(cache.has(importSource)).toBe(false);
+  expect(media.has(imported)).toBe(true);
+  failReady = false;
+  jest.resetModules();
+  (
+    jest.requireMock('expo') as { requireOptionalNativeModule: jest.Mock }
+  ).requireOptionalNativeModule.mockImplementation((name: string) =>
+    name === 'DropPlayback' ? playbackNative : native,
+  );
+  mockDatabase();
+  await service().initializeLibrary();
+  expect(native.movePrepared).toHaveBeenCalledTimes(1);
+  expect(native.confirmImported).toHaveBeenCalledWith(
+    imported,
+    importID,
+    100,
+    'audio',
+  );
+  expect(rows.get(importID)?.lifecycle).toBe('ready');
+});
+
+test('startup retains both files and pending when a destination already exists', async () => {
+  pendingImport();
+  cache.set(importSource, 100);
+  media.set(imported, 100);
+  await service().initializeLibrary();
+  expect(rows.get(importID)?.lifecycle).toBe('pending');
+  expect(cache.has(importSource)).toBe(true);
+  expect(media.has(imported)).toBe(true);
+  expect(native.cleanupImportStaging).toHaveBeenCalledWith([importSource]);
+});
+
+test('startup retains a pending import after a transient verification failure', async () => {
+  pendingImport();
+  cache.set(importSource, 100);
+  native.confirmImported.mockRejectedValueOnce(new Error('file protected'));
+  await service().initializeLibrary();
+  expect(rows.get(importID)?.lifecycle).toBe('pending');
+  expect(cache.has(importSource)).toBe(false);
+  expect(media.has(imported)).toBe(true);
+  expect(native.removeMedia).not.toHaveBeenCalled();
+});
+
+test('a concurrent deletion tombstone cannot be changed back to ready', async () => {
+  cache.set(importSource, 100);
+  beforeReady = () => {
+    rows.get(importID)!.lifecycle = 'deleting';
+  };
+  await expect(
+    service().promoteToLibrary(`file:///cache/${importSource}`, localMetadata),
+  ).rejects.toThrow('No se pudo confirmar');
+  expect(rows.get(importID)?.lifecycle).toBe('deleting');
 });

@@ -3,6 +3,7 @@ import ImageIO
 
 enum DropLibraryStorageError: Error {
   case invalidIdentifier, invalidSource, invalidManagedPath, missingFile, invalidImage
+  case insufficientSpace, backupExcluded
 }
 
 enum DropLibraryFileInspection {
@@ -16,7 +17,7 @@ enum DropLibraryFileInspection {
       throw error // Permission/protection failures are not evidence of absence.
     }
     guard attributes[.type] as? FileAttributeType == .typeRegular,
-          url.resolvingSymlinksInPath() == url.standardizedFileURL,
+          DropLibraryPaths.isUnredirected(url),
           let size = attributes[.size] as? NSNumber else {
       throw DropLibraryStorageError.invalidManagedPath
     }

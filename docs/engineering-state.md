@@ -54,11 +54,26 @@ No contiene autorizaciones nuevas ni resultados inferidos.
 - RED con 13 fallos esperados. GREEN con 105 pruebas en cinco suites
   afectadas. TypeScript, ESLint focal y formato aprobados. Evidencia en
   `DropValidationEvidence/v1.8.0-sqlite-v4-2026-11-06-5sI3GX`.
-- Siguiente paso sujeto a autorización. En B, extender el resolver Swift
-  y la promoción a `ImportedMedia/<uuid>.<ext>` para origen local.
-  Actualmente ambos usan `Media/`. El plan mantiene las descargas en
-  su ruta actual y conserva una ruta elegible para backup en importados.
-  La validación integrada en iOS queda para reprotest.
+
+## Drop 1.8.0 · Bloque B de importación local
+
+- El origen elige el destino nativo. Descargas siguen en `Media/`. Los
+  importados usan `Application Support/Drop/ImportedMedia/<uuid>.<ext>`.
+  El mismo resolver atiende Biblioteca, reproducción, exportación y borrado.
+- El almacenamiento valida MP4, M4A y MP3 en un temporal propio, sin
+  modificar el original. Registra `pending` antes del renombrado exclusivo.
+  Los errores transitorios conservan la operación para reconciliarla. Se
+  conservan los archivos finales importados sin fila.
+- `Media/` y `Artwork/` mantienen su exclusión de respaldo. Se verifica
+  la elegibilidad local del medio importado tras el movimiento. La
+  realización de un respaldo por iOS queda sin verificar.
+- RED con cuatro fallos de Jest y el contrato Swift de rutas. GREEN con
+  53 pruebas de Jest y tres suites Swift de host, incluidas las de medios
+  sintéticos. Tipado iOS ARM64 de DropLibrary, TypeScript, ESLint focal
+  sin errores, formato y diff verificados. Evidencia en
+  `DropValidationEvidence/v1.8.0-import-storage-2026-11-06-GkOfZ8`.
+- Pendientes sujetos a autorización. Selector de Archivos e integración
+  con proveedores, interfaz y validación integrada en iOS.
 
 Las notas siguientes conservan el historial; no describen el estado vigente.
 

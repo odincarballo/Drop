@@ -67,6 +67,7 @@ const storage = {
       ? s
       : { exists: false };
   }),
+  cleanupImportStaging: jest.fn(async () => undefined),
   listMedia: jest.fn(async () =>
     readdirSync(join(directory, 'Media')).map((n) => `Media/${n}`),
   ),
@@ -161,7 +162,8 @@ beforeEach(async () => {
   jest.clearAllMocks();
   directory = mkdtempSync(join(tmpdir(), 'drop-availability-'));
   databasePath = join(directory, 'library.sqlite');
-  for (const n of ['Media', 'Artwork', 'Cache']) mkdirSync(join(directory, n));
+  for (const n of ['Media', 'ImportedMedia', 'Artwork', 'Cache'])
+    mkdirSync(join(directory, n));
   connections = [];
   unreadable = null;
   await load();
@@ -428,4 +430,26 @@ test('pending with unknown expected size is not silently accepted or rewritten',
   await intact(before);
   expect(statSync(join(directory, mediaPath(A))).size).toBe(100);
   expect(storage.removeMedia).not.toHaveBeenCalled();
+});
+
+test('deleting an import preserves existing downloads and their relationships', async () => {
+  await fixture();
+  const before = await rows();
+  const relative = `ImportedMedia/${C}.mp3`;
+  await seed(C);
+  await db.runAsync(
+    "UPDATE library_items SET sourceKind = 'local', mediaType = 'audio', relativeMediaPath = ? WHERE id = ?",
+    relative,
+    C,
+  );
+  put(relative);
+  expect(await library.getLibraryItem(C)).toMatchObject({
+    availability: 'available',
+    relativeMediaPath: relative,
+  });
+  await library.deleteLibraryItem(C);
+  expect(storage.removeMedia).toHaveBeenCalledWith(relative);
+  for (const id of [A, B])
+    expect(statSync(join(directory, mediaPath(id))).size).toBe(100);
+  await intact(before);
 });

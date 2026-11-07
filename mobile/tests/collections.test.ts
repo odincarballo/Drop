@@ -37,6 +37,7 @@ const storage = {
       : { exists: true, uri: `file:///Drop/${relative}`, sizeBytes };
   }),
   statArtwork: jest.fn(async () => ({ exists: false })),
+  cleanupImportStaging: jest.fn(async () => undefined),
   listMedia: jest.fn(async () => [...media.keys()]),
   listArtwork: jest.fn(async () => []),
   removeMedia: jest.fn(async (relative: string) => {

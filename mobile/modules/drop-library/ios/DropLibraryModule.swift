@@ -110,18 +110,27 @@ public final class DropLibraryModule: Module {
       return ["databaseDirectoryURL": root.absoluteString]
     }
 
-    AsyncFunction("inspectSource") { (uri: String) throws -> [String: Any] in
-      let storage = try DropLibraryStorage()
-      let (relative, ext, size) = try storage.relativeCachePath(for: uri)
-      return ["id": UUID().uuidString.lowercased(), "cacheRelativePath": relative,
-              "extension": ext, "sizeBytes": size]
+    AsyncFunction("inspectSource") { (uri: String, origin: String) throws -> [String: Any] in
+      let source = try DropLibraryStorage().inspectSource(uri: uri, origin: origin)
+      return ["id": source.id, "cacheRelativePath": source.cacheRelativePath,
+              "extension": source.ext, "sizeBytes": source.size,
+              "relativeMediaPath": source.relativeMediaPath]
     }
 
-    AsyncFunction("movePrepared") { (relative: String, id: String, ext: String) throws -> [String: Any] in
-      let storage = try DropLibraryStorage()
-      let (url, size) = try storage.moveFromCache(relative: relative, id: id, ext: ext)
-      return ["relativeMediaPath": "Media/\(url.lastPathComponent)",
-              "uri": url.absoluteString, "sizeBytes": size]
+    AsyncFunction("movePrepared") {
+      (relative: String, id: String, ext: String, origin: String, size: Int, path: String) throws -> [String: Any] in
+      let (destination, url, actualSize) = try DropLibraryStorage().moveFromCache(
+        relative: relative, id: id, ext: ext, origin: origin, expectedSize: Int64(size), expectedPath: path)
+      return ["relativeMediaPath": destination, "uri": url.absoluteString, "sizeBytes": actualSize]
+    }
+
+    AsyncFunction("confirmImported") { (relative: String, id: String, size: Int, mediaType: String) async throws in
+      try await DropLibraryStorage().confirmImported(
+        relative: relative, id: id, size: Int64(size), mediaType: mediaType)
+    }
+
+    AsyncFunction("cleanupImportStaging") { (protected: [String]) throws in
+      try DropLibraryStorage().cleanupImportStaging(protected: protected)
     }
 
     AsyncFunction("statPreparedSource") { (relative: String) throws -> [String: Any] in

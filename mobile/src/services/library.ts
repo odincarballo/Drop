@@ -6,6 +6,7 @@ import {
   type LibraryAvailability,
   type LibraryItem,
   type LibraryMetadata,
+  type LibrarySourceKind,
 } from '@/models/library';
 import {
   openLibraryDatabase,
@@ -19,21 +20,35 @@ import {
 type NativeStat = { exists: boolean; uri?: string; sizeBytes?: number };
 type NativeLibrary = {
   prepare(): Promise<{ databaseDirectoryURL: string }>;
-  inspectSource(uri: string): Promise<{
+  inspectSource(
+    uri: string,
+    origin: LibrarySourceKind,
+  ): Promise<{
     id: string;
     cacheRelativePath: string;
     extension: string;
     sizeBytes: number;
+    relativeMediaPath: string;
   }>;
   movePrepared(
     relative: string,
     id: string,
     ext: string,
+    origin: LibrarySourceKind,
+    expectedSize: number,
+    expectedPath: string,
   ): Promise<{
     relativeMediaPath: string;
     uri: string;
     sizeBytes: number;
   }>;
+  confirmImported(
+    relative: string,
+    id: string,
+    size: number,
+    mediaType: LibraryMetadata['mediaType'],
+  ): Promise<void>;
+  cleanupImportStaging(protectedPaths: string[]): Promise<void>;
   statMedia(relative: string): Promise<NativeStat>;
   statPreparedSource(relative: string): Promise<NativeStat>;
   statArtwork(id: string): Promise<NativeStat>;
@@ -76,10 +91,6 @@ function changed() {
 export function observeLibrary(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
-}
-
-function mediaRelative(id: string, ext: string) {
-  return `Media/${id}.${ext}`;
 }
 
 function validatedMetadata(meta: LibraryMetadata): LibraryMetadata {
@@ -150,62 +161,86 @@ async function reconcile(): Promise<void> {
       // A confirmed record is durable metadata, not proof of current disk availability.
       // Only an explicit deleting tombstone authorizes removing it and its relations.
       if (row.lifecycle === 'ready') continue;
+      if (row.sourceKind === 'local' && !row.sourceCacheRelativePath) continue;
       let stat = await storage.statMedia(row.relativeMediaPath);
       if (
-        row.lifecycle === 'pending' &&
-        !stat.exists &&
-        row.sourceCacheRelativePath
+        row.sourceCacheRelativePath &&
+        (!stat.exists || row.sourceKind === 'local')
       ) {
-        // Inspection errors are not evidence of abandonment. Let the outer catch
-        // retain pending until a later startup can inspect both locations safely.
+        // Inspection errors are not evidence of abandonment.
         const source = await storage.statPreparedSource(
           row.sourceCacheRelativePath,
         );
         if (source.exists) {
-          if (!source.sizeBytes || source.sizeBytes !== row.sizeBytes) continue;
+          // With an exclusive rename, a staged and a final copy indicate a collision.
+          if (
+            stat.exists ||
+            !source.sizeBytes ||
+            source.sizeBytes !== row.sizeBytes
+          )
+            continue;
           const ext = row.relativeMediaPath.split('.').at(-1) ?? '';
-          await storage.movePrepared(row.sourceCacheRelativePath, row.id, ext);
+          await storage.movePrepared(
+            row.sourceCacheRelativePath,
+            row.id,
+            ext,
+            row.sourceKind,
+            row.sizeBytes,
+            row.relativeMediaPath,
+          );
           stat = await storage.statMedia(row.relativeMediaPath);
         }
       }
-      if (
-        !stat.exists ||
-        !stat.sizeBytes ||
-        stat.sizeBytes <= 0 ||
-        row.sizeBytes <= 0 ||
-        row.sizeBytes !== stat.sizeBytes
-      ) {
-        // Only an unconfirmed import absent from both known locations is
-        // abandoned. Existing partial files may still be restored: do not erase.
-        if (!stat.exists) {
-          await deleteLibraryRow(row.id);
-          await storage.removeArtwork(row.id);
-        }
+      if (!stat.exists) {
+        await deleteLibraryRow(row.id);
+        await storage.removeArtwork(row.id);
         continue;
       }
-      if (row.lifecycle === 'pending') {
-        await db.runAsync(
-          `UPDATE library_items SET lifecycle = 'ready', sourceCacheRelativePath = NULL,
-           sizeBytes = ? WHERE id = ?`,
-          stat.sizeBytes,
+      if (
+        !stat.sizeBytes ||
+        stat.sizeBytes <= 0 ||
+        row.sizeBytes !== stat.sizeBytes
+      )
+        continue;
+      if (row.sourceKind === 'local') {
+        await storage.confirmImported(
+          row.relativeMediaPath,
           row.id,
+          row.sizeBytes,
+          row.mediaType,
         );
       }
+      await db.runAsync(
+        `UPDATE library_items SET lifecycle = 'ready', sourceCacheRelativePath = NULL,
+         sizeBytes = ? WHERE id = ? AND lifecycle = 'pending'`,
+        stat.sizeBytes,
+        row.id,
+      );
       // Artwork references survive missing/partial images; hydration uses a
       // fallback without changing the stored reference or expected metadata.
     } catch (error) {
       console.warn('[Drop library] Could not reconcile item', row.id, error);
     }
   }
-  const tracked = new Set(
-    (
-      await db.getAllAsync<{ relativeMediaPath: string }>(
-        'SELECT relativeMediaPath FROM library_items',
-      )
-    ).map((row) => row.relativeMediaPath),
-  );
+  const references = await db.getAllAsync<
+    Pick<Row, 'relativeMediaPath' | 'sourceCacheRelativePath'>
+  >('SELECT relativeMediaPath, sourceCacheRelativePath FROM library_items');
+  const tracked = new Set(references.map((row) => row.relativeMediaPath));
+  try {
+    await storage.cleanupImportStaging(
+      references.flatMap((row) =>
+        row.sourceCacheRelativePath ? [row.sourceCacheRelativePath] : [],
+      ),
+    );
+  } catch (error) {
+    console.warn('[Drop library] Could not clean import staging', error);
+  }
+  let untrackedImports = 0;
   for (const relative of await storage.listMedia()) {
-    if (!tracked.has(relative)) {
+    if (tracked.has(relative)) continue;
+    // A final import may have been restored before its database row.
+    if (relative.startsWith('ImportedMedia/')) untrackedImports++;
+    if (relative.startsWith('Media/')) {
       try {
         await storage.removeMedia(relative);
       } catch (error) {
@@ -218,6 +253,12 @@ async function reconcile(): Promise<void> {
       (row) => row.id,
     ),
   );
+  if (untrackedImports > 0) {
+    console.warn(
+      '[Drop library] Preserved untracked imports',
+      untrackedImports,
+    );
+  }
   for (const id of await storage.listArtwork()) {
     if (!artworkOwners.has(id)) {
       try {
@@ -319,41 +360,60 @@ export async function promoteToLibrary(
   await initializeLibrary();
   const storage = native();
   const db = await openLibraryDatabase();
-  const prepared = await storage.inspectSource(uri);
-  const relative = mediaRelative(prepared.id, prepared.extension);
   const safe = validatedMetadata(metadata);
+  const prepared = await storage.inspectSource(uri, safe.sourceKind);
+  const relative = prepared.relativeMediaPath;
   const downloadedAt = new Date().toISOString();
-  await db.runAsync(
-    `INSERT INTO library_items (
+  try {
+    await db.runAsync(
+      `INSERT INTO library_items (
       id, sourceKind, sourceVideoId, title, mediaType, relativeMediaPath,
       sourceCacheRelativePath, durationSeconds, sizeBytes, resolution, height, fps,
       videoCodec, audioCodec, container, downloadedAt, lifecycle
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-    prepared.id,
-    safe.sourceKind,
-    safe.sourceVideoId ?? null,
-    safe.title,
-    safe.mediaType,
-    relative,
-    prepared.cacheRelativePath,
-    safe.durationSeconds ?? null,
-    prepared.sizeBytes,
-    safe.resolution ?? null,
-    safe.height ?? null,
-    safe.fps ?? null,
-    safe.videoCodec ?? null,
-    safe.audioCodec ?? null,
-    safe.container ?? null,
-    downloadedAt,
-  );
+      prepared.id,
+      safe.sourceKind,
+      safe.sourceVideoId ?? null,
+      safe.title,
+      safe.mediaType,
+      relative,
+      prepared.cacheRelativePath,
+      safe.durationSeconds ?? null,
+      prepared.sizeBytes,
+      safe.resolution ?? null,
+      safe.height ?? null,
+      safe.fps ?? null,
+      safe.videoCodec ?? null,
+      safe.audioCodec ?? null,
+      safe.container ?? null,
+      downloadedAt,
+    );
+  } catch (error) {
+    if (safe.sourceKind === 'local') {
+      try {
+        if (!(await rowFor(prepared.id)))
+          await storage.removeOwnedCache(prepared.cacheRelativePath);
+      } catch (cleanupError) {
+        console.warn(
+          '[Drop library] Could not clean unregistered import',
+          cleanupError,
+        );
+      }
+    }
+    throw error;
+  }
   let moved: Awaited<ReturnType<NativeLibrary['movePrepared']>>;
   try {
     moved = await storage.movePrepared(
       prepared.cacheRelativePath,
       prepared.id,
       prepared.extension,
+      safe.sourceKind,
+      prepared.sizeBytes,
+      relative,
     );
   } catch (error) {
+    if (safe.sourceKind === 'local') throw error; // Recovery needs the staged copy and pending row.
     // A move that reached the destination may be recovered from the pending row.
     const destination = await storage.statMedia(relative);
     if (!destination.exists) {
@@ -366,19 +426,32 @@ export async function promoteToLibrary(
     }
     throw error;
   }
+  if (moved.relativeMediaPath !== relative)
+    throw new Error('El destino no coincide con el registro de Biblioteca.');
   if (moved.sizeBytes !== prepared.sizeBytes) {
-    await storage.removeMedia(relative);
-    await deleteLibraryRow(prepared.id);
+    if (safe.sourceKind !== 'local') {
+      await storage.removeMedia(relative);
+      await deleteLibraryRow(prepared.id);
+    }
     throw new Error('El archivo cambió antes de entrar en Biblioteca.');
+  }
+  if (safe.sourceKind === 'local') {
+    await storage.confirmImported(
+      relative,
+      prepared.id,
+      prepared.sizeBytes,
+      safe.mediaType,
+    );
   }
   await db.runAsync(
     `UPDATE library_items SET lifecycle = 'ready', sourceCacheRelativePath = NULL,
-     sizeBytes = ? WHERE id = ?`,
+     sizeBytes = ? WHERE id = ? AND lifecycle = 'pending'`,
     moved.sizeBytes,
     prepared.id,
   );
   const row = await rowFor(prepared.id);
-  if (!row) throw new Error('No se pudo confirmar el archivo en Biblioteca.');
+  if (row?.lifecycle !== 'ready')
+    throw new Error('No se pudo confirmar el archivo en Biblioteca.');
   const item = await attach(row);
   if (!isAvailableLibraryItem(item))
     throw new Error('No se pudo verificar el archivo en Biblioteca.');
