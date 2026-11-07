@@ -79,7 +79,8 @@ struct PlaybackCoreTests {
 
     try check(PlaybackPolicy.supported(extension: "mp4", mediaType: "video"))
     try check(PlaybackPolicy.supported(extension: "m4a", mediaType: "audio"))
-    try check(!PlaybackPolicy.supported(extension: "mp3", mediaType: "audio"))
+    try check(PlaybackPolicy.supported(extension: "mp3", mediaType: "audio"))
+    try check(!PlaybackPolicy.supported(extension: "aac", mediaType: "audio"))
     try check(!PlaybackPolicy.supported(extension: "mp4", mediaType: "audio"))
     try check(PlaybackPolicy.rates == [0.75, 1, 1.25, 1.5, 1.75, 2])
     try check(PlaybackPolicy.clamped(-15, duration: 120) == 0)

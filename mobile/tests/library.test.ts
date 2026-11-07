@@ -90,13 +90,15 @@ const db = {
     } else if (sql.includes("SET lifecycle = 'ready'")) {
       if (failReady) throw new Error('database write failed');
       beforeReady?.();
-      const row = rows.get(String(values[1]));
-      if (row?.lifecycle === 'pending')
+      const row = rows.get(String(values.at(-1)));
+      if (row?.lifecycle === 'pending') {
+        if (sql.includes('durationSeconds')) row.durationSeconds = values[1];
         Object.assign(row, {
           lifecycle: 'ready',
           sourceCacheRelativePath: null,
           sizeBytes: values[0],
         });
+      }
     } else if (sql.includes('SET relativeArtworkPath')) {
       const row = rows.get(String(values[2]));
       if (row && row.lifecycle === 'ready')
@@ -183,8 +185,12 @@ const native = {
       : { exists: false },
   ),
   confirmImported: jest.fn(
-    async (_relative: string, _id: string, _size: number, _type: string) =>
-      undefined,
+    async (
+      _relative: string,
+      _id: string,
+      _size: number,
+      mediaType: string,
+    ) => ({ mediaType, durationSeconds: 2.5 }),
   ),
   cleanupImportStaging: jest.fn(async (_protectedPaths: string[]) => undefined),
   listMedia: jest.fn(async () => [...media.keys()]),

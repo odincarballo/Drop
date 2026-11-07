@@ -1,6 +1,6 @@
 # Estado operativo de Drop
 
-Actualizado: 6 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 7 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
 ## Estado actual de Drop 1.7.1 build 16
@@ -74,6 +74,33 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   `DropValidationEvidence/v1.8.0-import-storage-2026-11-06-GkOfZ8`.
 - Pendientes sujetos a autorización. Selector de Archivos e integración
   con proveedores, interfaz y validación integrada en iOS.
+
+## Drop 1.8.0 · Bloque C de integración local
+
+- `importPreparedLocalFile` recibe una preparación controlada, sanea el título
+  y reutiliza la promoción de B. Identidad nativa estable, una operación activa,
+  dobles callbacks coordinados y reintentos recuperables en la misma sesión.
+  La duración validada en Swift se confirma en SQLite y el staging aceptado
+  se protege durante startup. Las respuestas tardías no recrean una fila borrada.
+- La integración demostró que MP3 estaba excluido por la política de UI y
+  servicio nativo. Ambos admiten ahora MPEG Layer III. M4A mantiene AAC y
+  su preparación rechaza otros codecs, incluido ALAC, para coincidir con el motor.
+- RED con 15 fallos Jest esperados, política/servicio Swift y contratos nuevos
+  del bridge. Se reprodujo además la aceptación previa de M4A con codec no
+  admitido por el motor. GREEN con 73 pruebas Jest en cuatro suites y tres
+  suites Swift afectadas, usando medios sintéticos y SQLite real.
+  TypeScript y tipado iOS ARM64 de almacenamiento/política aprobados.
+  ESLint focal sin errores, formato de fuentes y diff verificados.
+  El chequeo adicional del bridge con artefactos del worktree de diagnóstico
+  fue rechazado por revisión automática. No se accedió a esos recursos y
+  el bridge completo queda pendiente de integración autorizada.
+  Evidencia en `DropValidationEvidence/v1.8.0-import-integration-2026-11-06-ewnufvzr`.
+- Originales y relaciones de los fixtures se conservan. Los errores temporales,
+  colisiones y huérfanos importados mantienen las protecciones de B.
+  La reproducción de host ejercitó apertura y preparación del sucesor en el
+  motor existente. La integración y ejecución en iPhone siguen pendientes.
+- Correspondencia actualizada. D incorpora selector y UI. E verifica integración
+  y candidata reprotest con autorización independiente. Próximo bloque D pendiente.
 
 Las notas siguientes conservan el historial; no describen el estado vigente.
 

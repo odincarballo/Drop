@@ -21,10 +21,11 @@ enum DropLocalMediaInspection {
           mediaType == .video || !tracks.contains(where: { $0.mediaType == .video }) else {
       throw DropLibraryStorageError.invalidSource
     }
-    if ext == "mp3" {
+    if mediaType == .audio {
+      let expectedFormat = ext == "mp3" ? kAudioFormatMPEGLayer3 : kAudioFormatMPEG4AAC
       let descriptions = try await track.load(.formatDescriptions)
       guard descriptions.contains(where: {
-        CMFormatDescriptionGetMediaSubType($0) == kAudioFormatMPEGLayer3
+        CMFormatDescriptionGetMediaSubType($0) == expectedFormat
       }) else { throw DropLibraryStorageError.invalidSource }
     }
     let reader = try AVAssetReader(asset: asset)

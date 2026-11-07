@@ -1,3 +1,4 @@
+import AudioToolbox
 import Foundation
 
 enum PlaybackPolicy {
@@ -5,7 +6,12 @@ enum PlaybackPolicy {
 
   static func supported(extension ext: String, mediaType: String) -> Bool {
     (ext == "mp4" && mediaType == "video") ||
-      (ext == "m4a" && mediaType == "audio")
+      ((ext == "m4a" || ext == "mp3") && mediaType == "audio")
+  }
+
+  static func supportedAudioFormat(_ subtype: FourCharCode, extension ext: String) -> Bool {
+    (ext == "m4a" && subtype == kAudioFormatMPEG4AAC) ||
+      (ext == "mp3" && subtype == kAudioFormatMPEGLayer3)
   }
 
   static func validDuration(_ duration: Double) -> Bool {

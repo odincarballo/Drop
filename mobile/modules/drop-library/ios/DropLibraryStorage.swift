@@ -67,19 +67,36 @@ public final class DropLibraryStorage {
     let relativeMediaPath: String
   }
 
-  func inspectSource(uri: String, origin: String) throws -> Prepared {
-    guard let folder = DropLibraryPaths.MediaFolder(origin: origin),
-          let url = URL(string: uri), url.isFileURL, (url.host ?? "").isEmpty else {
+  private func cacheRelativePath(for uri: String) throws -> String {
+    guard let url = URL(string: uri), url.isFileURL, (url.host ?? "").isEmpty else {
       throw DropLibraryStorageError.invalidSource
     }
     let path = DropLibraryPaths.systemPath(url.path)
     let prefix = DropLibraryPaths.systemPath(cache.path) + "/"
     guard path.hasPrefix(prefix) else { throw DropLibraryStorageError.invalidSource }
-    let relative = String(path.dropFirst(prefix.count))
+    return String(path.dropFirst(prefix.count))
+  }
+
+  // Identity is independent of file existence, so a completed move can be retried safely.
+  func localImportIdentity(uri: String) throws -> (id: String, cacheRelativePath: String, relativeMediaPath: String) {
+    let relative = try cacheRelativePath(for: uri)
+    guard let id = DropLibraryPaths.importedStagingID(relative) else {
+      throw DropLibraryStorageError.invalidSource
+    }
+    let ext = URL(fileURLWithPath: relative).pathExtension
+    let destination = try promotionDestination(relative: relative, id: id, ext: ext, folder: .imported)
+    return (id, relative, destination)
+  }
+
+  func inspectSource(uri: String, origin: String) throws -> Prepared {
+    guard let folder = DropLibraryPaths.MediaFolder(origin: origin) else {
+      throw DropLibraryStorageError.invalidSource
+    }
+    let relative = try cacheRelativePath(for: uri)
     guard let (_, size) = try preparedSource(relative: relative), size > 0 else {
       throw DropLibraryStorageError.invalidSource
     }
-    let ext = try Self.validatedExtension(url.pathExtension)
+    let ext = try Self.validatedExtension(URL(fileURLWithPath: relative).pathExtension)
     let id = DropLibraryPaths.importedStagingID(relative) ?? UUID().uuidString.lowercased()
     let destination = try promotionDestination(relative: relative, id: id, ext: ext, folder: folder)
     return Prepared(id: id, cacheRelativePath: relative, ext: ext, size: size, relativeMediaPath: destination)
@@ -138,7 +155,9 @@ public final class DropLibraryStorage {
     return (path, destination, destinationSize)
   }
 
-  func confirmImported(relative: String, id: String, size: Int64, mediaType: String) async throws {
+  @discardableResult
+  func confirmImported(relative: String, id: String, size: Int64, mediaType: String)
+    async throws -> (mediaType: String, durationSeconds: Double) {
     guard DropLibraryPaths.managedMediaFolder(relative) == .imported,
           let (url, actual) = try managedMedia(relative: relative), actual == size, size > 0,
           url.deletingPathExtension().lastPathComponent == id else {
@@ -150,6 +169,7 @@ public final class DropLibraryStorage {
     }
     try checkImportBackupLocation()
     try allowBackup(url)
+    return metadata
   }
 
   private func ensureDirectory(_ directory: URL) throws {

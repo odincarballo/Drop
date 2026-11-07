@@ -1,11 +1,12 @@
 # Drop 1.8.0 · Especificación de importación local
 
-Estado: SDD listo para revisión. Base publicada: `v1.7.1`, build 16,
+Especificación aprobada. Base publicada: `v1.7.1`, build 16,
 `0b1a0bc82d57c7f0ee616124a788816f7e5c6c57`. Esta documentación vive en
 `codex/v1.8.0-local-import`. Reprotest 1.7.1 build 17 sigue siendo la
 instalación del diagnóstico, cuyo código queda fuera de esta rama.
-Siguiente paso sujeto a autorización: bloque A de la
-[lista de tareas](local-import-tasks-v1.8.0.md).
+A, B y C están implementados en host. La [lista de tareas](local-import-tasks-v1.8.0.md)
+reserva D para selector y UI, y E para validación integrada con autorización
+independiente. Consultar el estado operativo antes de continuar.
 
 ## Alcance y experiencia
 
@@ -16,7 +17,7 @@ archivo original sigue en su ubicación y conserva su contenido. Drop muestra
 el nuevo elemento, pero deja la reproducción actual y la Cola como están.
 
 El MVP admite un archivo por operación. Los candidatos son MP4 de video y
-M4A o MP3 de audio, siempre que sean archivos completos, autocontenidos, sin
+M4A con audio AAC o MP3 de audio, siempre que sean archivos completos, autocontenidos, sin
 protección y reproducibles en el dispositivo con AVFoundation. El formato
 admitido combina contenedor y contenido real. Un sufijo admitido por sí solo
 no basta. AAC crudo, otros contenedores, importación múltiple, transcodificación,

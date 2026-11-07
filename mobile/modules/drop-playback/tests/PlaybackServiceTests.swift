@@ -11,7 +11,7 @@ final class DropLibraryStorage {
 
   func managedMedia(relative: String) throws -> (URL, Int64)? {
     let parts = relative.split(separator: "/")
-    guard parts.count == 2, parts[0] == "Media",
+    guard parts.count == 2, (parts[0] == "Media" || parts[0] == "ImportedMedia"),
           let id = parts[1].split(separator: ".").first,
           UUID(uuidString: String(id)) != nil else { return nil }
     let url = root.appendingPathComponent(relative)
@@ -156,6 +156,11 @@ struct PlaybackServiceTests {
     let artwork = root.appendingPathComponent("Artwork", isDirectory: true)
     try FileManager.default.createDirectory(at: artwork, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
+    if CommandLine.arguments.contains("--local-import") {
+      try await localImportTests(root: root)
+      print("PlaybackServiceTests: local import passed (MP3, M4A, MP4, successor and codec isolation)")
+      return
+    }
     let first = "00000000-0000-0000-0000-000000000001"
     let second = "00000000-0000-0000-0000-000000000002"
     let third = "00000000-0000-0000-0000-000000000003"
@@ -435,9 +440,9 @@ struct PlaybackServiceTests {
     try check(!service.isRetaining(first))
 
     repository.records[first] = PlaybackRecord(id: first,
-      relativeMediaPath: "Media/\(first).mp3", mediaType: "audio",
+      relativeMediaPath: "Media/\(first).aac", mediaType: "audio",
       sizeBytes: size, position: 0, completedAt: nil)
-    do { _ = try await service.open(id: first); fatalError("MP3 opened") }
+    do { _ = try await service.open(id: first); fatalError("raw AAC opened") }
     catch DropPlaybackError.unsupported {}
     try check(!service.isRetaining(first))
 
@@ -471,6 +476,64 @@ struct PlaybackServiceTests {
     try await reconciliationTests(root: root, first: first, second: second,
       third: third, audioSize: size, videoSize: videoSize)
     print("PlaybackServiceTests: passed")
+  }
+
+  private static func localImportTests(root: URL) async throws {
+    let imported = root.appendingPathComponent("ImportedMedia", isDirectory: true)
+    try FileManager.default.createDirectory(at: imported, withIntermediateDirectories: false)
+    let repository = FakeProgressRepository()
+    let ids = [21, 22, 23].map { String(format: "00000000-0000-0000-0000-%012d", $0) }
+    for (index, ext) in ["m4a", "mp3", "mp4"].enumerated() {
+      let url = imported.appendingPathComponent("\(ids[index]).\(ext)")
+      if ext == "mp4" { try await createVideo(at: url) }
+      else if ext == "m4a" { try createAudio(at: url) }
+      else {
+        let frame = Data([0xff, 0xfb, 0x90, 0xc4]) + Data(count: 413)
+        try (0..<128).reduce(into: Data()) { buffer, _ in buffer.append(frame) }.write(to: url)
+      }
+      let size = Int64(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+      repository.records[ids[index]] = PlaybackRecord(id: ids[index],
+        relativeMediaPath: "ImportedMedia/\(ids[index]).\(ext)",
+        mediaType: ext == "mp4" ? "video" : "audio", sizeBytes: size,
+        position: 0, completedAt: nil, title: "Imported \(ext)")
+    }
+    let queue = FakeManualQueueRepository()
+    let service = DropPlaybackService(storage: DropLibraryStorage(root: root),
+      repository: repository, manualQueue: queue, system: FakePlaybackSystemBridge(),
+      ratePreference: FakePlaybackRatePreference())
+    let playerIdentity = ObjectIdentifier(service.player)
+    for id in ids {
+      _ = try await service.open(id: id)
+      try await ready(service)
+      try check(service.snapshot()["libraryId"] as? String == id)
+      try check(ObjectIdentifier(service.player) == playerIdentity)
+      _ = try await service.close()
+    }
+    // The successor path has its own codec check, exercised using the same engine.
+    _ = try await service.startInContext(id: ids[0], orderedIds: ids)
+    try await prepared(service, id: ids[1])
+    try await naturalEnd(service)
+    try await playing(service, id: ids[1])
+    try await prepared(service, id: ids[2])
+    try await naturalEnd(service)
+    try await playing(service, id: ids[2])
+    _ = try await service.close()
+    let consumed = await queue.consumedIDs()
+    try check(consumed.isEmpty && ObjectIdentifier(service.player) == playerIdentity)
+
+    // A renamed AAC file cannot masquerade as MP3, and the inverse also fails.
+    for (index, ext) in [(0, "mp3"), (1, "m4a")] {
+      let record = repository.records[ids[index]]!
+      let disguised = "ImportedMedia/\(ids[index]).\(ext)"
+      try FileManager.default.copyItem(at: root.appendingPathComponent(record.relativeMediaPath),
+                                      to: root.appendingPathComponent(disguised))
+      repository.records[ids[index]] = PlaybackRecord(id: record.id,
+        relativeMediaPath: disguised, mediaType: "audio", sizeBytes: record.sizeBytes,
+        position: 0, completedAt: nil)
+      do { _ = try await service.open(id: record.id); fatalError("mislabelled codec accepted") }
+      catch DropPlaybackError.unsupported {}
+      catch let error as NSError where error.domain == AVFoundationErrorDomain {}
+    }
   }
 
   private static func manualQueueTests(root: URL, first: String, second: String,

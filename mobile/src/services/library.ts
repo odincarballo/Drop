@@ -18,7 +18,18 @@ import {
 } from '@/services/playback';
 
 type NativeStat = { exists: boolean; uri?: string; sizeBytes?: number };
+type LocalImportIdentity = {
+  id: string;
+  cacheRelativePath: string;
+  relativeMediaPath: string;
+};
+export type PreparedLocalFile = {
+  uri: string;
+  title: string;
+  mediaType: LibraryMetadata['mediaType'];
+};
 type NativeLibrary = {
+  localImportIdentity(uri: string): Promise<LocalImportIdentity>;
   prepare(): Promise<{ databaseDirectoryURL: string }>;
   inspectSource(
     uri: string,
@@ -47,7 +58,10 @@ type NativeLibrary = {
     id: string,
     size: number,
     mediaType: LibraryMetadata['mediaType'],
-  ): Promise<void>;
+  ): Promise<{
+    mediaType: LibraryMetadata['mediaType'];
+    durationSeconds: number;
+  }>;
   cleanupImportStaging(protectedPaths: string[]): Promise<void>;
   statMedia(relative: string): Promise<NativeStat>;
   statPreparedSource(relative: string): Promise<NativeStat>;
@@ -76,6 +90,13 @@ const leases = new Map<string, number>();
 const pendingDeletion = new Set<string>();
 const deletions = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
+const localImports = new Map<
+  string,
+  {
+    cacheRelativePath: string;
+    promise: Promise<AvailableLibraryItem>;
+  }
+>();
 
 function native(): NativeLibrary {
   const module = requireOptionalNativeModule<NativeLibrary>('DropLibrary');
@@ -148,6 +169,89 @@ async function finishDeletion(row: Row): Promise<void> {
   }
 }
 
+async function confirmReady(
+  row: Pick<
+    Row,
+    'id' | 'relativeMediaPath' | 'sizeBytes' | 'sourceKind' | 'mediaType'
+  >,
+  storage: NativeLibrary,
+): Promise<void> {
+  const db = await openLibraryDatabase();
+  if (row.sourceKind === 'local') {
+    const metadata = await storage.confirmImported(
+      row.relativeMediaPath,
+      row.id,
+      row.sizeBytes,
+      row.mediaType,
+    );
+    if (
+      metadata?.mediaType !== row.mediaType ||
+      !Number.isFinite(metadata.durationSeconds) ||
+      metadata.durationSeconds <= 0
+    )
+      throw new Error('No se pudieron verificar los metadatos del archivo.');
+    await db.runAsync(
+      `UPDATE library_items SET lifecycle = 'ready', sourceCacheRelativePath = NULL,
+       sizeBytes = ?, durationSeconds = ? WHERE id = ? AND lifecycle = 'pending'`,
+      row.sizeBytes,
+      metadata.durationSeconds,
+      row.id,
+    );
+  } else {
+    await db.runAsync(
+      `UPDATE library_items SET lifecycle = 'ready', sourceCacheRelativePath = NULL,
+       sizeBytes = ? WHERE id = ? AND lifecycle = 'pending'`,
+      row.sizeBytes,
+      row.id,
+    );
+  }
+}
+
+async function recoverPending(row: Row, storage: NativeLibrary): Promise<void> {
+  if (row.sourceKind === 'local' && !row.sourceCacheRelativePath) return;
+  let stat = await storage.statMedia(row.relativeMediaPath);
+  if (
+    row.sourceCacheRelativePath &&
+    (!stat.exists || row.sourceKind === 'local')
+  ) {
+    // Inspection errors are not evidence of abandonment.
+    const source = await storage.statPreparedSource(
+      row.sourceCacheRelativePath,
+    );
+    if (source.exists) {
+      // With an exclusive rename, a staged and a final copy indicate a collision.
+      if (
+        stat.exists ||
+        !source.sizeBytes ||
+        source.sizeBytes !== row.sizeBytes
+      )
+        return;
+      const ext = row.relativeMediaPath.split('.').at(-1) ?? '';
+      await storage.movePrepared(
+        row.sourceCacheRelativePath,
+        row.id,
+        ext,
+        row.sourceKind,
+        row.sizeBytes,
+        row.relativeMediaPath,
+      );
+      stat = await storage.statMedia(row.relativeMediaPath);
+    }
+  }
+  if (!stat.exists) {
+    await deleteLibraryRow(row.id);
+    await storage.removeArtwork(row.id);
+    return;
+  }
+  if (
+    !stat.sizeBytes ||
+    stat.sizeBytes <= 0 ||
+    row.sizeBytes !== stat.sizeBytes
+  )
+    return;
+  await confirmReady(row, storage);
+}
+
 async function reconcile(): Promise<void> {
   const db = await openLibraryDatabase();
   const storage = native();
@@ -161,61 +265,7 @@ async function reconcile(): Promise<void> {
       // A confirmed record is durable metadata, not proof of current disk availability.
       // Only an explicit deleting tombstone authorizes removing it and its relations.
       if (row.lifecycle === 'ready') continue;
-      if (row.sourceKind === 'local' && !row.sourceCacheRelativePath) continue;
-      let stat = await storage.statMedia(row.relativeMediaPath);
-      if (
-        row.sourceCacheRelativePath &&
-        (!stat.exists || row.sourceKind === 'local')
-      ) {
-        // Inspection errors are not evidence of abandonment.
-        const source = await storage.statPreparedSource(
-          row.sourceCacheRelativePath,
-        );
-        if (source.exists) {
-          // With an exclusive rename, a staged and a final copy indicate a collision.
-          if (
-            stat.exists ||
-            !source.sizeBytes ||
-            source.sizeBytes !== row.sizeBytes
-          )
-            continue;
-          const ext = row.relativeMediaPath.split('.').at(-1) ?? '';
-          await storage.movePrepared(
-            row.sourceCacheRelativePath,
-            row.id,
-            ext,
-            row.sourceKind,
-            row.sizeBytes,
-            row.relativeMediaPath,
-          );
-          stat = await storage.statMedia(row.relativeMediaPath);
-        }
-      }
-      if (!stat.exists) {
-        await deleteLibraryRow(row.id);
-        await storage.removeArtwork(row.id);
-        continue;
-      }
-      if (
-        !stat.sizeBytes ||
-        stat.sizeBytes <= 0 ||
-        row.sizeBytes !== stat.sizeBytes
-      )
-        continue;
-      if (row.sourceKind === 'local') {
-        await storage.confirmImported(
-          row.relativeMediaPath,
-          row.id,
-          row.sizeBytes,
-          row.mediaType,
-        );
-      }
-      await db.runAsync(
-        `UPDATE library_items SET lifecycle = 'ready', sourceCacheRelativePath = NULL,
-         sizeBytes = ? WHERE id = ? AND lifecycle = 'pending'`,
-        stat.sizeBytes,
-        row.id,
-      );
+      await recoverPending(row, storage);
       // Artwork references survive missing/partial images; hydration uses a
       // fallback without changing the stored reference or expected metadata.
     } catch (error) {
@@ -227,11 +277,14 @@ async function reconcile(): Promise<void> {
   >('SELECT relativeMediaPath, sourceCacheRelativePath FROM library_items');
   const tracked = new Set(references.map((row) => row.relativeMediaPath));
   try {
-    await storage.cleanupImportStaging(
-      references.flatMap((row) =>
+    await storage.cleanupImportStaging([
+      ...references.flatMap((row) =>
         row.sourceCacheRelativePath ? [row.sourceCacheRelativePath] : [],
       ),
-    );
+      ...[...localImports.values()].map(
+        (operation) => operation.cacheRelativePath,
+      ),
+    ]);
   } catch (error) {
     console.warn('[Drop library] Could not clean import staging', error);
   }
@@ -353,6 +406,66 @@ export async function librarySpaceUsed(): Promise<number> {
   );
 }
 
+// Input comes from native staging. Only its title is editorial metadata.
+export async function importPreparedLocalFile(
+  prepared: PreparedLocalFile,
+): Promise<AvailableLibraryItem> {
+  if (
+    !prepared ||
+    typeof prepared.uri !== 'string' ||
+    typeof prepared.title !== 'string' ||
+    !['audio', 'video'].includes(prepared.mediaType)
+  )
+    throw new Error('El archivo preparado no es válido.');
+  const storage = native();
+  const source = await storage.localImportIdentity(prepared.uri);
+  const active = localImports.get(source.id);
+  if (active) {
+    if (active.cacheRelativePath !== source.cacheRelativePath)
+      throw new Error(
+        'La identidad del archivo no coincide con la importación activa.',
+      );
+    return active.promise;
+  }
+  if (localImports.size > 0)
+    throw new Error('Ya hay una importación en curso.');
+  const promise = Promise.resolve()
+    .then(async () => {
+      await initializeLibrary();
+      const row = await rowFor(source.id);
+      if (!row)
+        return promoteToLibrary(prepared.uri, {
+          sourceKind: 'local',
+          title: prepared.title
+            .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+            .replace(/\s+/g, ' '),
+          mediaType: prepared.mediaType,
+        });
+      if (
+        row.sourceKind !== 'local' ||
+        row.relativeMediaPath !== source.relativeMediaPath ||
+        (row.lifecycle === 'pending' &&
+          row.sourceCacheRelativePath !== source.cacheRelativePath)
+      )
+        throw new Error('La identidad del archivo no coincide con Biblioteca.');
+      if (row.lifecycle === 'pending') await recoverPending(row, storage);
+      const current = await rowFor(source.id);
+      if (current?.lifecycle !== 'ready')
+        throw new Error('La importación todavía no pudo confirmarse.');
+      const item = await attach(current);
+      if (!isAvailableLibraryItem(item))
+        throw new Error('No se pudo verificar el archivo en Biblioteca.');
+      if (row.lifecycle === 'pending') changed();
+      return item;
+    })
+    .finally(() => localImports.delete(source.id));
+  localImports.set(source.id, {
+    cacheRelativePath: source.cacheRelativePath,
+    promise,
+  });
+  return promise;
+}
+
 export async function promoteToLibrary(
   uri: string,
   metadata: LibraryMetadata,
@@ -435,19 +548,15 @@ export async function promoteToLibrary(
     }
     throw new Error('El archivo cambió antes de entrar en Biblioteca.');
   }
-  if (safe.sourceKind === 'local') {
-    await storage.confirmImported(
-      relative,
-      prepared.id,
-      prepared.sizeBytes,
-      safe.mediaType,
-    );
-  }
-  await db.runAsync(
-    `UPDATE library_items SET lifecycle = 'ready', sourceCacheRelativePath = NULL,
-     sizeBytes = ? WHERE id = ? AND lifecycle = 'pending'`,
-    moved.sizeBytes,
-    prepared.id,
+  await confirmReady(
+    {
+      id: prepared.id,
+      sourceKind: safe.sourceKind,
+      mediaType: safe.mediaType,
+      relativeMediaPath: relative,
+      sizeBytes: moved.sizeBytes,
+    },
+    storage,
   );
   const row = await rowFor(prepared.id);
   if (row?.lifecycle !== 'ready')

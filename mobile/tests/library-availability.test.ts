@@ -13,6 +13,10 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
+  isPlayableLibraryItem,
+  playbackContextFromVisibleItems,
+} from '@/utils/playbackContext';
+import {
   RealSQLite,
   V1_SCHEMA,
   V2_COLLECTIONS_SCHEMA,
@@ -67,9 +71,11 @@ const storage = {
       ? s
       : { exists: false };
   }),
-  cleanupImportStaging: jest.fn(async () => undefined),
+  cleanupImportStaging: jest.fn(async (_protectedPaths: string[]) => undefined),
   listMedia: jest.fn(async () =>
-    readdirSync(join(directory, 'Media')).map((n) => `Media/${n}`),
+    ['Media', 'ImportedMedia'].flatMap((folder) =>
+      readdirSync(join(directory, folder)).map((n) => `${folder}/${n}`),
+    ),
   ),
   listArtwork: jest.fn(async () =>
     readdirSync(join(directory, 'Artwork')).map((n) => n.replace(/\.jpg$/, '')),
@@ -80,10 +86,40 @@ const storage = {
   removeArtwork: jest.fn(async (id: string) =>
     rmSync(join(directory, `Artwork/${id}.jpg`), { force: true }),
   ),
-  movePrepared: jest.fn(async (rel: string, id: string) => {
-    renameSync(join(directory, 'Cache', rel), join(directory, mediaPath(id)));
-    return stat(mediaPath(id));
+  localImportIdentity: jest.fn(async (uri: string) => importIdentity(uri)),
+  inspectSource: jest.fn(async (uri: string) => {
+    const source = importIdentity(uri);
+    const prepared = stat(`Cache/${source.cacheRelativePath}`);
+    if (!prepared.exists || !prepared.sizeBytes)
+      throw new Error('invalid staged source');
+    return {
+      ...source,
+      extension: source.relativeMediaPath.split('.').at(-1),
+      sizeBytes: prepared.sizeBytes,
+    };
   }),
+  confirmImported: jest.fn(
+    async (
+      _relative: string,
+      _id: string,
+      _size: number,
+      mediaType: string,
+    ) => ({
+      mediaType,
+      durationSeconds: 2.5,
+    }),
+  ),
+  removeOwnedCache: jest.fn(async (relative: string) =>
+    rmSync(join(directory, 'Cache', relative), { force: true }),
+  ),
+  movePrepared: jest.fn(
+    async (rel: string, id: string, ext = 'mp4', kind = 'direct') => {
+      const relative =
+        kind === 'local' ? `ImportedMedia/${id}.${ext}` : mediaPath(id);
+      renameSync(join(directory, 'Cache', rel), join(directory, relative));
+      return { ...stat(relative), relativeMediaPath: relative };
+    },
+  ),
 };
 async function load() {
   require('expo').requireOptionalNativeModule.mockReturnValue(storage);
@@ -452,4 +488,288 @@ test('deleting an import preserves existing downloads and their relationships', 
   for (const id of [A, B])
     expect(statSync(join(directory, mediaPath(id))).size).toBe(100);
   await intact(before);
+});
+
+// The native media decoder is covered by the Swift fixtures. This adapter exercises
+// orchestration, actual SQLite transactions and files without provider or device data.
+function importIdentity(uri: string) {
+  const prefix = `file://${directory}/Cache/`;
+  if (!uri.startsWith(prefix)) throw new Error('invalid import location');
+  const relative = uri.slice(prefix.length);
+  const match = /^DropImport\/([0-9a-f-]{36})\/payload\.(mp3|m4a|mp4)$/.exec(
+    relative,
+  );
+  if (!match) throw new Error('invalid import identity');
+  return {
+    id: match[1]!,
+    cacheRelativePath: relative,
+    relativeMediaPath: `ImportedMedia/${match[1]}.${match[2]}`,
+  };
+}
+function localPreparation(id = C, ext = 'mp3') {
+  const relative = `DropImport/${id}/payload.${ext}`;
+  put(`Cache/${relative}`);
+  return {
+    uri: `file://${directory}/Cache/${relative}`,
+    title: '  中文\u0000 Podcast  ',
+    mediaType: ext === 'mp4' ? ('video' as const) : ('audio' as const),
+  };
+}
+
+describe('prepared local imports', () => {
+  test.each(['mp3', 'm4a', 'mp4'])(
+    '%s is available with verified metadata and the existing playback context',
+    async (ext) => {
+      await fixture();
+      await library.initializeLibrary();
+      const before = await rows();
+      const prepared = localPreparation(C, ext);
+      const notify = jest.fn();
+      const unsubscribe = library.observeLibrary(notify);
+      const imported = await library.importPreparedLocalFile(prepared);
+      unsubscribe();
+      expect(imported).toMatchObject({
+        id: C,
+        sourceKind: 'local',
+        title: '中文 Podcast',
+        mediaType: prepared.mediaType,
+        durationSeconds: 2.5,
+        lifecycle: 'ready',
+        availability: 'available',
+        sourceVideoId: null,
+        relativeArtworkPath: null,
+        videoCodec: null,
+        audioCodec: null,
+        playbackPositionSeconds: 0,
+        completedAt: null,
+      });
+      expect(Date.parse(imported.downloadedAt)).toBeGreaterThan(0);
+      expect(isPlayableLibraryItem(imported)).toBe(true);
+      expect(playbackContextFromVisibleItems([imported]).orderedIds).toEqual([
+        C,
+      ]);
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect((await library.listLibrary()).map((item) => item.id)).toContain(C);
+      expect(await library.getLibraryItem(C)).toEqual(imported);
+      expect(await library.withLibraryLease(C, async (file) => file.uri)).toBe(
+        imported.uri,
+      );
+      const after = await rows();
+      expect(
+        after[0]?.filter((row) => (row as { id: string }).id !== C),
+      ).toEqual(before[0]);
+      expect(after.slice(1)).toEqual(before.slice(1));
+      await library.deleteLibraryItem(C);
+      await intact(before);
+      for (const id of [A, B])
+        expect(statSync(join(directory, mediaPath(id))).size).toBe(100);
+    },
+  );
+
+  test('double activation and a repeated completed callback produce one row and one notification', async () => {
+    await library.initializeLibrary();
+    const prepared = localPreparation();
+    const notify = jest.fn();
+    const unsubscribe = library.observeLibrary(notify);
+    const [a, b] = await Promise.all([
+      library.importPreparedLocalFile(prepared),
+      library.importPreparedLocalFile({ ...prepared }),
+    ]);
+    expect(a.id).toBe(b.id);
+    expect(
+      await library.importPreparedLocalFile({
+        ...prepared,
+        title: 'late callback',
+      }),
+    ).toEqual(a);
+    expect(storage.movePrepared).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(await library.listLibrary()).toHaveLength(1);
+    unsubscribe();
+  });
+
+  test('two deliberate preparations of the same content keep separate UUIDs', async () => {
+    const first = localPreparation();
+    const a = await library.importPreparedLocalFile(first);
+    const second = localPreparation('00000000-0000-0000-0000-000000000009');
+    const b = await library.importPreparedLocalFile(second);
+    expect(a.title).toBe(b.title);
+    expect(a.id).not.toBe(b.id);
+    expect(await library.listLibrary()).toHaveLength(2);
+  });
+
+  test('a different import is rejected while the accepted operation is still active', async () => {
+    await library.initializeLibrary();
+    const first = localPreparation();
+    let release!: () => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    storage.confirmImported.mockImplementationOnce(async () => {
+      started();
+      await gate;
+      return { mediaType: 'audio', durationSeconds: 2.5 };
+    });
+    const accepted = library.importPreparedLocalFile(first);
+    await waiting;
+    const next = localPreparation('00000000-0000-0000-0000-000000000009');
+    try {
+      await expect(library.importPreparedLocalFile(next)).rejects.toThrow(
+        'en curso',
+      );
+    } finally {
+      release();
+    }
+    expect((await accepted).id).toBe(C);
+    expect((await library.importPreparedLocalFile(next)).id).not.toBe(C);
+  });
+
+  test('startup cleanup protects the prepared file being accepted', async () => {
+    const prepared = localPreparation();
+    storage.cleanupImportStaging.mockImplementationOnce(
+      async (protectedPaths: string[]) => {
+        expect(protectedPaths).toContain(`DropImport/${C}/payload.mp3`);
+      },
+    );
+    expect((await library.importPreparedLocalFile(prepared)).id).toBe(C);
+  });
+
+  test('a failed move can be retried in the same session with the same UUID', async () => {
+    const prepared = localPreparation();
+    storage.movePrepared.mockRejectedValueOnce(new Error('move interrupted'));
+    await expect(library.importPreparedLocalFile(prepared)).rejects.toThrow(
+      'move interrupted',
+    );
+    expect(
+      await db.getFirstAsync(
+        'SELECT lifecycle FROM library_items WHERE id = ?',
+        C,
+      ),
+    ).toEqual({ lifecycle: 'pending' });
+    expect((await library.importPreparedLocalFile(prepared)).id).toBe(C);
+    expect(await library.listLibrary()).toHaveLength(1);
+  });
+
+  test('a failed SQLite confirmation recovers the moved file without a second move', async () => {
+    await library.initializeLibrary();
+    const prepared = localPreparation();
+    await db.execAsync(
+      "CREATE TEMP TRIGGER fail_import_ready BEFORE UPDATE OF lifecycle ON library_items WHEN NEW.lifecycle = 'ready' BEGIN SELECT RAISE(ABORT, 'confirmation interrupted'); END",
+    );
+    await expect(library.importPreparedLocalFile(prepared)).rejects.toThrow(
+      'confirmation interrupted',
+    );
+    expect(existsSync(join(directory, `ImportedMedia/${C}.mp3`))).toBe(true);
+    await db.execAsync('DROP TRIGGER fail_import_ready');
+    expect(
+      (await library.importPreparedLocalFile(prepared)).durationSeconds,
+    ).toBe(2.5);
+    expect(storage.movePrepared).toHaveBeenCalledTimes(1);
+    expect(await library.listLibrary()).toHaveLength(1);
+  });
+
+  test('an INSERT failure cleans only an unregistered staging copy', async () => {
+    await fixture();
+    await library.initializeLibrary();
+    const before = await rows();
+    const prepared = localPreparation();
+    await db.execAsync(
+      "CREATE TEMP TRIGGER fail_import_insert BEFORE INSERT ON library_items BEGIN SELECT RAISE(ABORT, 'insert interrupted'); END",
+    );
+    await expect(library.importPreparedLocalFile(prepared)).rejects.toThrow(
+      'insert interrupted',
+    );
+    expect(storage.removeOwnedCache).toHaveBeenCalledWith(
+      `DropImport/${C}/payload.mp3`,
+    );
+    await intact(before);
+  });
+
+  test('an INSERT with an uncertain acknowledgement preserves pending and can be retried', async () => {
+    await library.initializeLibrary();
+    const prepared = localPreparation();
+    const run = db.runAsync.bind(db);
+    jest
+      .spyOn(db, 'runAsync')
+      .mockImplementationOnce(async (sql, ...params) => {
+        await run(sql, ...params);
+        throw new Error('insert acknowledgement lost');
+      });
+    await expect(library.importPreparedLocalFile(prepared)).rejects.toThrow(
+      'acknowledgement lost',
+    );
+    expect(storage.removeOwnedCache).not.toHaveBeenCalled();
+    expect((await library.importPreparedLocalFile(prepared)).id).toBe(C);
+    expect(storage.movePrepared).toHaveBeenCalledTimes(1);
+  });
+
+  test('transient media errors preserve ready and allow retry without recreating the import', async () => {
+    const prepared = localPreparation();
+    await library.importPreparedLocalFile(prepared);
+    const before = await rows();
+    unreadable = `ImportedMedia/${C}.mp3`;
+    await expect(library.importPreparedLocalFile(prepared)).rejects.toThrow();
+    await intact(before);
+    unreadable = null;
+    expect((await library.importPreparedLocalFile(prepared)).id).toBe(C);
+    expect(storage.movePrepared).toHaveBeenCalledTimes(1);
+  });
+
+  test('reopening preserves the import and a stale callback cannot resurrect an explicitly deleted row', async () => {
+    const prepared = localPreparation();
+    const item = await library.importPreparedLocalFile(prepared);
+    jest.resetModules();
+    await load();
+    expect(await library.getLibraryItem(C)).toEqual(item);
+    expect((await library.importPreparedLocalFile(prepared)).id).toBe(C);
+    await library.deleteLibraryItem(C);
+    await expect(library.importPreparedLocalFile(prepared)).rejects.toThrow();
+    expect(await library.listLibrary()).toEqual([]);
+  });
+
+  test('a conflicting existing identity and an external path are rejected without touching data', async () => {
+    await fixture();
+    const before = await rows();
+    const prepared = localPreparation(A);
+    await expect(library.importPreparedLocalFile(prepared)).rejects.toThrow();
+    await expect(
+      library.importPreparedLocalFile({
+        ...prepared,
+        uri: 'file:///outside/payload.mp3',
+      }),
+    ).rejects.toThrow();
+    await intact(before);
+    expect(storage.movePrepared).not.toHaveBeenCalled();
+  });
+
+  test('an invalid native duration never publishes ready', async () => {
+    const prepared = localPreparation();
+    storage.confirmImported.mockResolvedValueOnce({
+      mediaType: 'audio',
+      durationSeconds: 0,
+    });
+    await expect(library.importPreparedLocalFile(prepared)).rejects.toThrow();
+    expect(await library.listLibrary()).toEqual([]);
+    expect(
+      await db.getFirstAsync(
+        'SELECT lifecycle FROM library_items WHERE id = ?',
+        C,
+      ),
+    ).toEqual({ lifecycle: 'pending' });
+  });
+});
+
+test('local promotion stores the authoritative duration returned by native confirmation', async () => {
+  const prepared = localPreparation();
+  const item = await library.promoteToLibrary(prepared.uri, {
+    sourceKind: 'local',
+    title: 'Audio',
+    mediaType: 'audio',
+    durationSeconds: 999,
+  });
+  expect(item.durationSeconds).toBe(2.5);
 });

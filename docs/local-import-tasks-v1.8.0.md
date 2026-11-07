@@ -2,9 +2,10 @@
 
 [Especificación](local-import-v1.8.0.md) · [Plan técnico](local-import-plan-v1.8.0.md)
 
-Estado: planificado. Cada bloque de código empieza por una prueba RED que
-falla por el motivo esperado y termina con la implementación mínima GREEN.
-La fase documental no ejecuta las pruebas de la matriz.
+La implementación y la evidencia vigente se registran en
+[el estado operativo](engineering-state.md). Los bloques nuevos aplican
+RED/GREEN a sus carencias demostradas y reutilizan pruebas equivalentes.
+La matriz incluye aceptación física todavía pendiente.
 
 ## Bloques por dependencia
 
@@ -49,14 +50,30 @@ La fase documental no ejecuta las pruebas de la matriz.
   protección del original y regresiones de descargas y borrado explícito.
   Sin entrada UI, portadas nuevas, cambios de Cola ni transcodificación.
 
-### C · Selector y experiencia en Biblioteca
+### C · Integración de aplicación sin selector
+
+- [x] Incorporar una preparación nativa mediante `importPreparedLocalFile`,
+  reutilizando promoción, lectura y recuperación de B.
+- **Archivos implicados** — `library.ts`, identidad y metadatos del bridge,
+  validación de medios y políticas compartidas del reproductor, con sus pruebas.
+- **Dependencias y riesgo** — A y B. Dobles callbacks, reintento en la misma
+  sesión, duración no persistida y rechazo de MP3 por filtros anteriores.
+- **RED** — Entrada de aplicación ausente, duración enviada por JS conservada
+  en lugar de la comprobada, y MP3 excluido del contexto y servicio nativo.
+- **GREEN y cierre** — Identidad nativa estable, una operación activa,
+  reintento del mismo UUID, confirmación de metadatos, protección del staging
+  durante startup y conservación de filas y relaciones en SQLite real.
+  MP3 participa en el mismo motor y contexto. M4A conserva compatibilidad AAC.
+  Sin selector, UI ni pruebas en iPhone.
+
+### D · Selector y experiencia en Biblioteca
 
 - [ ] Conectar el selector iOS y los estados de UI al flujo aprobado en B.
 - **Archivos previstos** — `DropLibraryModule.swift`, el auxiliar del selector
   si hace falta, `mobile/src/app/library.tsx` y
   `mobile/tests/library-screen.test.tsx`. Reutilizar componentes y anuncios
   accesibles del proyecto.
-- **Dependencias y riesgo** — A y B. Delegados duplicados, selector ya
+- **Dependencias y riesgo** — A, B y C. Delegados duplicados, selector ya
   presentado, cambios de pestaña y resultados tardíos del proveedor.
 - **RED** — La acción no abre el selector. Cancelar, pulsar dos veces o recibir
   una respuesta tardía produce un estado incorrecto. El éxito no informa si
@@ -65,7 +82,7 @@ La fase documental no ejecuta las pruebas de la matriz.
   y progreso accesibles. Lista y cuadrícula refrescan sin alterar filtros,
   reproducción o Cola. Sin importación masiva ni cambios de dependencias.
 
-### D · Integración y candidata reprotest
+### E · Integración y candidata reprotest
 
 - [ ] Ejecutar primero las comprobaciones afectadas y después las pruebas
   integradas que exige el workflow. Preparar candidata y respaldar reprotest
@@ -74,7 +91,7 @@ La fase documental no ejecuta las pruebas de la matriz.
   existentes, checklist físico de esta página y evidencia externa según
   [el workflow](engineering-workflow.md). Sin incorporar el diagnóstico ni
   cambiar el comportamiento para lograr un PASS.
-- **Dependencias y riesgo** — A, B y C. Diferencias de AVFoundation, permisos
+- **Dependencias y riesgo** — A, B, C y D. Diferencias de AVFoundation, permisos
   del proveedor y migración real en iOS. Reprotest puede conservar una
   Biblioteca v3. Probar actualización y arranque limpio sin borrar ni
   sustituir el contenedor existente.

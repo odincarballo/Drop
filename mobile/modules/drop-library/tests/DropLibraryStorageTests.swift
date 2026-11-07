@@ -24,10 +24,16 @@ enum DropLibraryStorageTests {
     let source = try storage.inspectSource(uri: stage.uri, origin: "local")
     let aliasedURI = stage.uri.replacingOccurrences(of: "file:///private/var/", with: "file:///var/")
     try require(try storage.inspectSource(uri: aliasedURI, origin: "local").id == source.id, "cache system alias")
+    let identity = try storage.localImportIdentity(uri: stage.uri)
+    try require(identity.id == source.id && identity.cacheRelativePath == source.cacheRelativePath,
+                "stable prepared identity")
     let local = source.relativeMediaPath
     try require(local == "ImportedMedia/\(source.id).mp3" && source.size == audio.count, "MP3 destination")
     try require(try Data(contentsOf: podcast) == audio, "source unchanged")
 
+    try rejects("external URL accepted as import identity") {
+      _ = try storage.localImportIdentity(uri: podcast.absoluteString)
+    }
     try rejects("external URL accepted by the bridge") {
       _ = try storage.inspectSource(uri: podcast.absoluteString, origin: "local")
     }
@@ -67,7 +73,10 @@ enum DropLibraryStorageTests {
       origin: "local", expectedSize: source.size, expectedPath: local)
     try require(moved.0 == local && moved.2 == audio.count, "move result")
     try require(try Data(contentsOf: moved.1) == audio && Data(contentsOf: podcast) == audio, "copy integrity")
-    try await storage.confirmImported(relative: local, id: source.id, size: source.size, mediaType: "audio")
+    let metadata = try await storage.confirmImported(relative: local, id: source.id, size: source.size, mediaType: "audio")
+    try require(metadata.mediaType == "audio" && metadata.durationSeconds > 0, "verified final metadata")
+    try require(try storage.localImportIdentity(uri: stage.uri).relativeMediaPath == local,
+                "identity survives a completed move")
     try require(try excluded(moved.1) == false && excluded(storage.importedMedia) == false, "import backup eligibility")
     try require(try excluded(storage.media) == true && excluded(storage.artwork) == true, "legacy backup exclusions")
 
@@ -100,6 +109,12 @@ enum DropLibraryStorageTests {
     let videoStage = try await storage.stageLocalFile(from: video, capacity: plenty)
     let preparedVideo = try storage.inspectSource(uri: videoStage.uri, origin: "local")
     try require(videoStage.mediaType == "video" && preparedVideo.ext == "mp4", "MP4 preparation")
+    let lossless = sandbox.appendingPathComponent("Unsupported codec.m4a")
+    try writeM4A(lossless, codec: kAudioFormatAppleLossless)
+    do {
+      _ = try await storage.stageLocalFile(from: lossless, capacity: plenty)
+      fatalError("unsupported M4A codec staged")
+    } catch DropLibraryStorageError.invalidSource {}
     let corrupt = sandbox.appendingPathComponent("Truncated.m4a")
     try Data([0, 0, 0, 24, 102, 116, 121, 112, 77, 52, 65, 32]).write(to: corrupt)
     do {
@@ -162,7 +177,7 @@ enum DropLibraryStorageTests {
     throw NSError(domain: label, code: 1)
   }
 
-  static func writeM4A(_ url: URL) throws {
+  static func writeM4A(_ url: URL, codec: AudioFormatID = kAudioFormatMPEG4AAC) throws {
     guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1),
           let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 22_050) else {
       throw DropLibraryStorageError.invalidSource
@@ -171,7 +186,8 @@ enum DropLibraryStorageTests {
     guard let samples = buffer.floatChannelData?.pointee else { throw DropLibraryStorageError.invalidSource }
     for i in 0..<Int(buffer.frameLength) { samples[i] = 0 }
     let file = try AVAudioFile(forWriting: url, settings: [
-      AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1
+      AVFormatIDKey: codec, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
+      AVEncoderBitDepthHintKey: 16
     ])
     try file.write(from: buffer)
   }

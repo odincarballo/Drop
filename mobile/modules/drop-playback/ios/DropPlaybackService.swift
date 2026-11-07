@@ -532,7 +532,7 @@ final class DropPlaybackService {
       if record.mediaType == "audio" {
         let descriptions = try await tracks[0].load(.formatDescriptions)
         guard descriptions.contains(where: {
-          CMFormatDescriptionGetMediaSubType($0) == kAudioFormatMPEG4AAC
+          PlaybackPolicy.supportedAudioFormat(CMFormatDescriptionGetMediaSubType($0), extension: ext)
         }) else { throw DropPlaybackError.unsupported }
       }
       try current(token, id: id)
@@ -977,7 +977,7 @@ final class DropPlaybackService {
     if record.mediaType == "audio" {
       let descriptions = try await tracks[0].load(.formatDescriptions)
       guard descriptions.contains(where: {
-        CMFormatDescriptionGetMediaSubType($0) == kAudioFormatMPEG4AAC
+        PlaybackPolicy.supportedAudioFormat(CMFormatDescriptionGetMediaSubType($0), extension: ext)
       }) else { throw DropPlaybackError.unsupported }
     }
     let artworkURL = record.relativeArtworkPath == "Artwork/\(id).jpg"

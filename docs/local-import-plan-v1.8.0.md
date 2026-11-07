@@ -45,7 +45,7 @@ contenedor iCloud propio.
    caso. Revalidar espacio durante la copia y antes de promover. Un error
    `ENOSPC` sigue siendo posible si otro proceso ocupa espacio.
 3. Copiar por bloques fuera del hilo principal a
-   `Caches/DropImport/<uuid>/payload.part`. Confirmar cantidad de bytes y
+   `Caches/DropImport/<uuid>/partial.<ext>`. Confirmar cantidad de bytes y
    cerrar la escritura. Detectar desaparición, truncamiento o crecimiento
    durante la lectura. Una copia del proveedor puede coexistir con la de
    Drop, incluso si Drop solo crea un temporal. Si se cancela mientras se
@@ -61,7 +61,7 @@ contenedor iCloud propio.
    leer una muestra sin tocar el reproductor activo. La validación detecta
    formatos inválidos y corrupciones observables sin decodificar todo el
    archivo. Probar un medio truncado con cabecera válida.
-5. Marcar el temporal como preparado solo tras validarlo. Devolver su UUID,
+5. Marcar el temporal como `payload.<ext>` preparado solo tras validarlo. Devolver su UUID,
    ruta propia y datos derivados. Aplicar el límite de título
    actual y un fallback si queda vacío. Mantener `sourceVideoId`,
    `thumbnailUrl` y metadatos desconocidos en nulo. Usar `downloadedAt` como
@@ -108,6 +108,30 @@ contenedor iCloud propio.
   entregado el medio antes que su índice. Registrar el caso para diagnóstico
   sin publicar ni borrar contenido. Un `ready` cuyo archivo falte conserva
   el contrato actual de Biblioteca. No prometer restauración portable.
+
+## Integración de aplicación y siguiente bloque
+
+`importPreparedLocalFile` recibe la URI propia, título sin extensión y tipo
+entregados por la preparación nativa. La identidad se valida en Swift incluso
+si el temporal ya se movió. Una operación concurrente del mismo UUID comparte
+resultado. Un reintento consulta SQLite y usa la misma recuperación de B.
+La duración confirmada por Swift se persiste antes de publicar `ready`.
+Los campos desconocidos permanecen nulos y el nombre se sanea como metadato.
+
+El futuro selector D debe esperar `initializeLibrary()` antes de iniciar la
+preparación, mantener una operación activa y conservar el acceso al proveedor
+hasta terminar la copia. Al entregar la preparación a la integración comienza
+la confirmación. Un callback tardío no debe solicitar otra preparación.
+La entrada protege su staging ante un startup que ella misma inicia.
+
+Las políticas de UI y del motor admiten MP3 con MPEG Layer III. M4A mantiene
+la validación AAC del motor anterior y la preparación exige ese mismo codec.
+Un M4A con otro codec, incluido ALAC, se rechaza antes de promover.
+El contexto, la Cola y las transiciones del motor conservan sus contratos.
+
+Las carpetas finales importadas sin fila se identifican por la enumeración
+administrada y un diagnóstico de cantidad. Se conservan para inspección o
+recuperación futura. La integración no les inventa una fila `ready`.
 
 ## SQLite v4 y coordinación con Swift
 

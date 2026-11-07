@@ -110,6 +110,12 @@ public final class DropLibraryModule: Module {
       return ["databaseDirectoryURL": root.absoluteString]
     }
 
+    AsyncFunction("localImportIdentity") { (uri: String) throws -> [String: String] in
+      let source = try DropLibraryStorage().localImportIdentity(uri: uri)
+      return ["id": source.id, "cacheRelativePath": source.cacheRelativePath,
+              "relativeMediaPath": source.relativeMediaPath]
+    }
+
     AsyncFunction("inspectSource") { (uri: String, origin: String) throws -> [String: Any] in
       let source = try DropLibraryStorage().inspectSource(uri: uri, origin: origin)
       return ["id": source.id, "cacheRelativePath": source.cacheRelativePath,
@@ -124,9 +130,11 @@ public final class DropLibraryModule: Module {
       return ["relativeMediaPath": destination, "uri": url.absoluteString, "sizeBytes": actualSize]
     }
 
-    AsyncFunction("confirmImported") { (relative: String, id: String, size: Int, mediaType: String) async throws in
-      try await DropLibraryStorage().confirmImported(
+    AsyncFunction("confirmImported") {
+      (relative: String, id: String, size: Int, mediaType: String) async throws -> [String: Any] in
+      let metadata = try await DropLibraryStorage().confirmImported(
         relative: relative, id: id, size: Int64(size), mediaType: mediaType)
+      return ["mediaType": metadata.mediaType, "durationSeconds": metadata.durationSeconds]
     }
 
     AsyncFunction("cleanupImportStaging") { (protected: [String]) throws in

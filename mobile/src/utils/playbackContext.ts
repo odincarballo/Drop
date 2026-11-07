@@ -7,7 +7,8 @@ export function isPlayableLibraryItem(item: LibraryItem): boolean {
   return (
     isAvailableLibraryItem(item) &&
     ((item.mediaType === 'video' && extension === 'mp4') ||
-      (item.mediaType === 'audio' && extension === 'm4a'))
+      (item.mediaType === 'audio' &&
+        (extension === 'm4a' || extension === 'mp3')))
   );
 }
 
