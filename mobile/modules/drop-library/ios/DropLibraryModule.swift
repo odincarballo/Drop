@@ -77,6 +77,7 @@ private final class ArtworkTransfer: NSObject, URLSessionDataDelegate, URLSessio
 public final class DropLibraryModule: Module {
   private var artworkTransfers: [String: ArtworkTransfer] = [:]
   private let artworkLock = NSLock()
+  private let localArtwork = DropLocalImportArtwork()
   @MainActor private var localImportPicker: DropLocalImportPicker?
 
   public func definition() -> ModuleDefinition {
@@ -108,8 +109,18 @@ public final class DropLibraryModule: Module {
           if self?.localImportPicker?.requestID == requestID { self?.localImportPicker = nil }
           switch result {
           case let .prepared(value):
-            promise.resolve(["status": "prepared", "uri": value.uri, "title": value.title,
-              "mediaType": value.mediaType, "durationSeconds": value.durationSeconds])
+            Task { [weak self] in
+              if let self, let identity = try? DropLibraryStorage().localImportIdentity(uri: value.uri) {
+                _ = try? await localArtwork.remember(id: identity.id, jpeg: value.localArtwork)
+              }
+              var descriptor: [String: Any] = ["status": "prepared", "uri": value.uri, "title": value.title,
+                "mediaType": value.mediaType, "durationSeconds": value.durationSeconds]
+              if let artist = value.artist { descriptor["artist"] = artist }
+              if let album = value.album { descriptor["album"] = album }
+              if let genre = value.genre { descriptor["genre"] = genre }
+              if let year = value.year { descriptor["year"] = year }
+              promise.resolve(descriptor)
+            }
           case .cancelled: promise.resolve(["status": "cancelled"])
           case let .failed(error): promise.resolve(["status": "failed", "code": error.rawValue])
           }
@@ -234,6 +245,28 @@ public final class DropLibraryModule: Module {
 
     AsyncFunction("removeArtwork") { (id: String) throws in
       try DropLibraryStorage().removeArtwork(id: id)
+    }
+
+    AsyncFunction("publishLocalArtwork") { (id: String, promise: Promise) in
+      Task { [self] in
+        do {
+          guard let value = try await localArtwork.publish(id: id) else { promise.resolve(nil); return }
+          var descriptor: [String: Any] = ["relativePath": value.relativePath, "sizeBytes": value.sizeBytes]
+          if let token = value.token { descriptor["token"] = token }
+          promise.resolve(descriptor)
+        } catch { promise.reject(LibraryOperationException("Local artwork unavailable")) }
+      }
+    }
+
+    AsyncFunction("finishLocalArtwork") { (id: String, token: String, keep: Bool, promise: Promise) in
+      Task { [self] in
+        do { try await localArtwork.finish(id: id, token: token, keep: keep); promise.resolve(nil) }
+        catch { promise.reject(LibraryOperationException("Local artwork reconciliation deferred")) }
+      }
+    }
+
+    AsyncFunction("discardLocalArtwork") { (id: String, promise: Promise) in
+      Task { [self] in await localArtwork.discard(id: id); promise.resolve(nil) }
     }
 
     AsyncFunction("saveArtwork") { (raw: String, id: String, promise: Promise) in

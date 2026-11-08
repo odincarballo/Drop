@@ -231,3 +231,23 @@ test('a reconciliation or unexpected provider error is sanitized and does not le
   await service.startLocalImport();
   expect(service.getLocalImportState().phase).toBe('completed');
 });
+
+test('forwards native descriptive fields without transferring image bytes', async () => {
+  native.pickLocalFile.mockResolvedValue({
+    status: 'prepared',
+    ...prepared,
+    artist: 'Artista',
+    album: 'Álbum',
+    genre: 'Jazz',
+    year: 2024,
+  } as Awaited<ReturnType<typeof native.pickLocalFile>>);
+  await service.startLocalImport();
+  expect(library().importPreparedLocalFile).toHaveBeenCalledWith(
+    expect.objectContaining({
+      artist: 'Artista',
+      album: 'Álbum',
+      genre: 'Jazz',
+      year: 2024,
+    }),
+  );
+});

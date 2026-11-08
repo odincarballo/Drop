@@ -5,6 +5,11 @@ struct DropPreparedLocalFile: Equatable, Sendable {
   let title: String
   let mediaType: String
   let durationSeconds: Double
+  var artist: String? = nil
+  var album: String? = nil
+  var genre: String? = nil
+  var year: Int? = nil
+  var localArtwork: Data? = nil
 }
 
 enum DropLocalImportFailure: String, Error, Sendable {
@@ -134,9 +139,17 @@ final class DropLocalImportOperation {
     startAccess: @Sendable (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
     stopAccess: @Sendable (URL) -> Void = { $0.stopAccessingSecurityScopedResource() },
     stage: Prepare = { source, report in
-      let result = try await DropLibraryStorage().stageLocalFile(from: source, progress: report)
-      return DropPreparedLocalFile(uri: result.uri, title: result.title,
+      let storage = try DropLibraryStorage()
+      let result = try await storage.stageLocalFile(from: source, progress: report)
+      let prepared = DropPreparedLocalFile(uri: result.uri, title: result.title,
         mediaType: result.mediaType, durationSeconds: result.durationSeconds)
+      do { return try await enriched(prepared) }
+      catch {
+        if let identity = try? storage.localImportIdentity(uri: result.uri) {
+          try? storage.removeOwnedCache(relative: identity.cacheRelativePath)
+        }
+        throw error
+      }
     }
   ) async throws -> DropPreparedLocalFile {
     try Task.checkCancellation()
@@ -144,6 +157,22 @@ final class DropLocalImportOperation {
     guard startAccess(url) else { throw DropLocalImportFailure.scopeDenied }
     defer { stopAccess(url) }
     return try await stage(url, progress)
+  }
+
+  // Called only after staging has validated this managed copy. No provider reads.
+  nonisolated static func enriched(_ prepared: DropPreparedLocalFile) async throws -> DropPreparedLocalFile {
+    guard let url = URL(string: prepared.uri), url.isFileURL else { return prepared }
+    let metadata = try await DropLocalImportEnrichment.shared.run {
+      let extractor = DropLocalMetadataExtractor(managedRoots: [url.deletingLastPathComponent()])
+      return try await extractor.extract(url, validatedDuration: prepared.durationSeconds)
+    }
+    try Task.checkCancellation()
+    // A timeout has no confirmed descriptive result and leaves the filename title.
+    return DropPreparedLocalFile(uri: prepared.uri,
+      title: DropLocalMetadataExtractor.text(metadata.title) ?? prepared.title,
+      mediaType: prepared.mediaType, durationSeconds: prepared.durationSeconds,
+      artist: metadata.artist, album: metadata.album, genre: metadata.genre,
+      year: metadata.year, localArtwork: metadata.jpeg)
   }
 
   nonisolated private static func discardPrepared(_ value: DropPreparedLocalFile) async {

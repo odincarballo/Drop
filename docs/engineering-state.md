@@ -3,6 +3,69 @@
 Actualizado: 8 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
+## Drop 1.8.1 · C/C.1 verificado para cierre local
+
+- Corrección acotada: título promovido y campos descriptivos usan Array.from,
+  límite240 por puntos de código, no unidades UTF16 ni grafemas completos.
+  Normalización, ausencias y fallback «Archivo de Drop» conservados.
+- TDD Unicode RED3 fallos/17 PASS; GREEN20/20 en suite de integración enriquecida.
+  Regresión completa afectada145 PASS en seis suites. Nueve casos nuevos incluyen
+  borde emoji, fuera del límite, mezcla/CJK/combinantes, longitudes y fallback;
+  roundtrip SQLite real sin U+FFFD introducido ni surrogates aislados.
+- TypeScript/lint/formato/diff PASS. Siete fuentes/harnesses Swift C idénticos
+  a evidencia previa: reutilizadas49 comprobaciones por Swift5/6, typecheck ARM64
+  iOS16.4/bridge y operación previa; no compilaciones nativas repetidas.
+- Diff completo C/C.1 revisado,13 rutas pertinentes, sin dependencias/metadatos,
+  secretos ni recursos privados nuevos. Autorizado un único commit local C/C.1.
+  Main/checkpoint1.8.0/apps intactos; no push, merge, tags ni D/E.
+- Limitaciones de crash de portadas y memoria interna AVFoundation conservadas;
+  preparación nativa y validación física siguen pendientes. GO para solicitar D,
+  no iniciarlo. Evidencia C.1 indicada en continuidad; registros C originales intactos.
+
+## Drop 1.8.1 · revisión C detenida (histórico; resuelto por C.1)
+
+- Autorización de cierre C/inicio D recibida. Rama/HEAD y los13 hashes pendientes
+  coinciden exactamente con RESULT de C antes de la revisión. Sin cambios ajenos.
+- Bloqueo reproducido de C: optionalText usa slice(0,240) sobre unidades UTF16.
+  Entrada239 letras+emoji(240 puntos Unicode) queda con surrogate aislado;
+  SQLite real en memoria lo guarda como U+FFFD. No hay pérdida de datos de iPhone.
+- No cubierto por los136 PASS/49 checks anteriores; no se invalidan sus resultados,
+  pero C no se cierra ni commitea. Mismo patrón de título requiere caso focal.
+- Propuesta: truncado Unicode con Array.from, ya usado por el repositorio B,
+  y pruebas de borde/persistencia. No aplicado; informar antes de modificar código.
+- Evidencia C-enriched-0q5i_x4i/REVIEW-UNICODE.json. Sin staging, commit C o D,
+  nuevas pruebas de suite, builds, apps, main, push o limpieza. NO-GO hasta corregir.
+
+## Drop 1.8.1 · C integrado y verificado en host, sin commit
+
+- Estado vigente: B/B.1 cerrado en bf72e954cbad4682cba2dfc66bb66ff9e618870a;
+  rama codex/v1.8.1-local-metadata. C pendiente de revisión/commit, D/E no iniciados.
+  Las anotaciones de bloqueo C siguientes son históricas: contrato10s/compensación
+  aprobado posteriormente por el usuario e incorporado al SDD antes de implementar.
+- Nuevas importaciones: copia validada → extracción opcional nativa → metadatos
+  v5/título → confirmación del medio → JPEG/SQL bajo lease. Sin base64/red ni
+  modificación del medio. Reintentos conservan filas previas y borrado no recrea IDs.
+- Espera propia10s/cancelación finaliza exactamente una vez; ignora resultados
+  tardíos. Un worker aún activo conserva su plaza; nuevas importaciones usan fallback
+  hasta liberarla. No afirmar liberación inmediata de memoria del framework.
+- Imagen por token/hash/ruta propia, publicación sin sobrescritura y compensación
+  solo si no está referenciada. Portadas previas/ajenas y SQL ambiguo se conservan.
+  Crash: puede quedar temporal/JPEG sin asociación; recuperación de imágenes no
+  implementada. No limpieza general ni promesa de recuperación inmediata.
+- RED de coordinación/publicación e integración; GREEN136 Jest en seis suites,
+  SQLite real/reapertura/integridad/FK, Colecciones/Cola/progreso. 49 comprobaciones
+  nativas por Swift5/6 y harness existente de operación PASS; A1(36) reutilizado
+  por hashes idénticos. Typecheck ARM64 iOS16.4 incluye bridge real: PASS5/6.
+- TypeScript/lint/formato/diff PASS. Advertencia Swift6 previa en ArtworkTransfer
+  mutable conservada; sin cambios del descargador de YouTube. No pruebas omitidas
+  ni timeouts en GREEN. Preparación Pods/build/validación física siguen pendientes.
+- Evidencia: DropValidationEvidence/v1.8.1-C-enriched-0q5i_x4i/RESULT.json.
+  Sin versión/build nuevos(1.8.0/18), commit C, main/tags/push, apps o bases reales.
+- GO técnico para revisión y cierre de C; no iniciar D sin autorización.
+- Eficiencia: rutas raíz/mobile de dos ensayos iniciales fueron incorrectas; no
+  ejecutaron el check previsto. Resultados acreditados usan cwd/config absoluta.
+  Harness SQLite corregido para consultar conexión abierta tras la migración.
+
 ## Drop 1.8.1 · contrato y base protegida
 
 - Checkpoint 1.8.0 `8e6ade1ba6e60a036623b20af02aa76d25435864` publicado y
@@ -149,6 +212,26 @@ Migración transaccional, cuatro columnas anulables y rechazo v6 conservados.
 Commit local exclusivo de los diez archivos de B/documentación, sin publicación.
 La guardia incompatible con v4 existe en el checkpoint1.8.0: debe corregirse
 antes de cualquier publicación de esa versión. No se hizo backport ahora.
+
+## Drop 1.8.1 · C: preflight detenido antes de implementación
+
+- B cerrado en commit local bf72e954cbad4682cba2dfc66bb66ff9e618870a,
+  diez archivos revisados; sin push. Los 108 PASS y escenarios nativos se
+  reutilizan tras verificar hashes, no se repiten por un cierre documental.
+- C no implementado ni probado. Se detectan dos diferencias de contrato:
+  el SDD admite portada no asociada recuperable tras fallo SQL, mientras C pide
+  ausencia de huérfanos en errores controlados; y A.1 resuelve la cancelación de
+  miniaturas, no demuestra terminación acotada de todas las lecturas de etiquetas.
+  No conectar directamente la espera al guardado y declarar esa garantía.
+- Propuesta pendiente: presupuesto opcional de 10 s, finalizar operación propia
+  con fallback/cancelación y descartar respuestas tardías; JPEG limitado solo
+  nativo, publicación por identidad de operación y compensación de archivo propio
+  si SQL falla. Distinguir error controlado de cierre abrupto y recuperación;
+  no prometer liberación inmediata del framework ni borrar medios válidos.
+- SDD recibe propuesta marcada sin aprobar; no modifica los contratos ejecutados.
+  Evidencia: `DropValidationEvidence/v1.8.1-C-preflight-m0skm7ii/RESULT.json`.
+  NO-GO para D; esperar decisión sobre ajustes de C. No código C, datos, builds,
+  instalaciones, cambios de main/tags ni backport de1.8.0.
 
 ## Checkpoint vigente · Drop 1.8.0 build 18 en reprotest
 

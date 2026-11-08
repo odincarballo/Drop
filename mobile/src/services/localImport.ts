@@ -200,6 +200,10 @@ export function startLocalImport(): Promise<void> {
       title: result.title,
       mediaType: result.mediaType,
       durationSeconds: result.durationSeconds,
+      artist: result.artist,
+      album: result.album,
+      genre: result.genre,
+      year: result.year,
     };
     await save(prepared);
   }, 'selecting');

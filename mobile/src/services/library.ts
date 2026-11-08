@@ -24,12 +24,20 @@ type LocalImportIdentity = {
   cacheRelativePath: string;
   relativeMediaPath: string;
 };
-export type PreparedLocalFile = {
+export type PreparedLocalFile = LibraryDescriptiveMetadata & {
   uri: string;
   title: string;
   mediaType: LibraryMetadata['mediaType'];
 };
+type LocalArtworkPublication = {
+  relativePath: string;
+  sizeBytes: number;
+  token?: string;
+};
 type NativeLibrary = {
+  publishLocalArtwork(id: string): Promise<LocalArtworkPublication | null>;
+  finishLocalArtwork(id: string, token: string, keep: boolean): Promise<void>;
+  discardLocalArtwork(id: string): Promise<void>;
   localImportIdentity(uri: string): Promise<LocalImportIdentity>;
   prepare(): Promise<{ databaseDirectoryURL: string }>;
   inspectSource(
@@ -180,13 +188,39 @@ export async function updateLocalDescriptiveMetadata(
   return result.changes > 0;
 }
 
+function optionalText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  return (
+    Array.from(
+      value
+        .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+      .slice(0, 240)
+      .join('') || null
+  );
+}
+
 function validatedMetadata(meta: LibraryMetadata): LibraryMetadata {
-  const title = meta.title.trim().slice(0, 240) || 'Archivo de Drop';
+  // Count Unicode code points, not UTF-16 units or complete graphemes.
+  const title =
+    Array.from(meta.title.trim()).slice(0, 240).join('') || 'Archivo de Drop';
   const finite = (value: number | null | undefined) =>
     value != null && Number.isFinite(value) && value >= 0 ? value : null;
   return {
     ...meta,
     title,
+    artist: optionalText(meta.artist),
+    album: optionalText(meta.album),
+    genre: optionalText(meta.genre),
+    year:
+      typeof meta.year === 'number' &&
+      Number.isInteger(meta.year) &&
+      meta.year >= 1 &&
+      meta.year <= 9999
+        ? meta.year
+        : null,
     sourceVideoId:
       meta.sourceKind === 'youtube' &&
       /^[A-Za-z0-9_-]{11}$/.test(meta.sourceVideoId ?? '')
@@ -472,7 +506,7 @@ export async function librarySpaceUsed(): Promise<number> {
   );
 }
 
-// Input comes from native staging. Only its title is editorial metadata.
+// Input comes from validated native staging; optional enrichment never validates media.
 export async function importPreparedLocalFile(
   prepared: PreparedLocalFile,
 ): Promise<AvailableLibraryItem> {
@@ -499,14 +533,27 @@ export async function importPreparedLocalFile(
     .then(async () => {
       await initializeLibrary();
       const row = await rowFor(source.id);
-      if (!row)
-        return promoteToLibrary(prepared.uri, {
+      if (!row) {
+        const item = await promoteToLibrary(prepared.uri, {
           sourceKind: 'local',
           title: prepared.title
             .replace(/[\u0000-\u001f\u007f]+/g, ' ')
             .replace(/\s+/g, ' '),
           mediaType: prepared.mediaType,
+          artist: prepared.artist,
+          album: prepared.album,
+          genre: prepared.genre,
+          year: prepared.year,
         });
+        await attachLocalImportArtwork(item.id, storage);
+        const current = await rowFor(item.id);
+        if (current?.lifecycle !== 'ready')
+          throw new Error('El archivo ya no está en Biblioteca.');
+        const available = await attach(current);
+        if (!isAvailableLibraryItem(available))
+          throw new Error('El archivo ya no está disponible.');
+        return available;
+      }
       if (
         row.sourceKind !== 'local' ||
         row.relativeMediaPath !== source.relativeMediaPath ||
@@ -524,12 +571,68 @@ export async function importPreparedLocalFile(
       if (row.lifecycle === 'pending') changed();
       return item;
     })
-    .finally(() => localImports.delete(source.id));
+    .finally(async () => {
+      localImports.delete(source.id);
+      try {
+        await storage.discardLocalArtwork?.(source.id);
+      } catch (error) {
+        console.warn('[Drop library] Native artwork discard deferred', error);
+      }
+    });
   localImports.set(source.id, {
     cacheRelativePath: source.cacheRelativePath,
     promise,
   });
   return promise;
+}
+
+// A lease protects media deletion while native publication and SQL association settle.
+// Native compensation additionally verifies token, hash, managed path and all SQL references.
+async function attachLocalImportArtwork(
+  id: string,
+  storage: NativeLibrary,
+): Promise<void> {
+  await withLibraryLease(id, async () => {
+    let publication: LocalArtworkPublication | null = null;
+    let linked = false;
+    try {
+      publication = (await storage.publishLocalArtwork?.(id)) ?? null;
+      if (!publication) return;
+      if (
+        publication.relativePath !== `Artwork/${id}.jpg` ||
+        !Number.isSafeInteger(publication.sizeBytes) ||
+        publication.sizeBytes <= 0 ||
+        publication.sizeBytes > 2 * 1_048_576
+      )
+        return;
+      const stat = await storage.statArtwork(id);
+      if (!stat.exists || stat.sizeBytes !== publication.sizeBytes) return;
+      const db = await openLibraryDatabase();
+      const result = await db.runAsync(
+        `UPDATE library_items SET relativeArtworkPath = ?, artworkSizeBytes = ?
+         WHERE id = ? AND lifecycle = 'ready' AND sourceKind = 'local' AND relativeArtworkPath IS NULL`,
+        publication.relativePath,
+        publication.sizeBytes,
+        id,
+      );
+      linked = result.changes > 0;
+      if (linked) changed();
+    } catch (error) {
+      // The confirmed medium remains valid. No retry or late metadata write.
+      console.warn('[Drop library] Optional local artwork unavailable', error);
+    } finally {
+      if (publication?.token) {
+        try {
+          await storage.finishLocalArtwork(id, publication.token, linked);
+        } catch (error) {
+          console.warn(
+            '[Drop library] Local artwork reconciliation deferred',
+            error,
+          );
+        }
+      }
+    }
+  });
 }
 
 export async function promoteToLibrary(
@@ -548,8 +651,8 @@ export async function promoteToLibrary(
       `INSERT INTO library_items (
       id, sourceKind, sourceVideoId, title, mediaType, relativeMediaPath,
       sourceCacheRelativePath, durationSeconds, sizeBytes, resolution, height, fps,
-      videoCodec, audioCodec, container, downloadedAt, lifecycle
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      videoCodec, audioCodec, container, downloadedAt, artist, album, genre, year, lifecycle
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       prepared.id,
       safe.sourceKind,
       safe.sourceVideoId ?? null,
@@ -566,6 +669,10 @@ export async function promoteToLibrary(
       safe.audioCodec ?? null,
       safe.container ?? null,
       downloadedAt,
+      safe.artist ?? null,
+      safe.album ?? null,
+      safe.genre ?? null,
+      safe.year ?? null,
     );
   } catch (error) {
     if (safe.sourceKind === 'local') {
