@@ -3,6 +3,75 @@
 Actualizado: 8 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
+## Drop 1.8.1 · contrato y base protegida
+
+- Checkpoint 1.8.0 `8e6ade1ba6e60a036623b20af02aa76d25435864` publicado y
+  verificado en origin/codex/v1.8.0-local-import. No release, tag ni merge.
+- Rama local codex/v1.8.1-local-metadata desde ese checkpoint, reutilizando el
+  worktree sin duplicar dependencias. Especificación en
+  [metadatos y portadas](local-media-metadata-v1.8.1.md), preparada sin commit.
+- Contrato A–E preparado. A autorizado y ejecutado parcialmente; su bloqueo de
+  cancelación y su resolución A.1 se registran abajo. SQLite y versión/build
+  siguen v4 y 1.8.0/18.
+  Actualización explícita por elemento, conservación por defecto y portadas válidas
+  sin reemplazo en el MVP. No cambios en apps/datos.
+
+## Drop 1.8.1 · Bloque A parcial, bloqueado por cancelación en curso
+
+- Extractor interno Swift aislado y harness propios añadidos, sin bridge/DB/UI,
+  integración de importación ni portadas persistentes. Metadatos ID3/iTunes y
+  miniatura local; fallback parcial y guardas de rutas. Trabajo NO listo para integrar.
+- RED: 11 fallos de comportamiento esperados y 7 PASS contra contrato vacío.
+  Primera implementación GREEN: 18 PASS/0 FAIL. Tipado ARM64 iOS 16.4 aprobado
+  con Swift 5 y 6; harness host Swift 6 compila sin diagnósticos.
+- Ampliación: 19 comprobaciones pasan antes de una espera sin resolución al
+  cancelar extracción de miniatura iniciada. Reproducido en diagnóstico focal
+  con timeout de 20 s; detenido solo el harness propio. No hay PASS global de
+  la suite ampliada ni cierre del Bloque A. La cancelación previa al inicio pasa.
+- Propuesta pendiente de aprobación: adaptador de callbacks de generación con
+  token y finalización exactamente una vez; pruebas deterministas de cancelar
+  antes/después del registro, durante generación y al coincidir con completion.
+  No asumir que cancelar garantiza liberación inmediata del decoder ni del archivo.
+- Sin commits, builds de app, instalaciones, datos de iPhone ni cambios de main.
+  Evidencia: `DropValidationEvidence/v1.8.1-A-metadata-tp0e2mg2/`.
+  NO-GO para B hasta resolver la cancelación y cerrar A. Conservar SDD pendiente.
+
+## Drop 1.8.1 · A.1: cancelación segura, validación host completada
+
+- Sustituida la espera de miniatura por callback de AVFoundation y solicitud
+  propia de finalización única. image(at:) es disponible desde iOS16.0; el fallo
+  previo no era de disponibilidad. La causa de nuestro bloqueo era depender de
+  la finalización del framework incluso después de cancelar; su causa interna
+  específica no se demuestra ni se atribuye a todas las versiones/dispositivos.
+- DropThumbnailRequest protege resultado/observador con NSLock y los consume una
+  sola vez. Resume fuera del lock. Conserva cancelación antes del registro y
+  descarta callbacks duplicados/tardíos. Driver confinado a cola serial: registra
+  o cancela en orden, admite cancel-before-start y retira referencia al generador.
+  La espera propia termina sin callback; no se promete memoria liberada al instante.
+- RED determinista en la frontera de cancelación: 9 fallos/2 PASS con la antigua
+  semántica de cancelar el framework sin completar la solicitud. GREEN completo:
+  36 casos únicos PASS tanto en Swift5 como Swift6, incluidos MP4 real, carreras
+  controladas, 128 carreras concurrentes éxito y 128 error, reentrada, callback
+  ausente/duplicado/tardío, extracción posterior y medios sin modificaciones.
+  Sin omitidos, bloqueos ni timeouts. Typecheck ARM64 iOS16.4 PASS Swift5/6.
+- Prueba offline acotada: fixtures locales y URL de red rechazada antes de
+  AVFoundation; sin tráfico instrumentado ni prueba nueva en iPhone. No llamar
+  a esto una captura de red o validación física. Sin nuevos paquetes.
+- Evidencia: `DropValidationEvidence/v1.8.1-A1-cancellation-uuq2cixt/`.
+  Las notas A bloqueado anteriores son históricas y no se borran.
+- GO técnico para revisar/cerrar A y solicitar B; no commit ni B ejecutados.
+  Sin SQLite/modelos/bridge/importación/UI/reproducción/apps modificados. Main y
+  checkpoint1.8.0 conservados. Antes de integrar C/E comprobar registro nativo de
+  nuevos Swift y vida del archivo frente a tareas canceladas aún limpiando recursos.
+
+## Drop 1.8.1 · cierre local A/A.1 y apertura de B
+
+A/A.1 revisados y cerrados con sus 36 casos únicos PASS en Swift5 y Swift6,
+typecheck iOS16.4 y fuentes sin cambios desde la evidencia A1. Sin pruebas
+físicas nuevas ni integración. Commit local acotado de extractor/tests/SDD/estado,
+sin publicar. B autorizado exclusivamente para modelo/repositorio y SQLitev5;
+no C–E, apps, migración de datos reales ni nueva candidata.
+
 ## Checkpoint vigente · Drop 1.8.0 build 18 en reprotest
 
 Confirmación del usuario, 8/11/2026: comprobaciones manuales principales PASS
