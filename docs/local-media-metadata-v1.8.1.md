@@ -3,7 +3,8 @@
 Contrato SDD preparado el 8/11/2026. A/A.1 implementados y verificados en host;
 cerrados en commit local; B/B.1 cerrados en bf72e954cbad4682cba2dfc66bb66ff9e618870a.
 C/C.1 implementados y verificados para cierre local; Unicode de borde corregido.
-D/E no iniciados. Los resultados C previos se amplían con regresiones C.1.
+D implementado/verificado y revisado para cierre local. E1 autorizado por separado.
+Los resultados C previos se amplían con regresiones C.1 y D.
 Base: checkpoint `8e6ade1ba6e60a036623b20af02aa76d25435864`, rama publicada
 `codex/v1.8.0-local-import`. Trabajo local: `codex/v1.8.1-local-metadata`.
 Versión/build permanecen 1.8.0/18 hasta autorización de candidata.
@@ -364,3 +365,43 @@ Sin U+FFFD introducido. TS/lint/formato/diff PASS;49 checks nativos/modo y tipad
 Swift5/6 iOS16.4 reutilizados con hashes idénticos. Revisión completa sin otros
 bloqueantes. C/C.1 listos para único commit local autorizado. No D/E iniciados.
 La limitación de reconciliación tras crash permanece explícita y sin implementar.
+
+
+## D · actualización explícita conservadora, implementada en host
+
+Una sola operación activa de completado. Acción local disponible por elemento en
+las acciones existentes; no análisis automático al abrir Biblioteca. Análisis de
+copia ImportedMedia bajo lease, con el extractor y presupuesto opcional10s de C.
+No nuevo LibraryItem, red, proveedor de Archivos ni cambios del medio original.
+
+Preparación sin SQL → comparación → propuesta de título solo si difiere → aplicar.
+Conservar título permite completar ausencias; cancelar operación no escribe nada.
+Diálogo único con cancelar/conservar/usar encontrado y guardia de callback duplicado.
+Cambios de título exigen consentimiento y comparación optimista con título leído.
+SQL único rellena campos ausentes y asocia imagen opcional después de stat válido;
+conserva ID, origen, duración, rutas, relaciones, Cola, progreso y completedAt.
+Notificación solo tras cambios reales. Sin cambios se informa explícitamente.
+
+Cancelar/desmontar antes de aplicar invalida resultado y solicitud nativa incluso
+si aún no se registró. Una vez iniciada la aplicación no se acepta cancelar: no
+prometer reversión de un commit SQL en curso. Leases/UPDATE guarded protegen borrado;
+ninguna respuesta ni confirmación obsoleta recrea un registro. El descarte final
+cierra también solicitudes tardías. Portada válida previa se conserva; imagen
+corrupta preexistente no se sustituye automáticamente. Error JPEG permite texto;
+error SQL compensa solo el JPEG propio sin referencias, reutilizando C.
+
+Estados: analizando, encontrados, guardando, completado, sin cambios, cancelado y
+error. No bloqueo de reproducción/navegación durante análisis; áreas táctiles y
+etiquetas accesibles. Etiqueta genérica «Portada del archivo» en ambas vistas.
+
+RED inicial11 fallos y20PASS; carrera adicional descarte-before-registration RED1.
+GREEN172 Jest(6suites) y12 casos nativos por Swift5/6. MP3/M4A con artwork/MP4
+reales, hashes intactos, SQLite/reapertura/integridad/FK/relaciones. Typecheck
+ARM64 iOS16.4/bridge5/6, TS/lint/formato/diff PASS. Timeout/ausencia de callback,
+concurrencia del worker y compensación profunda de C reutilizados con hash idéntico;
+no se cuentan otra vez como nuevos casos. Warnings preexistentes conservados.
+
+Crash conserva limitaciones y diseño futuro de journal descritos en C: no hay
+reconciliación destructiva nueva ni garantía de limpieza inmediata. Validación
+física/Pod registration/candidata requieren autorización E. Revisión D aprobada
+para único commit local; E1 autorizado por separado, sin instalación.

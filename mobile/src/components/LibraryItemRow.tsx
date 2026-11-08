@@ -10,10 +10,16 @@ import {
 
 import { isAvailableLibraryItem, type LibraryItem } from '@/models/library';
 import { useTheme } from '@/theme';
+import {
+  useMetadataCompletion,
+  MetadataCompletionStatus,
+} from '@/hooks/useMetadataCompletion';
 import { formatSize } from '@/utils/format';
 import { isPlayableLibraryItem } from '@/utils/playbackContext';
 
 type Props = {
+  onCompleteMetadata?: (item: LibraryItem) => void;
+  metadataBusy?: boolean;
   layout?: 'list' | 'grid';
   item: LibraryItem;
   busy: boolean;
@@ -97,6 +103,16 @@ function CompactLibraryCard(props: Props & { progress: number }) {
             },
           ]
         : []),
+      ...(props.onCompleteMetadata
+        ? [
+            {
+              label: 'Completar metadatos',
+              disabled: busy || !!props.metadataBusy,
+              run: props.onCompleteMetadata,
+              requiresFile: true,
+            },
+          ]
+        : []),
       { label: 'Eliminar', disabled: busy, run: props.onDelete },
     ];
     let handled = false;
@@ -160,7 +176,7 @@ function CompactLibraryCard(props: Props & { progress: number }) {
             style={styles.image}
             resizeMode="contain"
             accessibilityLabel={
-              item.artworkUri ? 'Portada descargada' : 'Portada de Drop'
+              item.artworkUri ? 'Portada del archivo' : 'Portada de Drop'
             }
           />
         </View>
@@ -233,6 +249,7 @@ export function LibraryItemRow({
   collectionName,
 }: Props) {
   const { colors } = useTheme();
+  const metadata = useMetadataCompletion(item);
   const available = isAvailableLibraryItem(item);
   const progress = item.completedAt
     ? 100
@@ -244,23 +261,34 @@ export function LibraryItemRow({
       : 0;
   if (layout === 'grid') {
     return (
-      <CompactLibraryCard
-        {...{
-          item,
-          busy,
-          onOpen,
-          onSave,
-          onShare,
-          onDelete,
-          onCollections,
-          onQueueNext,
-          onQueueLast,
-          queueBusy,
-          onRemoveFromCollection,
-          collectionName,
-          progress,
-        }}
-      />
+      <View>
+        <CompactLibraryCard
+          onCompleteMetadata={
+            metadata.eligible
+              ? () => {
+                  void metadata.start();
+                }
+              : undefined
+          }
+          metadataBusy={metadata.active}
+          {...{
+            item,
+            busy,
+            onOpen,
+            onSave,
+            onShare,
+            onDelete,
+            onCollections,
+            onQueueNext,
+            onQueueLast,
+            queueBusy,
+            onRemoveFromCollection,
+            collectionName,
+            progress,
+          }}
+        />
+        <MetadataCompletionStatus value={metadata} />
+      </View>
     );
   }
   return (
@@ -282,7 +310,7 @@ export function LibraryItemRow({
             <Image
               source={{ uri: item.artworkUri }}
               style={styles.image}
-              accessibilityLabel="Portada descargada"
+              accessibilityLabel="Portada del archivo"
             />
           ) : (
             <Image
@@ -371,6 +399,23 @@ export function LibraryItemRow({
             </Pressable>
           </>
         )}
+        {metadata.eligible && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Completar metadatos de ${item.title}`}
+            accessibilityState={{
+              disabled: metadata.active,
+              busy: metadata.active,
+            }}
+            disabled={metadata.active}
+            onPress={() => {
+              void metadata.start();
+            }}
+            style={styles.action}
+          >
+            <Text style={{ color: colors.text }}>Completar metadatos</Text>
+          </Pressable>
+        )}
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ disabled: busy || !available }}
@@ -420,6 +465,7 @@ export function LibraryItemRow({
           <Text style={{ color: colors.error }}>Eliminar</Text>
         </Pressable>
       </View>
+      <MetadataCompletionStatus value={metadata} />
     </View>
   );
 }

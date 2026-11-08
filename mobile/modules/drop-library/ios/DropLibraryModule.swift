@@ -78,6 +78,7 @@ public final class DropLibraryModule: Module {
   private var artworkTransfers: [String: ArtworkTransfer] = [:]
   private let artworkLock = NSLock()
   private let localArtwork = DropLocalImportArtwork()
+  private let existingMetadata = DropExistingMetadataInspection()
   @MainActor private var localImportPicker: DropLocalImportPicker?
 
   public func definition() -> ModuleDefinition {
@@ -245,6 +246,43 @@ public final class DropLibraryModule: Module {
 
     AsyncFunction("removeArtwork") { (id: String) throws in
       try DropLibraryStorage().removeArtwork(id: id)
+    }
+
+    AsyncFunction("inspectExistingMetadata") { (request: Int, id: String, path: String, size: Int, duration: Double, promise: Promise) in
+      Task { [self] in
+        do {
+          let value = try await existingMetadata.inspect(request: request, id: id, path: path, size: Int64(size), duration: duration)
+          var result: [String: Any] = [:]
+          if let title = value.title { result["title"] = title }
+          if let artist = value.artist { result["artist"] = artist }
+          if let album = value.album { result["album"] = album }
+          if let genre = value.genre { result["genre"] = genre }
+          if let year = value.year { result["year"] = year }
+          promise.resolve(result)
+        } catch { promise.reject(LibraryOperationException("Metadata unavailable")) }
+      }
+    }
+    AsyncFunction("cancelExistingMetadata") { (request: Int, promise: Promise) in
+      Task { [self] in await existingMetadata.cancel(request: request); promise.resolve(nil) }
+    }
+    AsyncFunction("publishExistingArtwork") { (request: Int, id: String, promise: Promise) in
+      Task { [self] in
+        do {
+          guard let value = try await existingMetadata.publish(request: request, id: id) else { promise.resolve(nil); return }
+          var result: [String: Any] = ["relativePath": value.relativePath, "sizeBytes": value.sizeBytes]
+          if let token = value.token { result["token"] = token }
+          promise.resolve(result)
+        } catch { promise.reject(LibraryOperationException("Artwork unavailable")) }
+      }
+    }
+    AsyncFunction("finishExistingArtwork") { (request: Int, id: String, token: String, keep: Bool, promise: Promise) in
+      Task { [self] in
+        do { try await existingMetadata.finish(id: id, token: token, keep: keep); promise.resolve(nil) }
+        catch { promise.reject(LibraryOperationException("Artwork recovery deferred")) }
+      }
+    }
+    AsyncFunction("discardExistingMetadata") { (request: Int, id: String, promise: Promise) in
+      Task { [self] in await existingMetadata.discard(request: request, id: id); promise.resolve(nil) }
     }
 
     AsyncFunction("publishLocalArtwork") { (id: String, promise: Promise) in

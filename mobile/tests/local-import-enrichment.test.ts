@@ -25,6 +25,11 @@ let directory: string,
   failSQL: boolean;
 let service: typeof import('@/services/library');
 const native = {
+  inspectExistingMetadata: jest.fn(),
+  cancelExistingMetadata: jest.fn(),
+  publishExistingArtwork: jest.fn(),
+  finishExistingArtwork: jest.fn(),
+  discardExistingMetadata: jest.fn(),
   prepare: jest.fn(),
   localImportIdentity: jest.fn(),
   inspectSource: jest.fn(),
@@ -409,5 +414,305 @@ test('Unicode correction preserves normalization and empty-title fallback', asyn
     artist: null,
     album: 'Álbum 東京',
     genre: 'Jazz',
+  });
+});
+
+describe('explicit existing metadata completion', () => {
+  beforeEach(async () => {
+    native.publishLocalArtwork.mockResolvedValue(null);
+    await service.importPreparedLocalFile({
+      uri: prepared.uri,
+      title: 'Existing name',
+      mediaType: 'audio',
+    });
+    native.inspectExistingMetadata.mockResolvedValue({
+      title: 'Embedded name',
+      artist: 'Artista',
+      album: 'Álbum',
+      genre: 'Jazz',
+      year: 2024,
+    });
+    native.publishExistingArtwork.mockResolvedValue(null);
+    native.cancelExistingMetadata.mockResolvedValue(undefined);
+  });
+  test.each([false, true])(
+    'title replacement requires exact explicit choice %s',
+    async (replace) => {
+      const decide = jest.fn(async () =>
+        replace ? ('replace' as const) : ('keep' as const),
+      );
+      expect(await service.completeExistingLocalMetadata(id, decide)).toBe(
+        true,
+      );
+      expect(decide).toHaveBeenCalledWith('Existing name', 'Embedded name');
+      expect(await service.getLibraryItem(id)).toMatchObject({
+        title: replace ? 'Embedded name' : 'Existing name',
+        artist: 'Artista',
+        year: 2024,
+      });
+    },
+  );
+  test('cancel all at proposal writes nothing', async () => {
+    expect(
+      await service.completeExistingLocalMetadata(id, async () => 'cancel'),
+    ).toBe(false);
+    expect(await service.getLibraryItem(id)).toMatchObject({
+      title: 'Existing name',
+      artist: null,
+    });
+    expect(native.publishExistingArtwork).not.toHaveBeenCalled();
+  });
+  test('same title needs no confirmation; valid fields stay unchanged', async () => {
+    await database().runAsync(
+      'UPDATE library_items SET artist=?,year=? WHERE id=?',
+      'Original',
+      1999,
+      id,
+    );
+    native.inspectExistingMetadata.mockResolvedValue({
+      title: 'Existing name',
+      artist: 'Overwrite',
+      year: 2024,
+      album: 'New',
+    });
+    const decide = jest.fn();
+    await service.completeExistingLocalMetadata(id, decide);
+    expect(decide).not.toHaveBeenCalled();
+    expect(await service.getLibraryItem(id)).toMatchObject({
+      artist: 'Original',
+      year: 1999,
+      album: 'New',
+    });
+  });
+  test('no additions is not a success change', async () => {
+    native.inspectExistingMetadata.mockResolvedValue({});
+    expect(
+      await service.completeExistingLocalMetadata(id, async () => 'keep'),
+    ).toBe(false);
+  });
+  test('cancel during analysis rejects late data and duplicate requests', async () => {
+    let reply!: (x: unknown) => void;
+    native.inspectExistingMetadata.mockImplementation(
+      () =>
+        new Promise((r) => {
+          reply = r;
+        }),
+    );
+    const operation = service.completeExistingLocalMetadata(
+      id,
+      async () => 'keep',
+    );
+    for (let i = 0; i < 50 && !reply; i++) await Promise.resolve();
+    await expect(
+      service.completeExistingLocalMetadata(id, async () => 'keep'),
+    ).rejects.toThrow();
+    expect(service.cancelExistingMetadataCompletion(id)).toBe(true);
+    reply({ artist: 'Late' });
+    expect(await operation).toBe(false);
+    expect(await service.getLibraryItem(id)).toMatchObject({ artist: null });
+  });
+  test('deletion during analysis never recreates row', async () => {
+    native.inspectExistingMetadata.mockImplementation(async () => {
+      await service.deleteLibraryItem(id);
+      return { artist: 'Late' };
+    });
+    await expect(
+      service.completeExistingLocalMetadata(id, async () => 'keep'),
+    ).rejects.toThrow();
+    expect(await service.getLibraryItem(id)).toBeNull();
+  });
+  test('missing medium blocks analysis', async () => {
+    media = false;
+    await expect(
+      service.completeExistingLocalMetadata(id, async () => 'keep'),
+    ).rejects.toThrow();
+    expect(native.inspectExistingMetadata).not.toHaveBeenCalled();
+  });
+  test('valid previous artwork preserved', async () => {
+    art = true;
+    await database().runAsync(
+      'UPDATE library_items SET relativeArtworkPath=?,artworkSizeBytes=20 WHERE id=?',
+      `Artwork/${id}.jpg`,
+      id,
+    );
+    await service.completeExistingLocalMetadata(id, async () => 'keep');
+    expect(native.publishExistingArtwork).not.toHaveBeenCalled();
+    expect(art).toBe(true);
+  });
+  test('SQL failure after new JPEG compensates own publication', async () => {
+    failSQL = true;
+    native.publishExistingArtwork.mockImplementation(async () => {
+      art = true;
+      return {
+        relativePath: `Artwork/${id}.jpg`,
+        sizeBytes: 20,
+        token: 'owned',
+      };
+    });
+    await expect(
+      service.completeExistingLocalMetadata(id, async () => 'keep'),
+    ).rejects.toThrow();
+    expect(native.finishExistingArtwork).toHaveBeenCalledWith(
+      expect.any(Number),
+      id,
+      'owned',
+      false,
+    );
+    expect(await service.getLibraryItem(id)).toMatchObject({
+      artist: null,
+      title: 'Existing name',
+      relativeArtworkPath: null,
+    });
+  });
+  test('JPEG failure preserves useful descriptive update; retry is idempotent', async () => {
+    native.publishExistingArtwork.mockRejectedValue(Error('JPEG'));
+    expect(
+      await service.completeExistingLocalMetadata(id, async () => 'keep'),
+    ).toBe(true);
+    expect(
+      await service.completeExistingLocalMetadata(id, async () => 'keep'),
+    ).toBe(false);
+  });
+});
+
+test('D preserves unrelated fields and relationships, completes Unicode, and survives reopen', async () => {
+  native.publishLocalArtwork.mockResolvedValue(null);
+  await service.importPreparedLocalFile({
+    uri: prepared.uri,
+    title: 'Original',
+    mediaType: 'audio',
+  });
+  const db = database();
+  await db.runAsync(
+    'UPDATE library_items SET playbackPositionSeconds=7,completedAt=? WHERE id=?',
+    'done',
+    id,
+  );
+  await db.runAsync(
+    "INSERT INTO collections VALUES('c','Collection','collection','date','date')",
+  );
+  await db.runAsync("INSERT INTO collection_items VALUES('c',?,'date')", id);
+  await db.runAsync(
+    "INSERT INTO playback_queue VALUES('q1',?,0,'date'),('q2',?,1,'date')",
+    id,
+    id,
+  );
+  const before = await db.getFirstAsync<Record<string, unknown>>(
+    'SELECT * FROM library_items WHERE id=?',
+    id,
+  );
+  const queue = await db.getAllAsync('SELECT * FROM playback_queue'),
+    collections = await db.getAllAsync('SELECT * FROM collection_items');
+  const text = 'a'.repeat(239) + '😀';
+  native.inspectExistingMetadata.mockResolvedValue({
+    title: 'Replacement',
+    artist: text,
+    year: 10000,
+    genre: 42,
+  });
+  native.publishExistingArtwork.mockResolvedValue(null);
+  expect(
+    await service.completeExistingLocalMetadata(id, async () => 'keep'),
+  ).toBe(true);
+  const after = await db.getFirstAsync<Record<string, unknown>>(
+    'SELECT * FROM library_items WHERE id=?',
+    id,
+  );
+  expect(after).toEqual({ ...before, artist: text });
+  expect(await db.getAllAsync('SELECT * FROM playback_queue')).toEqual(queue);
+  expect(await db.getAllAsync('SELECT * FROM collection_items')).toEqual(
+    collections,
+  );
+  const reopened = new RealSQLite(join(directory, 'library.sqlite'));
+  connections.push(reopened);
+  expect(
+    await reopened.getFirstAsync(
+      'SELECT artist FROM library_items WHERE id=?',
+      id,
+    ),
+  ).toEqual({ artist: text });
+  expect(await db.getFirstAsync('PRAGMA integrity_check')).toEqual({
+    integrity_check: 'ok',
+  });
+  expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
+});
+
+test('D cancellation at title proposal rejects a late replacement', async () => {
+  native.publishLocalArtwork.mockResolvedValue(null);
+  await service.importPreparedLocalFile({
+    uri: prepared.uri,
+    title: 'Keep',
+    mediaType: 'audio',
+  });
+  native.inspectExistingMetadata.mockResolvedValue({
+    title: 'Replace',
+    artist: 'Late',
+  });
+  native.cancelExistingMetadata.mockResolvedValue(undefined);
+  let entered!: () => void, reply!: (value: 'replace') => void;
+  const ready = new Promise<void>((r) => {
+    entered = r;
+  });
+  const pending = service.completeExistingLocalMetadata(id, () => {
+    entered();
+    return new Promise((r) => {
+      reply = r;
+    });
+  });
+  await ready;
+  expect(service.cancelExistingMetadataCompletion(id)).toBe(true);
+  expect(await pending).toBe(false);
+  reply('replace');
+  await Promise.resolve();
+  expect(await service.getLibraryItem(id)).toMatchObject({
+    title: 'Keep',
+    artist: null,
+  });
+  expect(native.publishExistingArtwork).not.toHaveBeenCalled();
+});
+test('D deadline fallback produces no write or false success', async () => {
+  native.publishLocalArtwork.mockResolvedValue(null);
+  await service.importPreparedLocalFile({
+    uri: prepared.uri,
+    title: 'Keep',
+    mediaType: 'audio',
+  });
+  native.inspectExistingMetadata.mockResolvedValue({});
+  native.publishExistingArtwork.mockResolvedValue(null);
+  expect(
+    await service.completeExistingLocalMetadata(id, async () => 'keep'),
+  ).toBe(false);
+  expect(await service.getLibraryItem(id)).toMatchObject({
+    title: 'Keep',
+    artist: null,
+  });
+});
+test('D missing published JPEG is not associated and compensates ownership', async () => {
+  native.publishLocalArtwork.mockResolvedValue(null);
+  await service.importPreparedLocalFile({
+    uri: prepared.uri,
+    title: 'Keep',
+    mediaType: 'audio',
+  });
+  native.inspectExistingMetadata.mockResolvedValue({ artist: 'Proposed' });
+  native.publishExistingArtwork.mockResolvedValue({
+    relativePath: `Artwork/${id}.jpg`,
+    sizeBytes: 20,
+    token: 'owned',
+  });
+  native.statArtwork.mockResolvedValue({ exists: false });
+  await expect(
+    service.completeExistingLocalMetadata(id, async () => 'keep'),
+  ).rejects.toThrow();
+  expect(native.finishExistingArtwork).toHaveBeenCalledWith(
+    expect.any(Number),
+    id,
+    'owned',
+    false,
+  );
+  expect(await service.getLibraryItem(id)).toMatchObject({
+    title: 'Keep',
+    artist: null,
+    relativeArtworkPath: null,
   });
 });

@@ -3,6 +3,39 @@
 Actualizado: 8 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
+## Drop 1.8.1 · D revisado para cierre local
+
+- HEAD C/C.1 a1f86134f2e734bac85a1a7d4b35499e510d8fbb; rama local de metadatos.
+  Acción explícita «Completar metadatos» para ready/local/archivo compatible y
+  disponible, en lista y menú de cuadrícula. Sin selector/reimportación/escaneo.
+- Inspección nativa de ImportedMedia validada por ID/ruta/tamaño/duración; reutiliza
+  extractor A y presupuesto C10s con un worker propio. JPEG solo memoria nativa
+  hasta aplicar. Cancelar/descarte invalidan también solicitudes aún no registradas.
+- Lease durante análisis/propuesta; título conservado por defecto. Alert ofrece
+  cancelar toda la operación, conservar título o usar el encontrado, callback único.
+  Campos válidos/portada válida no se reemplazan; SQL selectivo y único para datos
+  e imagen, con identidad/lifecycle/título/ruta/tamaño/referencia anterior guardados.
+  Borrado concurrente no recrea registros. Compensación por propiedad de C.
+- Cancelación aceptada solo antes de aplicar; invalida respuestas/confirmaciones
+  tardías. Al entrar en aplicación no se ofrece cancelar ni se promete rollback
+  de una escritura iniciada. No bloquear reproducción; desmontaje cancela si procede.
+- RED inicial11 fallos/20PASS; nueva carrera de descarte reproducida1FAIL antes de
+  corregir. GREEN172 Jest en seis suites;12 checks nativos por Swift5/6, con MP3,
+  M4A con portada y MP4 administrados, hashes intactos. SQLite real/reapertura,
+  integridad/FK, Cola/ocurrencias, Colecciones, progreso y completedAt preservados.
+- Typecheck completo/bridge ARM64 iOS16.4 Swift5/6 PASS. TS/lint/formato/diff PASS;
+  nueve warnings previos en tests y warning previo ArtworkTransfer Swift6 conservados.
+  Pruebas de timeout/duplicados/framework del coordinador C reutilizadas por hash;
+  no sumarlas a los12 casos nuevos. Ningún caso GREEN omitido o terminado por timeout.
+- Evidencia D-existing-7en4kyhr bajo DropValidationEvidence. Reanudación conservó
+  los ocho archivos pendientes; corrigió tipos/formato de test y cerró cancelación.
+  Sin apps/datos reales, metadatos de versión, migraciones de iPhone, main/push/build.
+- Crash: misma limitación de C para temporal/JPEG sin asociación; sin journal nuevo
+  ni barrido destructivo. Archivo de portada corrupto preexistente se conserva;
+  no se reemplaza automáticamente. Preparación nativa y prueba física siguen en E.
+- Revisión de cierre D aprobada por correspondencia exacta de hashes y diff.
+  Único commit local D autorizado; E1 tiene autorización independiente vigente.
+
 ## Drop 1.8.1 · C/C.1 verificado para cierre local
 
 - Corrección acotada: título promovido y campos descriptivos usan Array.from,

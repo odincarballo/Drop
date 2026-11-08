@@ -35,6 +35,25 @@ type LocalArtworkPublication = {
   token?: string;
 };
 type NativeLibrary = {
+  inspectExistingMetadata(
+    request: number,
+    id: string,
+    path: string,
+    size: number,
+    duration: number,
+  ): Promise<LibraryDescriptiveMetadata & { title?: string }>;
+  cancelExistingMetadata(request: number): Promise<void>;
+  publishExistingArtwork(
+    request: number,
+    id: string,
+  ): Promise<LocalArtworkPublication | null>;
+  finishExistingArtwork(
+    request: number,
+    id: string,
+    token: string,
+    keep: boolean,
+  ): Promise<void>;
+  discardExistingMetadata(request: number, id: string): Promise<void>;
   publishLocalArtwork(id: string): Promise<LocalArtworkPublication | null>;
   finishLocalArtwork(id: string, token: string, keep: boolean): Promise<void>;
   discardLocalArtwork(id: string): Promise<void>;
@@ -817,4 +836,183 @@ export function deleteLibraryItem(id: string): Promise<void> {
   });
   deletions.set(id, operation);
   return operation;
+}
+
+export type MetadataPhase = 'analyzing' | 'found' | 'applying';
+let metadataRequest = Date.now();
+let existingCompletion: {
+  id: string;
+  request: number;
+  cancelled: boolean;
+  applying: boolean;
+  cancel: () => void;
+} | null = null;
+export function cancelExistingMetadataCompletion(id: string): boolean {
+  const op = existingCompletion;
+  if (!op || op.id !== id || op.applying) return false;
+  op.cancelled = true;
+  op.cancel();
+  void native()
+    .cancelExistingMetadata(op.request)
+    .catch(() => undefined);
+  return true;
+}
+
+export async function completeExistingLocalMetadata(
+  id: string,
+  decide: (
+    current: string,
+    proposed: string,
+  ) => Promise<'keep' | 'replace' | 'cancel'>,
+  report: (phase: MetadataPhase) => void = () => undefined,
+): Promise<boolean> {
+  if (existingCompletion) throw new Error('Ya hay un análisis en curso.');
+  let cancel!: () => void;
+  const cancelled = new Promise<null>((resolve) => {
+    cancel = () => resolve(null);
+  });
+  const op = {
+    id,
+    request: ++metadataRequest,
+    cancelled: false,
+    applying: false,
+    cancel,
+  };
+  existingCompletion = op;
+  const storage = native();
+  try {
+    return await withLibraryLease(id, async (item) => {
+      if (
+        item.sourceKind !== 'local' ||
+        !item.relativeMediaPath.startsWith('ImportedMedia/') ||
+        !/\.(mp3|m4a|mp4)$/.test(item.relativeMediaPath) ||
+        !item.durationSeconds
+      )
+        throw new Error('El archivo local no es compatible.');
+      report('analyzing');
+      const metadata = await Promise.race([
+        storage.inspectExistingMetadata(
+          op.request,
+          id,
+          item.relativeMediaPath,
+          item.sizeBytes,
+          item.durationSeconds,
+        ),
+        cancelled,
+      ]);
+      if (!metadata || op.cancelled) return false;
+      const proposed = optionalText(metadata.title);
+      report('found');
+      const choice =
+        proposed && proposed !== item.title
+          ? await Promise.race([decide(item.title, proposed), cancelled])
+          : 'keep';
+      if (!choice || choice === 'cancel' || op.cancelled) return false;
+      const current = await rowFor(id);
+      if (
+        !current ||
+        current.lifecycle !== 'ready' ||
+        current.sourceKind !== 'local' ||
+        current.relativeMediaPath !== item.relativeMediaPath ||
+        current.sizeBytes !== item.sizeBytes
+      )
+        throw new Error('El archivo cambió o fue eliminado.');
+      const stat = await storage.statMedia(item.relativeMediaPath);
+      if (!stat.exists || stat.sizeBytes !== item.sizeBytes)
+        throw new Error('El archivo ya no está disponible.');
+      const oldArt = await storage.statArtwork(id);
+      if (op.cancelled) return false;
+      // Commit boundary: cancellation is no longer accepted after this point.
+      op.applying = true;
+      report('applying');
+      let publication: LocalArtworkPublication | null = null,
+        linked = false;
+      try {
+        if (!oldArt.exists) {
+          try {
+            publication = await storage.publishExistingArtwork(op.request, id);
+          } catch {
+            /* Optional image; preserve text and medium. */
+          }
+        }
+        if (
+          publication &&
+          (publication.relativePath !== `Artwork/${id}.jpg` ||
+            !Number.isSafeInteger(publication.sizeBytes) ||
+            publication.sizeBytes <= 0 ||
+            publication.sizeBytes > 2 * 1_048_576)
+        )
+          throw new Error('Portada no válida.');
+        if (publication) {
+          const art = await storage.statArtwork(id);
+          if (!art.exists || art.sizeBytes !== publication.sizeBytes)
+            throw new Error('Portada no disponible.');
+        }
+        const db = await openLibraryDatabase();
+        const text =
+          choice === 'replace' && current.title === item.title
+            ? proposed
+            : null;
+        const artist = optionalText(metadata.artist),
+          album = optionalText(metadata.album),
+          genre = optionalText(metadata.genre);
+        const year =
+          typeof metadata.year === 'number' &&
+          Number.isInteger(metadata.year) &&
+          metadata.year >= 1 &&
+          metadata.year <= 9999
+            ? metadata.year
+            : null;
+        const artPath = publication?.relativePath ?? null,
+          artSize = publication?.sizeBytes ?? null;
+        const result = await db.runAsync(
+          `UPDATE library_items SET relativeArtworkPath=COALESCE(?,relativeArtworkPath),artworkSizeBytes=COALESCE(?,artworkSizeBytes),
+          title=COALESCE(?,title),artist=CASE WHEN artist IS NULL OR trim(artist)='' THEN COALESCE(?,artist) ELSE artist END,
+          album=CASE WHEN album IS NULL OR trim(album)='' THEN COALESCE(?,album) ELSE album END,
+          genre=CASE WHEN genre IS NULL OR trim(genre)='' THEN COALESCE(?,genre) ELSE genre END,year=COALESCE(year,?)
+          WHERE id=? AND lifecycle='ready' AND sourceKind='local' AND title=? AND relativeMediaPath=? AND sizeBytes=? AND relativeArtworkPath IS ?
+          AND ((? IS NOT NULL AND title<>?) OR (? IS NOT NULL AND (artist IS NULL OR trim(artist)='')) OR (? IS NOT NULL AND (album IS NULL OR trim(album)='')) OR (? IS NOT NULL AND (genre IS NULL OR trim(genre)='')) OR (? IS NOT NULL AND year IS NULL) OR ? IS NOT NULL)`,
+          artPath,
+          artSize,
+          text,
+          artist,
+          album,
+          genre,
+          year,
+          id,
+          current.title,
+          current.relativeMediaPath,
+          current.sizeBytes,
+          current.relativeArtworkPath,
+          text,
+          text,
+          artist,
+          album,
+          genre,
+          year,
+          artPath,
+        );
+        linked = result.changes > 0 && publication !== null;
+        if (result.changes > 0) changed();
+        const after = await rowFor(id);
+        if (after?.lifecycle !== 'ready')
+          throw new Error('El archivo fue eliminado.');
+        return result.changes > 0;
+      } finally {
+        if (publication?.token)
+          await storage.finishExistingArtwork(
+            op.request,
+            id,
+            publication.token,
+            linked,
+          );
+      }
+    });
+  } finally {
+    try {
+      await storage.discardExistingMetadata(op.request, id);
+    } finally {
+      if (existingCompletion === op) existingCompletion = null;
+    }
+  }
 }

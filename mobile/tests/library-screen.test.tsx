@@ -105,6 +105,8 @@ jest.mock('@/services/collections', () => ({
 }));
 jest.mock('@/services/library', () => ({
   listLibrary: jest.fn(),
+  completeExistingLocalMetadata: jest.fn(),
+  cancelExistingMetadataCompletion: jest.fn(),
   deleteLibraryItem: jest.fn(),
   observeLibrary: jest.fn(() => jest.fn()),
   withLibraryLease: jest.fn((_id, action) =>
@@ -1021,7 +1023,7 @@ test.each(['audio', 'video'] as const)(
       />,
     );
     expect(screen.getByText(fixture.title).props.numberOfLines).toBe(2);
-    expect(screen.getByLabelText('Portada descargada').props.resizeMode).toBe(
+    expect(screen.getByLabelText('Portada del archivo').props.resizeMode).toBe(
       'contain',
     );
     expect(
@@ -1208,7 +1210,7 @@ test('grid keeps video artwork and existing Queue/export actions tied to its ID'
   await fireEvent.press(
     screen.getByRole('button', { name: 'Vista de cuadrícula' }),
   );
-  expect(screen.getByLabelText('Portada descargada').props.source.uri).toBe(
+  expect(screen.getByLabelText('Portada del archivo').props.source.uri).toBe(
     video.artworkUri,
   );
   expect(screen.getByText(/Video · 1080p/)).toBeTruthy();
@@ -1466,4 +1468,87 @@ test('import announces phase changes without reading every percentage and restor
   );
   expect(announce).toHaveBeenLastCalledWith('Archivo importado en Biblioteca.');
   expect(focus.mock.calls.at(-1)?.[1]).toBe('focus');
+});
+
+test('local completion is explicit, accessible and requires a title decision', async () => {
+  jest.mocked(listLibrary).mockResolvedValue([
+    {
+      ...item,
+      sourceKind: 'local',
+      relativeMediaPath: 'ImportedMedia/a.m4a',
+    },
+  ]);
+  const api = jest.requireMock('@/services/library');
+  let decided: Promise<string> | undefined;
+  api.completeExistingLocalMetadata.mockImplementation(
+    async (
+      _id: string,
+      decide: (a: string, b: string) => Promise<string>,
+      report: (s: string) => void,
+    ) => {
+      report('analyzing');
+      report('found');
+      decided = decide('Old', 'New');
+      return (await decided) !== 'cancel';
+    },
+  );
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  await render(<LibraryScreen />);
+  expect(api.completeExistingLocalMetadata).not.toHaveBeenCalled();
+  await fireEvent.press(
+    await screen.findByRole('button', {
+      name: 'Completar metadatos de Podcast largo',
+    }),
+  );
+  expect(alert).toHaveBeenCalledWith(
+    'Metadatos encontrados',
+    expect.any(String),
+    expect.any(Array),
+    expect.any(Object),
+  );
+  const buttons = alert.mock.calls.at(-1)![2]!;
+  await act(async () => {
+    buttons.find((b) => b.text === 'Conservar título')!.onPress!();
+  });
+  await waitFor(() =>
+    expect(screen.getByText('Información completada')).toBeTruthy(),
+  );
+});
+
+test('cancel title dialog reports cancellation and consumes duplicate callbacks once', async () => {
+  jest.mocked(listLibrary).mockResolvedValue([
+    {
+      ...item,
+      sourceKind: 'local',
+      relativeMediaPath: 'ImportedMedia/a.m4a',
+    },
+  ]);
+  const api = jest.requireMock('@/services/library');
+  api.completeExistingLocalMetadata.mockImplementation(
+    async (
+      _id: string,
+      decide: (a: string, b: string) => Promise<string>,
+      report: (s: string) => void,
+    ) => {
+      report('found');
+      return (await decide('Old', 'New')) !== 'cancel';
+    },
+  );
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  await render(<LibraryScreen />);
+  await fireEvent.press(
+    await screen.findByRole('button', {
+      name: 'Completar metadatos de Podcast largo',
+    }),
+  );
+  const buttons = alert.mock.calls.at(-1)![2]!;
+  await act(async () => {
+    buttons[0]!.onPress!();
+    buttons[2]!.onPress!();
+  });
+  await waitFor(() =>
+    expect(screen.getByText('Operación cancelada')).toBeTruthy(),
+  );
+  expect(screen.queryByText('Información completada')).toBeNull();
+  expect(api.completeExistingLocalMetadata).toHaveBeenCalledTimes(1);
 });
