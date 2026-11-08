@@ -1,7 +1,31 @@
 # Estado operativo de Drop
 
-Actualizado: 7 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 8 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
+
+## Checkpoint vigente · Drop 1.8.0 build 18 en reprotest
+
+Confirmación del usuario, 8/11/2026: comprobaciones manuales principales PASS
+para importación MP3, M4A y MP4; reproducción y controles de audio; reproducción
+MP4; persistencia de los tres archivos; reproducción offline; búsqueda y orden;
+lista/cuadrícula; creación y persistencia de Colecciones; cancelación del selector;
+y conservación de datos/migración SQLite v3→v4. Son observaciones del usuario,
+no logs instrumentados ni una repetición de la matriz completa.
+
+La comprobación técnica previa a esas importaciones acreditó seis elementos,
+seis medios/seis portadas, SQLite v4 íntegra/FK=0 y respaldo v3 recuperable de
+20 archivos. Ese inventario es histórico: no se inspeccionó de nuevo el iPhone
+tras las importaciones y la creación de Colecciones confirmadas por el usuario.
+
+No constan aquí PASS físicos de proveedor iCloud/externo, archivo incompatible,
+cancelación durante copia, recuperación de fallos, doble activación, borrado de
+importado, accesibilidad completa ni cierre técnico del inventario posterior.
+No se solicitan ni repiten pruebas ahora. Checkpoint de código, no release pública,
+ni instalación/validación 1.8.0 en la original. Main y tags se conservan.
+
+Las notas E0/E1/E2 siguientes son una cronología; sus bloqueos y pendientes
+anteriores no invalidan los resultados actuales. El checkpoint consolida solo
+los siete archivos revisados; fuentes y herramientas coinciden con build 18.
 
 ## Estado actual de Drop 1.7.1 build 16
 
@@ -129,6 +153,236 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   recursos del worktree de diagnóstico ni se generó candidata integrada.
 - E requiere autorización independiente. Ambas aplicaciones, datos y respaldos
   permanecen fuera de esta intervención. No se modificaron versión ni build.
+
+## Drop 1.8.0 · E1: preflight de candidata bloqueado
+
+- Rama y HEAD de D verificados, árbol limpio al iniciar. Main y v1.7.1
+  conservados. La evidencia de D coincide por hashes; no se repitieron tests.
+- Espacio inicial 26.51 GiB. Xcode 26.6, SDK iOS 26.5, ninguna compilación
+  concurrente. iPhone disponible y autorizado por el perfil de reprotest.
+  Perfil existente de reprotest, Team HK927RUDLZ,
+  vigente hasta 11/11/2026 07:40:54 CDMX; su certificado coincide con una
+  identidad válida. Sin renovación ni modificaciones de firma.
+- **BLOCKED antes de Xcode:** faltan `mobile/ios`, workspace, Pods y DerivedData
+  en el worktree actual. También faltan el framework Python y QuickJS nativos
+  declarados por el podspec. Node/Expo y Metro locales sí están disponibles.
+- El entorno localizado de 1.5.0 queda fuera del checkout y enlaza módulos por
+  rutas relativas de ese árbol; su proyecto Pods no incluye los archivos nuevos
+  de D. No se utilizó ni modificó, ni se accedió al worktree de diagnóstico.
+- Preparar primero un entorno nativo propio y verificable, justificando cualquier
+  generación o restauración imprescindible. No arrancar una build con fuentes de
+  otro árbol ni reinstalar dependencias por rutina. Cero intentos de compilación;
+  versión/build siguen 1.7.1/16. No hay artefacto 1.8.0/build 18 ni instalación.
+- E2 queda definido en [la matriz](local-import-tasks-v1.8.0.md), sin ejecutar.
+  Migrar v3 → v4 requiere respaldo recuperable coherente previo; reinstalar build
+  17 no revierte el esquema. Inventario real pendiente, sin acceso a contenedores.
+  Evidencia: `DropValidationEvidence/v1.8.0-E1-preflight-2026-11-07-7rdwpxuf/RESULT.json`.
+- El adjunto E1 termina truncado en su apartado de entrega; no se infirió permiso
+  para commits. Solo estado y protocolo documental pendientes de commit.
+
+## Drop 1.8.0 · E0: entorno nativo parcialmente preparado
+
+- Prebuild local completado con Expo 57.0.20 y plantilla incluida 57.0.22,
+  sin instalación ni clean. React 19.2.3 y React Native 0.86.3 coinciden con
+  lockfile/plantilla. Ningún archivo versionado cambió durante la preparación.
+- Generados proyecto iOS y esquema Drop/Release propios. Identidad reprotest;
+  Info.plist conserva 1.7.1/build 16. Team/firma automática y embed Python
+  siguen pendientes de configurar. No se creó DerivedData: lo hará la build E1.
+- Restaurados Python 3.13.15/BeeWare b15, QuickJS-NG 0.16.2 y los tres paquetes
+  Python fijados, desde cinco distribuciones existentes con SHA verificado.
+  Sin descargas. Autolinking resuelve los módulos del checkout actual; el bridge
+  compilado y la inclusión efectiva en Pods continúan sin comprobar.
+- **BLOCKED en CocoaPods:** Ruby 2.6 del sistema espera darwin26, pero las gemas
+  reutilizadas y headers del SDK tienen darwin25. Bundler rechaza las extensiones
+  de nkf/json/ffi. Ruby 3.1.7 existente tampoco puede cargar `socket`; la instalación
+  local de Bundler falla antes de instalar gemas, incluso su prueba básica sin
+  aislamiento falla. No reparar un runtime incompleto mediante aliases o copias
+  arbitrarias. Se requiere una reparación/provisión Ruby compatible autorizada.
+- Cero `pod install`, builds integradas o instalaciones. Workspace/Pods y las
+  fases nativas propias quedan pendientes. La copia privada de gemas Ruby 2.6
+  se conserva sin limpiar; no se modificó el entorno de 1.5.0 ni el diagnóstico.
+- Espacio inicial 27.36 GiB; al cerrar aproximadamente 25.98 GiB,
+  por encima de 24 GiB. La variación observada no atribuye todos los bytes a E0.
+  Estado, protocolo E2 y consolidado se actualizan sin descartar los diffs previos.
+  No hay commits nuevos. Evidencia: `DropValidationEvidence/v1.8.0-E0-native-2026-11-07-aqrfgu95/RESULT.json`.
+- NO-GO para E1 hasta disponer de Ruby y Pods válidos. No iniciar E1/E2 automáticamente.
+
+## Drop 1.8.0 · E0.1: Ruby completo localizado, reserva insuficiente
+
+- macOS 27.2/26B123 ARM64. Homebrew Ruby 4.0.7 existente carga socket, OpenSSL,
+  zlib y RubyGems en el entorno aislado previsto, sin rutas de Ruby 2.6/3.1.
+  Bundler 2.4.22 existente responde, con advertencias de constantes de plataforma.
+  El inventario E0 no había probado este runtime completo; no hace falta otro
+  Ruby para el ensayo de compatibilidad. No se modificaron runtimes globales.
+- Incompatibilidad demostrada del bundle fijado: CFPropertyList 3.0.9 requiere
+  Ruby <3.2 y minitest 5.25.4 excluye Ruby 4. Los paquetes cacheados coinciden
+  por SHA con RubyGems. Instalar Ruby 3.3/3.4 por sí solo no resuelve el lock.
+- Candidato mínimo, todavía **sin validar ni aplicar**: CFPropertyList 3.0.8 y
+  minitest 5.27.0 con Ruby 4 existente, preservando CocoaPods 1.16.2, Xcodeproj
+  1.28.1 y Bundler 2.4.22. La versión menor de Minitest no agrega dependencias.
+  Se preparó un Gemfile/lock privado y dos archivos .gem oficiales verificados.
+  Gemfile/Gemfile.lock reales y todos los archivos funcionales siguen intactos.
+- **BLOCKED por almacenamiento antes de instalar:** primera medición 24.80 GiB;
+  antes del ensayo 24.37 GiB y guardia de instalación 24.10 GiB frente a
+  presupuesto conservador 0.35 GiB más
+  reserva 24 GiB; medición posterior 22.59 GiB. No se atribuye la caída a una
+  causa no acreditada ni se amplía la auditoría. Cero instalaciones de Ruby/gemas,
+  pod install o builds. Para el ensayo se requieren al menos 24.35 GiB; preferir
+  25 GiB para el paso posterior de Pods, o un destino externo autorizado.
+- Proyecto iOS/esquema y recursos Python/QuickJS de E0 preservados por hashes.
+  CocoaPods y el bridge integrado siguen pendientes. Sin limpiar, repetir Prebuild,
+  tocar dispositivos, main o tags. Solo se amplían los dos documentos pendientes
+  y el consolidado; sin commit. Evidencia: `DropValidationEvidence/v1.8.0-E0.1-ruby-2026-11-07-el4yyzz1/RESULT.json`.
+- NO-GO para completar Pods o iniciar E1/E2 hasta recuperar margen y validar el
+  ensayo aislado. No presentar la propuesta de dos gemas como un resultado PASS.
+
+## Drop 1.8.0 · E0.1B: ensayo privado de Ruby/CocoaPods aprobado
+
+- Ruby 4.0.7 ARM64, Bundler 2.4.22, CocoaPods 1.16.2 y Xcodeproj 1.28.1
+  verificados en el bundle privado. Resolución y ejecución real separadas:
+  bundle check PASS y bundle exec pod --version devuelve 1.16.2 con el entorno
+  de compatibilidad existente del proyecto. Sin rutas de Ruby 2.6/3.1 cargadas.
+- JSON, FFI, NKF, BigDecimal, socket, OpenSSL y zlib cargan y se ejercitan.
+  Xcodeproj abre/guarda/reabre solo una copia privada del proyecto Drop.
+  El proyecto nativo E0 y Gemfile/Gemfile.lock oficiales permanecen intactos.
+- El ensayo demostró que los dos cambios iniciales no bastaban con Ruby 4.
+  Propuesta final no aplicada: CFPropertyList 3.0.8, minitest 5.27.0 y declarar
+  bigdecimal 4.0.1/benchmark 0.5.0. Estas dos bibliotecas estándar se reutilizaron
+  del caché local y se instalaron solo en el destino privado. Sin otras versiones
+  modificadas. Se requiere aprobación antes de adoptar el diff oficial.
+- RUBYOPT fija Bundler 2.4.22 y carga el cocoapods_compat.rb existente para Logger.
+  Se conservan las advertencias de constantes Gem::Platform de Bundler/Ruby4.
+  La primera actualización podó dos copias del caché privado por no_prune omitido;
+  ambas se repusieron desde originales íntegros y se verificaron por hash.
+  Comandos posteriores fijan BUNDLE_NO_PRUNE=true. No se perdió recurso original.
+- Espacio inicial 26.02 GiB y al cierre 25.99 GiB, manteniendo 25 GiB.
+  Sin pod install, Prebuild, builds, dispositivos, firma, commits ni limpiezas.
+  Evidencia: `DropValidationEvidence/v1.8.0-E0.1B-ruby-trial-7oithqzu/RESULT.json` y diffs propuestos.
+- GO para revisar/adoptar configuración de herramientas y después completar E0
+  con presupuesto nuevo. No iniciar E1: Pods/bridge integrado siguen pendientes.
+
+## Drop 1.8.0 · E0.1C: Ruby 4 adoptado; Pods bloqueados por PATH
+
+- Aplicados exclusivamente los ajustes autorizados: CFPropertyList 3.0.8,
+  minitest 5.27.0, bigdecimal 4.0.1 y benchmark 0.5.0. CocoaPods 1.16.2,
+  Xcodeproj 1.28.1, Bundler 2.4.22 y todas las demás versiones conservadas.
+  Bundler generó el lock localmente; se repuso la plataforma genérica `ruby`
+  mediante Bundler. El resultado coincide byte por byte con el ensayo privado.
+- Desde el Gemfile oficial: bundle check PASS, bundle exec pod --version
+  devuelve 1.16.2 y Xcodeproj carga con Ruby 4.0.7 ARM64. Extensiones requeridas
+  cargadas y sin mezcla de Ruby 2.6/3.1. Se conservan los avisos Gem::Platform.
+- Podfile, podspecs locales y dependencias JavaScript equivalentes al entorno
+  conservado. Se reutilizaron copias independientes verificadas de fuentes y
+  artefactos de Pods; se excluyeron proyecto, headers y soporte generados antiguos.
+  Podfile.lock fijado preservado. Proyecto propio configurado para reprotest,
+  Team HK927RUDLZ/firma automática y fase Python; sin modificar perfiles.
+- Único `bundle exec pod install --deployment --no-repo-update`: exit 1 en
+  1.01 s, antes del análisis de dependencias. Error exacto: `sh: node: command
+  not found`; después `cannot load such file -- ./scripts/autolinking`.
+  El PATH aislado preparado por el agente omitió `/usr/local/bin`, donde existe
+  Node 22.19.0. Es un error de entorno del intento; no demuestra incompatibilidad
+  de CocoaPods/Ruby 4 ni una ausencia real de Expo. Sin segundo intento.
+- Workspace y Pods.xcodeproj aún ausentes. Python/QuickJS, esquema Release y
+  fuentes Swift propios siguen presentes; integración de módulos/bridge pendiente.
+  No certificar inclusión en el target por la mera presencia de fuentes o podspecs.
+- Prevención concreta: antes del próximo intento autorizado, incluir
+  `/usr/local/bin` en el PATH del hijo y comprobar Node/Expo/RN desde ese mismo
+  entorno y directorio. Conservar RUBYOPT y BUNDLE_NO_PRUNE=true; no reparar gemas,
+  modificar Podfile ni repetir Prebuild para este error. Revalidar presupuesto.
+- Espacio inicial 26.00 GiB; cierre 25.96 GiB. Durante la instalación: 25.966 GiB
+  inicial y mínimo/final 25.966 GiB; reserva de 24 GiB respetada.
+  Cuatro archivos tracked pendientes: los dos documentos previos preservados y
+  Gemfile/Gemfile.lock. Sin commit, cambios de versión, builds, dispositivos ni
+  limpieza. Main y v1.7.1 intactos. NO-GO para E1 hasta completar Pods.
+- Evidencia: `DropValidationEvidence/v1.8.0-E0.1C-ruby-pods-bqn4zu28/RESULT.json`.
+
+
+## Drop 1.8.0 · E0.1D: CocoaPods preparado, sin compilación
+
+- PATH del entorno Ruby incorpora `/usr/local/bin`. Node 22.19.0 real en
+  `/usr/local/bin/node` cumple engines >=22.13.0 del proyecto y React Native;
+  resuelve Expo/RN locales desde mobile. Mismo entorno: Ruby 4.0.7,
+  Bundler 2.4.22, CocoaPods 1.16.2 y Xcodeproj 1.28.1; BUNDLE_NO_PRUNE=true.
+- Una instalación `pod install --deployment --no-repo-update`, exit 0 en 18.08 s:
+  116 dependencias y 115 Pods. Sin actualizaciones de versiones; Gemfile,
+  Gemfile.lock y Podfile.lock conservan sus hashes previos. Recursos reutilizados.
+- Workspace válido con referencias locales a Drop y Pods. Autolinking registra
+  DropLibrary, DropPlayback y OnDeviceYouTube en ExpoModulesProvider; las 36 fuentes
+  Swift actuales de los tres módulos están en sus targets. QuickJS incluido;
+  Python ARM64 disponible y registrado mediante script XCFramework de CocoaPods,
+  además de la fase de embed propia. Firma automática reprotest/Team conservados.
+- Advertencias conservadas en log: constantes Gem::Platform y aviso de deprecación
+  del uso directo de pod install en React Native. No se ejecutó expo run ni Xcode.
+  Preparación satisfactoria no equivale a compilación o bridge físico verificados.
+- Espacio antes 25.956 GiB; mínimo 25.941 GiB; final instalación 25.942 GiB.
+  Cuatro archivos tracked pendientes, sin staging ni commit; notas anteriores
+  preservadas. Main/tag y aplicaciones intactos. GO técnico para reanudar el
+  preflight E1 con autorización, numeración/firma/espacio revalidados; no iniciado.
+- Evidencia: `DropValidationEvidence/v1.8.0-E0.1D-pods-ls53qpjy/`.
+
+
+## Drop 1.8.0 · E1: candidata integrada build 18 preparada
+
+- Una compilación Release iPhoneOS ARM64 firmada, exit 0 / BUILD SUCCEEDED en
+  480.47 s, dos jobs y vigilancia cada cinco segundos. Sin clean, Prebuild,
+  pod install adicional, actualizaciones de aprovisionamiento ni reintentos.
+- Reprotest 1.8.0/build 18, Team HK927RUDLZ. Perfil existente
+  de reprotest hasta 11/11/2026 07:40:54 CDMX;
+  certificado disponible, identidad y dispositivo autorizado comprobados.
+  iPhone desconectado: versión instalada y colisión posterior se revalidarán en E2.
+- Firma estricta, ARM64, Hermes nuevo, módulos DropLibrary/DropPlayback/
+  OnDeviceYouTube y símbolos del picker/operación verificados. Source map conserva
+  las fuentes TypeScript actuales de Biblioteca/SQLite/importación. Sin símbolos
+  DROP_LOCK_SCREEN_PROBE ni fuentes experimentales en las entradas.
+- Espacio antes 25.926 GiB; mínimo/final de build 22.841 GiB. El archivado
+  conserva hashes de todos los archivos regulares. No atribuir toda variación
+  del volumen a la build. Configuración nativa temporal restaurada; metadatos
+  versionados 1.8.0/build 18 preparados sin commit; dependencias sin cambios.
+- Advertencias de terceros/deprecación y fases sin outputs conservadas en log.
+  No se repitieron suites host. Compilación/enlace no acreditan comunicación
+  en ejecución, migración SQLite v4, selector de proveedores ni reproducción real.
+- Artefacto/evidencia: `DropValidationEvidence/v1.8.0-E1-build18-reprotest-j25js2s0/`.
+  SHA-256 ejecutable: `9dbf6f0142622852ff6ffa142012e69d64676472512f2e34c68644670128490b`. No se instaló ni accedió a contenedores.
+- GO para solicitar E2 protegido: cerrar solo reprotest, inventario actual de
+  IDs/medios/portadas/colecciones/Cola/progreso/preferencias; comparar y proteger
+  incrementalmente SQLite/WAL coherentes y archivos, hashes/integridad/FK;
+  revalidar firma/versión y una actualización in-place autorizada. Tras primer
+  arranque, comprobar v4 y datos. Una build antigua no revierte la migración.
+  Main/tag y aplicaciones intactos; siete archivos tracked pendientes sin commit.
+
+## Drop 1.8.0 · E2: pendiente de conexión del iPhone
+
+- Artefacto build 18, hash y firma revalidados; perfil vigente. Dispositivo
+  conocido autorizado por el perfil, pero figura desconectado. No se accedió
+  al contenedor, no se capturaron datos ni se intentó instalar.
+- BLOCKED hasta conectar/desbloquear el iPhone y mantener cerrada reprotest.
+  Respaldo build 17 localizado como candidato; vigencia respecto a datos actuales
+  aún no acreditada. No certificar inventario, migración ni interfaz.
+- Evidencia: `DropValidationEvidence/v1.8.0-E2-install-o2qy2cgr/RESULT.json`.
+  Reanudar preflight/respaldo; la instalación in-place ya tiene autorización
+  condicional, sin necesidad de aprobación rutinaria adicional si todo pasa.
+
+## Drop 1.8.0 · E2: reprotest instalada y datos verificados
+
+- Una instalación in-place PASS: 1.7.1/build 17 → 1.8.0/build 18, identidad
+  reprotest. Original intacta. Primer arranque confirmado por el usuario sin error.
+- Inventario real antes/después: seis LibraryItems, seis medios, seis portadas,
+  cero Colecciones/relaciones y Cola vacía. Todas las filas/IDs, progreso,
+  completedAt y preferencias conservados. SQLite migró v3→v4, integrity_check=ok,
+  FK=0. Archivos no SQLite conservan tamaño/mtime; hashes previos reutilizados.
+- Respaldo incremental independiente de 20 archivos con SQLite/WAL coherentes,
+  manifiesto/hash completo y recuperación comprobada en una copia APFS aislada.
+  La base recuperada v3 contiene exactamente el inventario previo; históricos
+  conservados. Build 17 por sí sola no revierte una migración a v4.
+- Mac 22.80 GiB inicial → 22.79 GiB final. Usuario informa 96 GB usados de 128 GB
+  en iPhone. Sin compilación, limpieza, renovación de firma ni cambios de refs.
+  Evidencia/respaldo: `DropValidationEvidence/v1.8.0-E2-install-o2qy2cgr/`.
+- Incidentes de herramientas: tunnelState desconectado no implicaba falta de
+  acceso; la consulta directa/USB funcionó. Apertura CLI rechazada por orden de
+  argumentos antes de ejecutar la app; el usuario realizó el primer arranque.
+- Instalación/migración/integridad PASS técnicos. La confirmación manual posterior
+  de importación y demás pruebas principales se registra en el checkpoint vigente.
+  No instalar otra vez ni inferir resultados de escenarios no confirmados.
 
 Las notas siguientes conservan el historial; no describen el estado vigente.
 
