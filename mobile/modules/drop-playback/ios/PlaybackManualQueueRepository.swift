@@ -212,7 +212,7 @@ final class SQLitePlaybackManualQueueRepository: PlaybackManualQueueRepository,
       }
       let version = try scalar(db, "PRAGMA user_version")
       guard version >= 3 else { throw PlaybackManualQueueError.schemaNotPrepared }
-      guard version == 3 else { throw PlaybackManualQueueError.incompatibleSchema }
+      guard [3, 4, 5].contains(version) else { throw PlaybackManualQueueError.incompatibleSchema }
       try validateSchema(db)
       return db
     } catch {

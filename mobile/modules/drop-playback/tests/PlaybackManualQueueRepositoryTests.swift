@@ -18,12 +18,105 @@ enum PlaybackManualQueueRepositoryTests {
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
+    var compatibilityFailures = 0
+    for version in [3, 4, 5] {
+      do {
+        try await schemaCompatibilityTests(root, version: version)
+        print("PASS schema v\(version): read/consume/compact/integrity/preservation")
+      } catch {
+        compatibilityFailures += 1
+        print("FAIL schema v\(version): \(error)")
+      }
+    }
     try await missingAndSchemaTests(root)
     try await readAndConsumeTests(root)
     try await rollbackTests(root)
     try await concurrencyTests(root)
     try await corruptionTests(root)
-    print("PlaybackManualQueueRepositoryTests: passed")
+    if compatibilityFailures > 0 { exit(1) }
+    print("PlaybackManualQueueRepositoryTests: 3 version scenarios + 5 legacy groups PASS")
+  }
+
+  private static func schemaCompatibilityTests(_ root: URL, version: Int) async throws {
+    let source = URL(fileURLWithPath: CommandLine.arguments[1])
+      .appendingPathComponent("schema-v\(version).sqlite")
+    let url = root.appendingPathComponent("compatible-v\(version).sqlite")
+    try FileManager.default.copyItem(at: source, to: url)
+    let schemaBefore = try dump(url, "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
+    let libraryBefore = try dump(url, "SELECT * FROM library_items ORDER BY id")
+    let collectionsBefore = try dump(url, "SELECT * FROM collections ORDER BY id")
+    let relationsBefore = try dump(url, "SELECT * FROM collection_items ORDER BY itemId")
+    let repository = SQLitePlaybackManualQueueRepository(databaseURL: url)
+    let empty = try await repository.pendingEntries()
+    try check(empty.isEmpty, "empty v\(version)")
+    try withDB(url) { db in
+      try seedQueue(db, id: first, item: a, position: 0)
+      try seedQueue(db, id: second, item: a, position: 3)
+      try seedQueue(db, id: third, item: b, position: 8)
+    }
+    let queueBefore = try dump(url, "SELECT * FROM playback_queue ORDER BY position")
+    let read = try await repository.pendingEntries()
+    try check(read.map(\.entryID) == [first, second, third], "ordered occurrences v\(version)")
+    try check(try dump(url, "SELECT * FROM playback_queue ORDER BY position") == queueBefore, "read wrote queue")
+    let consumed = try await repository.consume(entryID: first, itemID: a)
+    try check(consumed == .persisted, "consume v\(version)")
+    let remaining = try await repository.pendingEntries()
+    try check(remaining.map(\.entryID) == [second,third] && remaining.map(\.position) == [0,1], "compaction v\(version)")
+    try check(try dump(url,"SELECT * FROM library_items ORDER BY id") == libraryBefore, "library/progress/title/artwork metadata changed")
+    try check(try dump(url,"SELECT * FROM collections ORDER BY id") == collectionsBefore, "collections changed")
+    try check(try dump(url,"SELECT * FROM collection_items ORDER BY itemId") == relationsBefore, "relations changed")
+    try check(try dump(url,"SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name") == schemaBefore, "native schema changed")
+    try check(try scalar(url,"PRAGMA user_version") == Int64(version), "native version changed")
+    try check(try dump(url,"PRAGMA integrity_check") == [["ok"]], "integrity v\(version)")
+    try check(try dump(url,"PRAGMA foreign_key_check").isEmpty, "FK v\(version)")
+    let incompatible = root.appendingPathComponent("incompatible-v\(version).sqlite")
+    try FileManager.default.copyItem(at: source, to: incompatible)
+    try withDB(incompatible) { db in try exec(db, "ALTER TABLE playback_queue ADD COLUMN extra TEXT") }
+    do {
+      _ = try await SQLitePlaybackManualQueueRepository(databaseURL: incompatible).pendingEntries()
+      throw TestFailure.assertion("incompatible structure accepted v\(version)")
+    } catch PlaybackManualQueueError.incompatibleSchema {}
+    let corrupt = root.appendingPathComponent("corrupt-v\(version).sqlite")
+    try FileManager.default.copyItem(at: source, to: corrupt)
+    try withDB(corrupt) { db in
+      try exec(db, "PRAGMA foreign_keys=OFF; DELETE FROM collection_items; DELETE FROM library_items")
+      try seedQueue(db, id: first, item: a, position: 0)
+    }
+    do {
+      _ = try await SQLitePlaybackManualQueueRepository(databaseURL: corrupt).pendingEntries()
+      throw TestFailure.assertion("orphan accepted v\(version)")
+    } catch PlaybackManualQueueError.invalidEntry {}
+    try check(try scalar(corrupt, "SELECT COUNT(*) FROM playback_queue") == 1, "orphan repaired destructively")
+    if version == 5 {
+      let future = root.appendingPathComponent("future-full.sqlite")
+      try FileManager.default.copyItem(at: source, to: future)
+      try withDB(future) { db in try exec(db, "PRAGMA user_version=6") }
+      let before = try dump(future, "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
+      do {
+        _ = try await SQLitePlaybackManualQueueRepository(databaseURL: future).pendingEntries()
+        throw TestFailure.assertion("v6 accepted")
+      } catch PlaybackManualQueueError.incompatibleSchema {}
+      try check(try dump(future, "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name") == before, "future schema mutated")
+      try check(try scalar(future, "PRAGMA user_version") == 6, "future version modified")
+    }
+
+  }
+
+  private static func dump(_ url: URL, _ sql: String) throws -> [[String?]] {
+    try withDB(url) { db in
+      var statement: OpaquePointer?
+      guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw TestFailure.sqlite("dump") }
+      defer { sqlite3_finalize(statement) }
+      var rows: [[String?]] = []
+      while true {
+        let step = sqlite3_step(statement)
+        if step == SQLITE_DONE { return rows }
+        guard step == SQLITE_ROW else { throw TestFailure.sqlite("dump step") }
+        rows.append((0..<sqlite3_column_count(statement)).map { index in
+          sqlite3_column_text(statement,index).map { String(cString:$0) }
+        })
+      }
+    }
   }
 
   private static func missingAndSchemaTests(_ root: URL) async throws {
@@ -40,11 +133,11 @@ enum PlaybackManualQueueRepositoryTests {
       throw TestFailure.assertion("v2 accepted") }
     catch PlaybackManualQueueError.schemaNotPrepared {}
     try check(try scalar(version, "PRAGMA user_version") == 2, "v2 was migrated")
-    try withDB(version) { db in try exec(db, "PRAGMA user_version = 4") }
+    try withDB(version) { db in try exec(db, "PRAGMA user_version = 6") }
     do { _ = try await SQLitePlaybackManualQueueRepository(databaseURL: version).pendingEntries()
       throw TestFailure.assertion("future version accepted") }
     catch PlaybackManualQueueError.incompatibleSchema {}
-    try check(try scalar(version, "PRAGMA user_version") == 4, "future version was touched")
+    try check(try scalar(version, "PRAGMA user_version") == 6, "future version was touched")
     try withDB(version) { db in
       try exec(db, "PRAGMA user_version = 3; DROP INDEX playback_queue_position")
     }

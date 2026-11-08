@@ -190,7 +190,7 @@ async function intact(before: unknown) {
     integrity_check: 'ok',
   });
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
 }
 beforeEach(async () => {
@@ -416,7 +416,7 @@ test.each([1, 2])(
     }
     const legacy = new RealSQLite(databasePath);
     connections.push(legacy);
-    const originalItems = await legacy.getAllAsync(
+    const originalItems = await legacy.getAllAsync<Record<string, unknown>>(
       'SELECT * FROM library_items ORDER BY id',
     );
     const originalMemberships =
@@ -446,12 +446,20 @@ test.each([1, 2])(
     );
     expect(
       await db.getAllAsync('SELECT * FROM library_items ORDER BY id'),
-    ).toEqual(originalItems);
+    ).toEqual(
+      originalItems.map((row) => ({
+        ...row,
+        artist: null,
+        album: null,
+        genre: null,
+        year: null,
+      })),
+    );
     expect(
       await db.getAllAsync('SELECT * FROM collection_items ORDER BY itemId'),
     ).toEqual(version === 2 ? originalMemberships : []);
     expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-      user_version: 4,
+      user_version: 5,
     });
     expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
   },

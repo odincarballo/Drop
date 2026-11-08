@@ -72,6 +72,84 @@ físicas nuevas ni integración. Commit local acotado de extractor/tests/SDD/est
 sin publicar. B autorizado exclusivamente para modelo/repositorio y SQLitev5;
 no C–E, apps, migración de datos reales ni nueva candidata.
 
+## Drop 1.8.1 · B: SQLite v5 implementado; cierre bloqueado por lector nativo
+
+- A/A.1 cerrado en commit local ece7724452d20027346d742a8b175a3942cca828,
+  con sus seis archivos pertinentes; sin publicar. Sus fuentes no cambiaron en B.
+- B agrega artist/album/genre TEXT NULL y year INTEGER NULL al final de
+  library_items. Base nueva v5 directa; v4→v5 cuatro ALTER TABLE ADD COLUMN,
+  sin reconstrucción. v1–v3 conservan paso necesario a origen local de v4 y
+  reciben las columnas. BEGIN IMMEDIATE, rollback, FK y versión al confirmar.
+- Modelo opcional/anulable y updateLocalDescriptiveMetadata por ID: completa
+  ausencias en ready/local con un UPDATE atómico; conserva valores válidos,
+  ignora NULL/undefined/vacíos y rechaza tipos/años inválidos antes de escribir.
+  No modifica título/portada/medio/relaciones/progreso ni recrea filas borradas.
+  No integrado al extractor, promoción, UI o reproducción.
+- RED 19 fallos esperados/1 PASS; GREEN SQLite/TS 108 PASS en cuatro suites,
+  incluidos 20 casos nuevos. SQLite real valida v0/v1/v2/v3/v4→v5, NULL,
+  persistencia, Unicode, actualización parcial, rollback tras tercer ALTER,
+  muerte de un proceso fixture en transacción y reapertura. integrity_check=ok,
+  FK=0 y filas/IDs/Colecciones/ocurrencias/orden/progreso antiguos preservados.
+  Preferencias y medios reales fuera del alcance: sin código que los modifique.
+- TypeScript/formato/diff PASS; lint focal sin errores, nueve advertencias
+  preexistentes de require en pruebas. Avisos SQLite experimental y errores
+  transitorios inyectados conservados en logs. No suites Swift de A repetidas.
+- BLOCKED material: PlaybackManualQueueRepository.openValidated exige version==3.
+  Es consumido por DropPlaybackService; rechaza también v4 de la base anterior.
+  Diagnóstico host con el repositorio de producción rechaza v5 con
+  incompatibleSchema. No se infiere un fallo físico observado ni pérdida de datos.
+- Ese cambio no es un ajuste de tipos y excede el permiso de B para Cola.
+  Propuesta pendiente: admitir explícitamente esquemas 3/4/5 verificados,
+  conservar validación estricta de tabla/índices/FK y rechazar futuros >=6;
+  tests host de lectura/consumo sin cambiar semántica. No aplicado.
+- NO-GO para C/cierre de B hasta resolver compatibilidad. Sin commit de B, app
+  build, migraciones iPhone, instalaciones, firma, main, tags, push o limpieza.
+  Evidencia: `DropValidationEvidence/v1.8.1-B-sqlite5-ajbkgnl4/`.
+- Incidente de eficiencia: dos invocaciones iniciales usaron rutas relativas con
+  cwd incorrecto y no ejecutaron la prueba prevista; se corrigieron antes del
+  resultado acreditado. Usar raíz para ediciones y mobile para comandos Node.
+
+## Drop 1.8.1 · B.1: compatibilidad nativa v3/v4/v5 verificada
+
+- Único cambio funcional: PlaybackManualQueueRepository admite explícitamente
+  [3,4,5] en lugar de version==3. Continúan validación estricta de columnas,
+  índices, CHECK, FK, lifecycle, IDs, transacciones y errores; futuro v6 rechazado.
+  El lector no crea/migra tablas ni cambia user_version. Sin cambios del servicio
+  de reproducción, leases, extractor, UI o importación.
+- Diagnóstico: usa playback_queue(id,itemId,position,addedAt), su FK CASCADE y
+  índices, más library_items(id,lifecycle). El contrato no varía entre v3/v4/v5;
+  v4 amplía origen y v5 añade campos descriptivos fuera de esas consultas.
+  No hay otras guardas nativas user_version restrictivas en DropLibrary/Playback.
+- RED real con lector anterior: v3 PASS, v4/v5 incompatibleSchema. Fixtures
+  completos derivados del SQL de producción, con filas sintéticas y metadatos.
+  GREEN nativo Swift5/6: tres escenarios completos de versión y cinco grupos
+  existentes (esquema/lectura-consumo/rollback/concurrencia/corrupción). Verificados
+  vacío, ocurrencias, orden, consumo/compacción, ready/deleting, doble consumo,
+  bloqueo, estructuras incompatibles, orfandad y v6; sin pérdida o reparación
+  destructiva. Preservados esquema, versión, library_items, Colecciones/relaciones;
+  integrity_check=ok y FK=0 en v3/v4/v5.
+- Regresión B: 108 PASS en cuatro suites, incluidos leases de Biblioteca.
+  TypeScript y diff PASS. Typecheck iOS16.4 ARM64 Swift5/6 PASS como biblioteca,
+  tal como el Pod. Un chequeo inicial Swift6 sin parse-as-library aisló el global
+  SQLITE_TRANSIENT como main-actor; corregido el modo, sin cambiar ese código.
+- Defecto ya presente en checkpoint1.8.0 build18: la guardia rechazaba v4.
+  Considerar corrección independiente de 1.8.0 con alcance propio; no se hizo
+  backport ni se infiere un fallo físico observado. La corrección no llega a las
+  apps instaladas hasta autorizar una futura candidata e instalación.
+- B/B.1 listos para revisión/cierre; NO commit ni C iniciados. Pendientes de B
+  preservados por hashes. Main, tags, checkpoint1.8.0 y apps intactos.
+  Evidencia: `DropValidationEvidence/v1.8.1-B1-native-queue-9ps51nwt/`.
+
+## Drop 1.8.1 · B/B.1 cerrado para commit local
+
+Revisión final: esquema v5 y UPDATE conservador coinciden por hashes con B;
+lector nativo explícito v3/v4/v5 y pruebas coinciden con B.1. Los 108 PASS de
+regresión y los escenarios Swift5/6 corresponden a estas fuentes sin cambios.
+Migración transaccional, cuatro columnas anulables y rechazo v6 conservados.
+Commit local exclusivo de los diez archivos de B/documentación, sin publicación.
+La guardia incompatible con v4 existe en el checkpoint1.8.0: debe corregirse
+antes de cualquier publicación de esa versión. No se hizo backport ahora.
+
 ## Checkpoint vigente · Drop 1.8.0 build 18 en reprotest
 
 Confirmación del usuario, 8/11/2026: comprobaciones manuales principales PASS

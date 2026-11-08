@@ -1,7 +1,8 @@
 # Drop 1.8.1 · Metadatos y portadas locales
 
 Contrato SDD preparado el 8/11/2026. A/A.1 implementados y verificados en host;
-pendientes de revisión/cierre, ver estado al final. B–E sin implementación.
+cerrados en commit local; B/B.1 revisados y cerrados para commit local.
+C–E sin implementación.
 Base: checkpoint `8e6ade1ba6e60a036623b20af02aa76d25435864`, rama publicada
 `codex/v1.8.0-local-import`. Trabajo local: `codex/v1.8.1-local-metadata`.
 Versión/build permanecen 1.8.0/18 hasta autorización de candidata.
@@ -197,3 +198,56 @@ Revisión local aprobada según evidencia A1: 36 casos únicos por toolchain,
 Swift5/6 e iOS16.4. Fuentes sin modificaciones desde la ejecución. Autorizado
 commit local acotado de A, sin push. B tiene autorización independiente vigente
 para persistencia; no se autoriza integrar extractor ni interfaz.
+
+
+## Ejecución B · SQLite v5, compatibilidad nativa pendiente
+
+A cerrado localmente en ece7724452d20027346d742a8b175a3942cca828, sin push.
+SQLite v5 usa exactamente cuatro columnas anulables añadidas al final: artist,
+album y genre TEXT, year INTEGER. v4→v5 es aditivo; v1–v3 pasan primero por el
+cambio de sourceKind requerido en v4, dentro de la misma transacción. Base nueva
+v5 directa. Sin reconstruir v4 ni agregar tablas, índices o constraints extra.
+
+updateLocalDescriptiveMetadata completa campos ausentes en filas ready/local:
+NULL/undefined/vacío no borran; inválidos se rechazan antes de ejecutar SQL;
+no reemplaza valores válidos ni filas completas. No modifica título/portada,
+sourceKind, rutas, fechas, IDs, progreso o relaciones. No se conecta a promoción
+ni extractor: C decidirá la llamada tras validar/promover. La sustitución con
+consentimiento sigue fuera de B; esta operación no la permite implícitamente.
+
+RED19 fallos; 108 PASS SQLite/TS, cuatro suites focalizadas. Integridad/FK,
+rollback/interrupción y persistencia acreditados en fixtures, no iPhone.
+Bloqueo: el consumidor nativo de Cola exige user_version==3 y rechaza v5;
+reproducción host independiente con código de producción lo confirma. El guard
+ya rechaza v4; no atribuirlo a pérdida física o a una nueva regresión observada.
+No modificarlo sin autorización: aceptar 3/4/5 explícitos con estructura/FK
+verificadas y futuro6 rechazado es la propuesta mínima. B no está cerrado ni
+committeado; no iniciar C. Evidencia B-sqlite5-ajbkgnl4 en estado operativo.
+
+
+## Resolución B.1 · contrato nativo compatible
+
+El bloqueo B anterior es histórico. PlaybackManualQueueRepository acepta
+explícitamente v3/v4/v5, con las validaciones estructurales/FK existentes y
+rechazo v6. Usa solo Cola de cuatro columnas y library_items.id/lifecycle,
+contratos conservados; no crea ni migra esquema. Consume elimina la ocurrencia
+seleccionada y compacta posiciones como antes, sin perder duplicados permitidos.
+No se modifican leases ni operaciones del servicio de reproducción.
+
+RED: v3 acepta, v4/v5 rechazan con fuente anterior. GREEN: escenarios completos
+v3/v4/v5 y cinco grupos existentes pasan en Swift5/6, con integridad/FK, rechazo
+futuro/corrupción y esquema/filas ajenas intactos. Regresión B 108 PASS y TS PASS;
+typecheck iOS16.4 Swift5/6 como biblioteca. Evidencia B1-native-queue-9ps51nwt.
+B/B.1 listos para revisión, sin commit. No iniciar C automáticamente.
+
+La misma guardia existe en el checkpoint1.8.0 y rechaza v4: registrar un posible
+parche independiente para1.8.0, previa autorización propia. No backport ahora;
+no declarar que las instalaciones actuales ya contienen esta corrección.
+
+
+## Cierre local B/B.1
+
+Revisión final de hashes y contratos satisfactoria: 108 PASS y escenarios
+nativos Swift5/6 acreditados para estas fuentes. Se autoriza/realiza commit
+local exclusivo de B. Sin push. El defecto nativo de v4 debe corregirse antes
+de publicar1.8.0; backport no realizado ni autorizado en este bloque.

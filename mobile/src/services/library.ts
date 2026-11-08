@@ -6,6 +6,7 @@ import {
   type LibraryAvailability,
   type LibraryItem,
   type LibraryMetadata,
+  type LibraryDescriptiveMetadata,
   type LibrarySourceKind,
 } from '@/models/library';
 import {
@@ -112,6 +113,71 @@ function changed() {
 export function observeLibrary(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/** Fill absent local descriptive fields only. NULL/undefined never mean erase.
+ * Existing values require a future explicit-consent operation, not this method.
+ * One guarded SQL UPDATE is atomic and cannot recreate a deleted row.
+ */
+export async function updateLocalDescriptiveMetadata(
+  id: string,
+  patch: Partial<LibraryDescriptiveMetadata>,
+): Promise<boolean> {
+  const keys = ['artist', 'album', 'genre', 'year'] as const;
+  if (
+    !patch ||
+    typeof patch !== 'object' ||
+    Array.isArray(patch) ||
+    Object.keys(patch).some(
+      (key) => !keys.includes(key as (typeof keys)[number]),
+    )
+  ) {
+    throw new Error('Metadatos descriptivos no válidos.');
+  }
+  const updates: { key: (typeof keys)[number]; value: string | number }[] = [];
+  for (const key of keys) {
+    const value = patch[key];
+    if (value == null) continue;
+    if (key === 'year') {
+      if (
+        typeof value !== 'number' ||
+        !Number.isInteger(value) ||
+        value < 1 ||
+        value > 9999
+      )
+        throw new Error('Año no válido.');
+      updates.push({ key, value });
+    } else {
+      if (typeof value !== 'string')
+        throw new Error('Texto descriptivo no válido.');
+      const text = Array.from(
+        value
+          .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      )
+        .slice(0, 240)
+        .join('');
+      if (text) updates.push({ key, value: text });
+    }
+  }
+  if (updates.length === 0) return false;
+  const absent = (key: (typeof keys)[number]) =>
+    key === 'year' ? 'year IS NULL' : `(${key} IS NULL OR trim(${key}) = '')`;
+  const assignments = updates
+    .map(
+      ({ key }) => `${key} = CASE WHEN ${absent(key)} THEN ? ELSE ${key} END`,
+    )
+    .join(', ');
+  const predicate = updates.map(({ key }) => absent(key)).join(' OR ');
+  const db = await openLibraryDatabase();
+  const result = await db.runAsync(
+    `UPDATE library_items SET ${assignments} WHERE id = ? AND sourceKind = 'local' AND lifecycle = 'ready' AND (${predicate})`,
+    ...updates.map(({ value }) => value),
+    id,
+  );
+  if (result.changes > 0) changed();
+  return result.changes > 0;
 }
 
 function validatedMetadata(meta: LibraryMetadata): LibraryMetadata {

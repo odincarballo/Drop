@@ -132,7 +132,18 @@ function seedV3(): void {
 function snapshot(table = 'library_items'): Record<string, unknown>[] {
   const db = raw();
   try {
-    return db.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all();
+    // Historical migration assertions compare all legacy fields. New nullable
+    // fields are checked explicitly in library-metadata-persistence.test.ts.
+    return db
+      .prepare(`SELECT * FROM ${table} ORDER BY 1, 2`)
+      .all()
+      .map((row) =>
+        Object.fromEntries(
+          Object.entries(row).filter(
+            ([name]) => !['artist', 'album', 'genre', 'year'].includes(name),
+          ),
+        ),
+      );
   } finally {
     db.close();
   }
@@ -165,7 +176,7 @@ function configureMocks(): void {
 
 beforeEach(() => {
   jest.resetModules();
-  directory = mkdtempSync(join(tmpdir(), 'drop-schema-v4-'));
+  directory = mkdtempSync(join(tmpdir(), 'drop-schema-v5-'));
   path = join(directory, 'library.sqlite');
   connections = [];
   injectFailure = false;
@@ -180,10 +191,10 @@ afterEach(async () => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-test('clean v0 becomes complete v4 with foreign keys and WAL', async () => {
+test('clean v0 becomes complete v5 with foreign keys and WAL', async () => {
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(await db.getFirstAsync('PRAGMA foreign_keys')).toEqual({
     foreign_keys: 1,
@@ -246,7 +257,7 @@ test('v1 migration preserves every library field and starts with no memberships 
   const before = snapshot();
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(snapshot()).toEqual(before);
   expect(
@@ -269,7 +280,7 @@ test('v2 to v4 preserves Library, progress, completion, Collections and membersh
   legacy.close();
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(snapshot()).toEqual(before);
   expect(await db.getAllAsync('SELECT * FROM collections')).toEqual(
@@ -303,7 +314,7 @@ test('v2 to v4 failure rolls back entirely and can retry', async () => {
   injectQueueFailure = false;
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(await db.getAllAsync('SELECT * FROM playback_queue')).toEqual([]);
   expect(snapshot()).toEqual(before);
@@ -315,11 +326,11 @@ const localItemSQL = `
   ) VALUES ('local-item', 'local', 'Imported', 'audio', 'ImportedMedia/a.m4a', 50, 'now', 'ready')
 `;
 
-test('clean installation accepts local and creates v4 directly', async () => {
+test('clean installation accepts local and creates v5 directly', async () => {
   const db = await openProduction();
   await db.execAsync(localItemSQL);
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(await db.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
   expect(await db.getFirstAsync('PRAGMA integrity_check')).toEqual({
@@ -344,7 +355,7 @@ test('v3 to v4 preserves every field and relation and permits a local item', asy
   expect(existingTables.map(snapshot)).toEqual(before);
   await db.execAsync(localItemSQL);
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(await db.getFirstAsync('PRAGMA foreign_keys')).toEqual({
     foreign_keys: 1,
@@ -397,7 +408,7 @@ test('v3 rebuild rolls back after dropping the parent and can be retried', async
   injectRebuildFailure = false;
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(existingTables.map(snapshot)).toEqual(before);
 });
@@ -504,7 +515,7 @@ test('v4 reopen validates without any persistent write', async () => {
   configureMocks();
   const reopened = await openProduction();
   expect(await reopened.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(connections.at(-1)?.executed).toEqual(['PRAGMA foreign_keys = ON']);
 });
@@ -541,7 +552,7 @@ test('Collection deletion cascades membership but retains LibraryItem', async ()
 
 test('future version is rejected before WAL or any schema write', async () => {
   const db = raw();
-  db.exec('PRAGMA user_version = 5');
+  db.exec('PRAGMA user_version = 6');
   db.close();
   await expect(openProduction()).rejects.toThrow(
     'versión de datos más reciente',
@@ -550,7 +561,7 @@ test('future version is rejected before WAL or any schema write', async () => {
   expect(connections[0]?.executed).toEqual([]);
   const check = raw();
   expect(check.prepare('PRAGMA user_version').get()).toEqual({
-    user_version: 5,
+    user_version: 6,
   });
   expect(check.prepare('PRAGMA journal_mode').get()).toEqual({
     journal_mode: 'delete',
@@ -665,7 +676,7 @@ test('failure after first v2 DDL rolls back and a new connection retries', async
   const db = await openProduction();
   expect(connections.filter((connection) => !connection.closed)).toEqual([db]);
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
   expect(snapshot()).toEqual(before);
 });
@@ -692,7 +703,7 @@ test('failed clean creation leaves no v1, v2 or v3 objects and can retry', async
   injectFailure = false;
   const db = await openProduction();
   expect(await db.getFirstAsync('PRAGMA user_version')).toEqual({
-    user_version: 4,
+    user_version: 5,
   });
 });
 

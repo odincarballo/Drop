@@ -6,7 +6,14 @@ export type LibraryLifecycle = 'pending' | 'ready' | 'deleting';
 export type LibraryAvailability =
   'available' | 'missing' | 'invalid' | 'unreadable';
 
-export type LibraryMetadata = {
+export type LibraryDescriptiveMetadata = {
+  artist?: string | null;
+  album?: string | null;
+  genre?: string | null;
+  year?: number | null;
+};
+
+export type LibraryMetadata = LibraryDescriptiveMetadata & {
   sourceKind: LibrarySourceKind;
   sourceVideoId?: string | null;
   title: string;

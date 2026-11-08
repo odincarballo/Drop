@@ -22,11 +22,13 @@ type ForeignKey = {
   on_delete: string;
 };
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const LIBRARY_INDEX = `CREATE INDEX library_items_recent
   ON library_items(lifecycle, downloadedAt DESC);`;
 
 function libraryTable(name: string, version: number): string {
+  const metadata =
+    version >= 5 ? ', artist TEXT, album TEXT, genre TEXT, year INTEGER' : '';
   const local = version >= 4 ? ",'local'" : '';
   return `CREATE TABLE ${name} (
     id TEXT PRIMARY KEY NOT NULL,
@@ -49,7 +51,7 @@ function libraryTable(name: string, version: number): string {
     downloadedAt TEXT NOT NULL,
     playbackPositionSeconds REAL NOT NULL DEFAULT 0,
     completedAt TEXT,
-    lifecycle TEXT NOT NULL CHECK(lifecycle IN ('pending','ready','deleting'))
+    lifecycle TEXT NOT NULL CHECK(lifecycle IN ('pending','ready','deleting'))${metadata}
   )`;
 }
 
@@ -119,6 +121,13 @@ const LIBRARY_COLUMNS: Column[] = [
   { name: 'completedAt', type: 'TEXT', notnull: 0, pk: 0 },
   { name: 'lifecycle', type: 'TEXT', notnull: 1, pk: 0 },
 ];
+const DESCRIPTIVE_COLUMNS: Column[] = [
+  { name: 'artist', type: 'TEXT', notnull: 0, pk: 0 },
+  { name: 'album', type: 'TEXT', notnull: 0, pk: 0 },
+  { name: 'genre', type: 'TEXT', notnull: 0, pk: 0 },
+  { name: 'year', type: 'INTEGER', notnull: 0, pk: 0 },
+];
+
 const COLLECTION_COLUMNS: Column[] = [
   { name: 'id', type: 'TEXT', notnull: 1, pk: 1 },
   { name: 'name', type: 'TEXT', notnull: 1, pk: 0 },
@@ -279,7 +288,13 @@ async function validateStructure(
   const found = await objects(db);
   expectObjects(found, version);
   if (version >= 1) {
-    await expectColumns(db, 'library_items', LIBRARY_COLUMNS);
+    await expectColumns(
+      db,
+      'library_items',
+      version >= 5
+        ? [...LIBRARY_COLUMNS, ...DESCRIPTIVE_COLUMNS]
+        : LIBRARY_COLUMNS,
+    );
     await expectIndex(db, 'library_items', 'library_items_recent', [
       ['lifecycle', 0],
       ['downloadedAt', 1],
@@ -408,11 +423,11 @@ async function migrate(databaseDirectoryURL: string): Promise<void> {
     if (version < SCHEMA_VERSION) {
       if (version === 0) {
         await db.execAsync(libraryTable('library_items', SCHEMA_VERSION));
-      } else {
+      } else if (version < 4) {
         const columns = LIBRARY_COLUMNS.map(({ name }) =>
           identifier(name),
         ).join(', ');
-        await db.execAsync(libraryTable('library_items_v4', SCHEMA_VERSION));
+        await db.execAsync(libraryTable('library_items_v4', 4));
         await db.execAsync(`
           INSERT INTO library_items_v4 (rowid, ${columns})
           SELECT rowid, ${columns} FROM library_items;
@@ -420,7 +435,14 @@ async function migrate(databaseDirectoryURL: string): Promise<void> {
           ALTER TABLE library_items_v4 RENAME TO library_items;
         `);
       }
-      await db.execAsync(LIBRARY_INDEX);
+      if (version < 4) await db.execAsync(LIBRARY_INDEX);
+      if (version > 0) {
+        for (const column of DESCRIPTIVE_COLUMNS) {
+          await db.execAsync(
+            `ALTER TABLE library_items ADD COLUMN ${column.name} ${column.type}`,
+          );
+        }
+      }
       if (version < 2) await db.execAsync(COLLECTIONS_SCHEMA);
       if (version < 3) await db.execAsync(QUEUE_SCHEMA);
       await validateStructure(db, SCHEMA_VERSION);
