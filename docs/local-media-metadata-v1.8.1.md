@@ -405,3 +405,137 @@ Crash conserva limitaciones y diseño futuro de journal descritos en C: no hay
 reconciliación destructiva nueva ni garantía de limpieza inmediata. Validación
 física/Pod registration/candidata requieren autorización E. Revisión D aprobada
 para único commit local; E1 autorizado por separado, sin instalación.
+
+
+## Cierre D y preflight E1 · build19 aún no generada
+
+D confirmado localmente en56ea42a4dab77f3e3251915c23d9c3b0da05b5d4.
+Versionado preparado1.8.1/19, sin cambiar dependencias ni identidad por entorno.
+La preparación de Pods para incorporar cinco Swift nuevos falló por consulta de
+índice CDN no disponible en caché privada bajo aislamiento sin red. El índice
+existe en caché global; su reutilización CP_REPOS_DIR requiere autorización del
+segundo intento, rechazado por revisión automática. Sin Xcode ni artefacto19.
+Configuración temporal restaurada; logs y recursos previos conservados.
+
+E2 sigue pendiente: inventario real, backup incremental SQLite/WAL coherente,
+medios/portadas/relaciones/Cola/progreso/preferencias, hashes/integridad/FK,
+recuperación de prueba fuera del dispositivo y actualización in-place autorizada.
+Build18 no es rollback de SQLite5. Validación física focal de importación,
+completado existente, reapertura, datos y Cola; no batería completa1.8.0.
+Sin reconciliación nueva de imágenes tras crash ni intervención sobre el iPhone.
+
+
+## E1.1 · preflight offline incompatible con resolución fijada
+
+Segundo pod install expresamente autorizado pero no ejecutado: el índice a93
+está disponible globalmente, pero su consumidor SocketRocket no figura en lock.
+RN usa un HEAD Maven para elegir prebuilt; bloquear red provoca fallback a fuentes
+antes de resolver dependencias. Debe conservarse React-Core-prebuilt y
+ReactNativeDependencies mediante preparación offline validada, sin nuevos Pods,
+versiones o respuestas HTTP simuladas. No basta reutilizar índice; ajuste adicional
+pendiente de autorización, sin cambiar scripts/dependencias ni consumir segundo
+intento. Caché global/privada y lockfiles intactos; E1/E2 no reanudados.
+
+
+## E1.2 · modo local verificado, incompatibilidad con lock exacto
+
+Archives0.86.3 Core/Deps Release íntegros y binarios ARM64 iguales a Pods existentes;
+Debug también conservado. La variable TESTONLY de Core se evaluó realmente: ruta
+local y retirada del selector de configuración, sin cambio de versión. Con ambos
+flags de Maven en0 y ambas rutas locales existentes, no hay consulta HEAD ni fallback.
+Evaluación sin instalación demuestra cambios únicamente source/script_phases en
+ambos podspecs. Esto modifica checksums del lock y --deployment lo rechaza.
+No se ejecutó pod install ni se tocaron locks/node_modules/caches. Resolver exige
+autorizar adaptación acotada de metadatos/checksums conservando grafo y versiones;
+no improvisar parche de RN o respuestas HTTP. E1 y compilación siguen pendientes.
+
+
+## E1.3 · autorización corregida, intento fallido antes de resolución
+
+Una ejecución pod install --no-repo-update autorizada, exit1/2.01s por aislamiento
+propio excesivo: git --version no podía abrir /dev/null read/write. No se analizaron
+Pods ni recalcularon checksums. Locks, podspecs, Manifest, Podfile/Gemfile y metadatos
+intactos. Red bloqueada y global caches protegidos. Excepción puntual /dev/null
+probada con Git/Node/Ruby, no reinstalación Pods. Requiere nuevo intento autorizado;
+no Xcode, E2 ni cambios del contrato de dependencias.
+
+
+## E1.3 adicional · copia generada ExpoSQLite fuera de ios
+
+Otro intento expresamente autorizado, con excepción/dev/null: exit1/2.01s antes
+ de resolución. Podspec ExpoSQLite copia vendor/sqlite3.c/.h a su ios dentro de
+node_modules, destino fuera del alcance de escritura autorizado. Destinos/source
+ya idénticos por SHA256. No ampliar permisos ni reintentar automáticamente;
+requiere autorización puntual de ambos destinos generados, sin cambiar scripts.
+Todos los locks/podspecs previos intactos; sin nuevos checksums ni candidata.
+
+
+## Recuperación offline E1.3 concluida
+
+Última autorización: pod install exit0/20.04s,116dependencias/115Pods, sin red,
+prebuilt local0.86.3 sin fallback. Lockfile y Manifest exactos, ambos checksums
+originales coinciden con JSON usados. No fue necesario alterar SPEC CHECKSUMS:
+CocoaPods reutilizó podspecs instalados. La evaluación directa E1.2 describía otros
+metadatos posibles; no demuestra un cambio inevitable al reutilizar esta instalación.
+Swift A–D registrados(15Library/15Playback/11OnDeviceYouTube). Incidencia auxiliar
+ExpoJSI conservada: intento de temporal stub denegado, seis slices ya disponibles,
+binario iOSarm64 idéntico porUUID a build18 y scripts copy/embed correctos.
+Preparación PASS, sin nuevo build/runtime ni bootstrap limpio offline probado.
+No reparar/borrar recursos ni ejecutar otro podinstall. Revalidar firma/24GiB y
+version19/configuración temporal antes de una única build autorizada por separado.
+
+
+## Cierre técnico E1/E2 · 10 de noviembre de 2026
+
+E1 PASS: build 19 de código de producción, Release ARM64/Hermes para reprotest,
+archivada y sin instrumentación diagnóstica. E2-A/B/C PASS: protección recuperable,
+instalación in-place y migración v4→v5 con IDs, datos y relaciones conservados.
+E2-D permanece PARTIAL; no equivale a aprobación integral de release.
+
+| Caso físico | Resultado acreditado |
+| --- | --- |
+| MP3/M4A: metadatos, título, artwork e importación | PASS en fixtures ensayadas; campos ausentes y artwork corrupto con fallback |
+| MP4: miniaturas y proporciones | PASS visual/técnico, dimensiones de JPEG comprobadas |
+| Actualización explícita de existente preparado | PASS en fixture nueva: cancelar diálogo no escribe; conservar título completa ausencias; reemplazo solo explícito; valores/portada válidos conservados en casos ensayados |
+| Persistencia | PASS: reaperturas y SQLite posterior al cierre; sin reapertura visual extra del título final |
+| Cola SQLite v5 | Incorporación/orden/consumo automático PASS; aislamiento del contexto PARTIAL por continuación de Biblioteca e incidente de progreso documentado |
+| Video vertical durante reproducción en retrato | PASS visual por confirmación posterior del usuario sobre grabación; centrado y sin deformación apreciable antes del avance automático |
+| Cancelación durante «Analizando…» | NOT TESTED físicamente; distinta de cancelar diálogo antes de aplicar (PASS) |
+| Orientación horizontal durante reproducción | NOT TESTED |
+| Fallo de miniatura, acción en YouTube, reproducción prolongada/fidelidad | NOT TESTED físicamente |
+
+La confirmación vertical es observación del usuario, no medición ni nueva inspección
+instrumentada. Las pruebas host históricas A–D permanecen diferenciadas; no se
+repitieron ni se suman a los resultados físicos. Las matrices históricas conservan
+su estado original: E2-D.4 cubre después las ramas de diálogo/ausencias pendientes.
+No se atribuye al diálogo nativo una opción preseleccionada: conservar título es
+una elección explícita; nunca se reemplaza sin consentimiento.
+
+Último inventario acreditado, no inspección actual: 17 elementos/17 medios/10
+portadas, una colección/una relación/Cola vacía. SQLite v5 íntegra, FK=0; conjunto
+recuperable de 35 archivos. Se protegieron una fixture nueva y otro medio local
+importado intencionalmente;
+15 filas anteriores al diagnóstico intactas. Progreso histórico afectado durante
+Cola documentado y no restaurado. Copias retenidas verificadas; medios antiguos
+reutilizados por metadatos estables, sin nuevo hash de todos sus bytes en iPhone.
+
+Build 20 es diagnóstica y última instalación acreditada en reprotest. Su código
+reside en worktree separado; no está integrado en producción. Build 19 archivada
+mantiene identidad reprotest, no original. No hacer rollback 20→19 automáticamente;
+comprobar antes compatibilidad y protección. Original protegida, sin actualización
+autorizada. Se conserva la limitación de imágenes huérfanas tras cierre abrupto,
+sin nueva reconciliación/journal. No hay defecto confirmado que bloquee el alcance
+ensayado; aceptar límites no transforma NOT TESTED en PASS.
+
+Metadatos pendientes: Expo 1.8.1/build 19 y paquetes 1.8.1, dependencias intactas.
+No acreditan identidad/configuración nativa de una futura candidata original.
+Perfil reprotest registrado hasta 11/11/2026 07:40:54 CDMX; futura operación exige
+revalidación. Cierre solo documental, sin commit, release ni nuevas operaciones.
+
+Referencias completas en [estado operativo](engineering-state.md), sección de
+cierre técnico. E1 `v1.8.1-E1-build19-reprotest-2026-11-08-9ym4dgm5`; E2-A/B/C
+con sus RESULT.json; E2-D `v1.8.1-E2D-reprotest-2026-11-08-pxl7y7sx`; diagnóstico
+`v1.8.1-E2D2-diagnostic-0dr1qkpf` y
+`v1.8.1-E2D4-diagnostic-2026-11-09-ln_llpnn`, incluidas matriz, checkpoints y
+manifiesto recuperable final. Registros de preparación anteriores son históricos,
+no condiciones vigentes. Sin alterar sus evidencias ni inventar logs físicos.

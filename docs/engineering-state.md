@@ -1,7 +1,220 @@
 # Estado operativo de Drop
 
-Actualizado: 8 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 10 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
+
+## Drop 1.8.1 · cierre técnico documental; E2-D PARTIAL
+
+Estado consolidado el 10 de noviembre de 2026, a partir de evidencias existentes
+y confirmaciones del usuario; no es una inspección nueva del iPhone.
+
+- **E1 PASS:** candidata de código de producción 1.8.1 build 19, Release iPhoneOS
+  ARM64/Hermes, archivada para `com.odincarballo.drop.reprotest`, no para la original.
+  Firma/Team y fuentes A–D acreditados; sin instrumentación diagnóstica.
+- **E2-A/B/C PASS:** protección incremental y recuperación aislada; instalación
+  in-place de build 19; primer arranque y migración SQLite v4→v5. Se conservaron
+  los nueve elementos iniciales, medios, portadas, IDs, relaciones y preferencias.
+- **E2-D PARTIAL:** MP3/M4A con etiquetas y artwork; importación sin etiquetas,
+  fallback ante artwork corrupto; miniaturas MP4 y persistencia PASS según capturas,
+  datos instrumentados y confirmaciones físicas. Reproducción offline observada,
+  sin captura instrumental de tráfico. No declarar validación física integral.
+- **E2-D.4:** cancelar el diálogo antes de aplicar, completar cuatro campos ausentes
+  conservando título y sustituirlo solo por confirmación explícita: PASS físico y
+  SQLite. Persistencia comprobada tras cierre; los campos sobrevivieron reapertura.
+  No se realizó reapertura visual adicional del título final. El diálogo nativo no
+  tiene opción preseleccionada; no se reemplaza el título sin consentimiento.
+- **Cola v5:** incorporación, orden y consumo automático PASS; aislamiento del
+  contexto PARTIAL. Tras consumir Cola continuó Biblioteca completa y cambió
+  progreso de dos elementos históricos. Incidente de procedimiento documentado,
+  sin defecto de código confirmado, sin pérdida de medios ni restauración.
+- **Video vertical en retrato PASS visual:** confirmación posterior del usuario
+  sobre grabación: `E2D-06-vertical` centrado, sin deformaciones apreciables durante
+  reproducción, antes del avance automático. No es una medición instrumentada.
+- **NOT TESTED físicamente:** cancelar durante «Analizando…»; orientación horizontal
+  durante reproducción; fallo de generación de miniatura; visibilidad de la acción
+  en YouTube; reproducción prolongada/fidelidad audible. No convertir cobertura
+  automatizada ni limitaciones aceptadas en PASS físico.
+- **Último inventario acreditado:** 17 elementos/17 medios/10 portadas, una colección,
+  una relación y Cola vacía. SQLite v5, integrity_check=ok, FK=0; conjunto recuperable
+  de 35 archivos, recuperación verificada en copias aisladas. Se protegió otro medio local
+  importado intencionalmente; 15 registros previos al diagnóstico idénticos al
+  baseline de E2-D.4. Sin restaurar progreso histórico. Archivos previos reutilizados
+  por tamaño/fecha estables y hashes de copias retenidas; no se rehashearon todos
+  los medios en el dispositivo. No se generó otro respaldo completo.
+- **Candidatas separadas:** build 20 diagnóstica, última instalación acreditada en
+  reprotest; fuentes en worktree `v1.8.1-metadata-diagnostic`, ajenas a producción.
+  No integrar esa instrumentación ni proponer build 19 sobre 20 como rollback
+  automático. Evaluar compatibilidad y proteger datos antes de cualquier cambio.
+- **Original protegida:** última versión acreditada 1.7.1/16, sin actualización
+  autorizada a 1.8.1. No se volvió a inspeccionar su contenedor en este cierre.
+- **Git:** `codex/v1.8.1-local-metadata`, HEAD
+  `56ea42a4dab77f3e3251915c23d9c3b0da05b5d4`; cinco pendientes: estos dos documentos
+  y `mobile/{app.json,package.json,package-lock.json}`. Metadatos coherentes con
+  1.8.1/19, sin cambios de dependencias ni identidad fija reprotest. Los tres JSON
+  permanecen intactos. Expo no acredita la configuración nativa futura de original.
+- **Riesgos:** imágenes propias sin asociación pueden sobrevivir un cierre abrupto
+  (sin journal nuevo); cobertura física limitada anterior. Perfil reprotest
+  registrado hasta 11/11/2026 07:40:54 CDMX: revalidar antes de uso futuro, sin
+  renovar en este cierre. Sin defecto confirmado bloqueante dentro del alcance.
+- **Siguiente paso mínimo:** revisión y aceptación explícita de limitaciones y del
+  cierre documental/metadatos antes de autorizar su commit. Una candidata original
+  requerirá autorización propia, identidad/firma/entitlements nativos originales,
+  recursos disponibles y protección actual de sus datos. No se inició release.
+
+Evidencias bajo `DropValidationEvidence`:
+`v1.8.1-E1-build19-reprotest-2026-11-08-9ym4dgm5/{VERIFICATION,CLOSURE}.json`;
+`v1.8.1-E2A-reprotest-2026-11-08-yv7ysjk5/RESULT.json`;
+`v1.8.1-E2B-reprotest-2026-11-08-mpk2wt35/RESULT.json`;
+`v1.8.1-E2C-reprotest-2026-11-08-e19o9i_v/RESULT.json`;
+`v1.8.1-E2D-reprotest-2026-11-08-pxl7y7sx/VALIDATION-MATRIX.json`;
+`v1.8.1-E2D2-diagnostic-0dr1qkpf/{DIAGNOSTIC-INPUTS,CLOSURE}.json`;
+`v1.8.1-E2D4-diagnostic-2026-11-09-ln_llpnn/{SUMMARY.md,VALIDATION-MATRIX.json}`
+y `final-checkpoint/{RESULT,RECOVERY-MANIFEST,PROJECT-CHECK}.json`.
+La confirmación posterior de orientación vertical procede del usuario en este chat;
+no se inventó ni archivó una grabación no proporcionada. Las entradas siguientes
+son historia de ejecución; sus bloqueos y «no ejecutado» no describen el estado actual.
+
+## Drop 1.8.1 · CocoaPods offline preparado; listo para preflight de build19
+
+- Último intento expresamente autorizado: pod install --no-repo-update exit0,
+  20.04s,116 dependencias/115Pods. Red denegada; escrituras limitadas a ios,
+  /dev/null y exactamente los dos destinos SQLite generados, hashes idénticos.
+- Prebuilt React0.86.3 local seleccionado sin fallback a fuentes; todos los
+  archives originales y dependencias JS intactos. Podfile.lock y Manifest.lock
+  idénticos byte a byte a referencia. Ninguna sección, versión, grafo ni checksum
+  cambió. Checksums actuales coinciden con los JSON realmente usados. No forzar
+  recálculo: CocoaPods conservó especificaciones instaladas; la comparación E1.2
+  de evaluación directa no implicaba un cambio obligatorio del lock en este caso.
+- Workspace válido: DropLibrary15/DropPlayback15/OnDeviceYouTube11Swift; todos los
+  archivos actuales de A–D registrados en sus targets y configuración Release.
+- Incidencia conservada: clang no pudo crear temporal .stub-binary de ExpoModulesJSI
+  por límite de escritura. No se ignoró por exit0: seis slices ya presentes,
+  iPhoneOSarm64 real con UUID9E0AE7EE-4753-377E-BC98-B5AFDF349709 idéntico al
+  build18 validado, copy/embed generado. Sin reparación ni modificación binaria.
+- Inventario de435 archivos regenerados/tocados en raíces nativas conocidas,
+  con hashes; no afirmar diferencias byte a byte sin snapshot anterior completo.
+  Preparación PASS para iPhoneOS ARM64; no demuestra bootstrap limpio offline.
+- Evidencia actual en continuidad. Cinco pendientes conservados, D HEAD56ea42a...
+  intacto; sin commits/push/main/apps. GO técnico para preflight de compilación19
+  con autorización independiente; NO Xcode/build/instalación/E2 ejecutados.
+
+## Drop 1.8.1 · E1.3 /dev/null: único intento adicional fallido
+
+- Autorización «sí» aplicada a un solo pod install offline. Exit1/2.01s antes de
+  resolución; /dev/null corregido. ExpoSQLite.podspec34 intenta copiar vendor/sqlite3
+  a node_modules/expo-sqlite/ios/sqlite3.c y sqlite3.h, fuera de ios autorizado.
+  Política lo impidió. El preflight previo no había identificado esa escritura.
+- Ambos destinos ya existen y coinciden byte a byte con vendor; hashes archivados.
+  Inspección focal de podspecs detectó esa copia explícita; no garantiza todas las
+  escrituras dinámicas posibles. Propuesta: autorizar exclusivamente esos dos
+  destinos generados, con verificación de hashes posterior, sin permitir escribir
+  scripts/node_modules en general. No se aplicó ni se reintentó.
+- Locks, Manifest, dos podspecs, metadatos y archivos previos respaldados intactos.
+  No checksums nuevos, dependencias, descargas ni módulos nuevos registrados.
+  Cinco pendientes conservados; docs/continuidad registran resultado. No Xcode,
+  commits, main, dispositivos ni limpieza. BLOCKED/NO-GO build19.
+
+## Drop 1.8.1 · E1.3: intento único fallido antes de resolución
+
+- Autorización corregida recibida para source/script_phases locales y dos checksums.
+  Verificados los cuatro archives contra hashes E1.2; backup lockfile/Manifest y
+  podspecs en evidencia independiente. Se ejecutó exactamente un pod install
+  --no-repo-update con red denegada, rutas Release locales y escritura confinada a ios.
+- Exit1 en2.01s, antes de analizar Pods: perfil propio negaba acceso read/write a
+  /dev/null usado por git --version. Error de configuración de aislamiento, no de
+  Git, CocoaPods, artefactos o grafo. No culpar al lock ni al entorno Ruby por esto.
+- Comparación posterior: los doce archivos respaldados intactos (locks, Manifest,
+  dos podspecs, Podfile/Gemfile, metadatos y dos documentos previos). Ningún checksum
+  nuevo, descarga o cambio de grafo. Nuevos módulos todavía no registrados en Pods.
+- Corrección propuesta del perfil: permitir solo /dev/null además de ios, mantener
+  deny network*. Probados git/node/ruby --version con exit0. NO segundo pod install.
+  Próximo intento requiere autorización expresa; no ampliar permisos silenciosamente.
+- Cinco pendientes conservados; docs/continuidad actualizados con este resultado.
+  Sin commits/main/checkpoint/apps/Xcode. Evidencia E1.3-offline en continuidad.
+  BLOCKED/NO-GO build19; no E2. Conservar logs y archivos temporales de la operación.
+
+## Drop 1.8.1 · E1.2: prebuilt offline probado; lock exacto bloquea instalación
+
+- ReactNative0.86.3 instalado. Cuatro archives Core/Deps Debug/Release presentes,
+  SHA256 y CRCgzip comprobados. Release: slices iPhoneOS ARM64, binarios idénticos
+  a Pods de build18. Versionado acreditado por paquete/podspec/lock/procedencia;
+  Info.plist del framework dice1.0, no usarlo como prueba de versión0.86.3.
+  Hermes250829098.0.17 y slice iPhoneOS ARM64 presentes. Sin extracción/descargas.
+- Evaluación real de podspecs, sin pod install y con red denegada: flags
+  RCT_USE_RN_DEP=0/RCT_USE_PREBUILT_RNCORE=0 evitan HEAD; rutas locales verificadas
+  RCT_USE_LOCAL_RN_DEP y RCT_TESTONLY_RNCORE_TARBALL_PATH fuerzan prebuilt.
+  Ambos Building from source:false. No overrides de versión ni respuestas falsas.
+- Variables locales cambian source HTTPS→file y eliminan script_phases selector
+  Debug/Release en ambos podspecs; sus dependencias/versiones no cambian. Generan
+  nuevos checksums frente a los dos SPEC CHECKSUMS fijados. El instalador1.16.2
+  verify_no_lockfile_changes! rechaza diferencias con --deployment.
+- BLOCKED antes de pod install: restricción de lock inmutable incompatible con
+  mecanismos locales directos comprobados. Cero intentos consumidos en E1.2.
+  No modificar node_modules, caches o locks. No parchear selectores ni simular Maven.
+- Alternativa mínima propuesta: autorizar metadatos de origen/selector/checksum de
+  esos dos podspecs para Release local, con versiones/grafo idénticos y diff acotado
+  verificado antes de aplicar; requiere ajuste autorizado del lock, no realizado.
+- Cinco pendientes conservados; docs/continuidad reciben este registro, tres
+  metadatos sin cambios. Main/checkpoint/apps intactos. Sin Xcode/instalación/commit.
+  Evidencia E1.2-prebuilt actual en continuidad. NO-GO E1 hasta resolver restricción.
+
+## Drop 1.8.1 · E1.1 detenido en preflight; segundo intento no ejecutado
+
+- Autorización expresa de segundo pod install offline recibida. Rama/HEAD y cinco
+  pendientes conservados. Índice global all_pods_versions_a_9_3.txt íntegro como
+  archivo regular2359 bytes; SHA256 b6b3057b5644d268c88362ae55e93401652e649a235346a3957d7460c55d89d0.
+  Entradas corresponden al shardMD5 a93; contiene SocketRocket, ausente del lock.
+- Causa ampliada demostrada en scripts RN locales: artifact_exists ejecuta curl
+  HEAD a Maven. Sin red, artifacts_exists=false y setup cambia de prebuilt a
+  fuentes, incorporando SocketRocket. El lock conserva React-Core-prebuilt y
+  ReactNativeDependencies; obtener el índice no acredita ese grafo congelado.
+- No se ejecutó el segundo intento: preflight no puede confirmar correspondencia
+  con dependencias fijadas. No copias/cambios de cachés, lockfiles ni fuentes.
+  No desbloquear red ni simular comprobaciones HTTP. No nuevo rechazo automático.
+- Existen archives locales ReactNativeDependencies0.86.3 debug/release; posible
+  ajuste offline con binarios cacheados requiere contrato/autorización adicional,
+  verificación de los archives de ambos componentes y resolver sin cambiar grafo.
+  No aplicado. E1/E2 siguen BLOCKED; no Xcode/instalación/commit.
+
+## Drop 1.8.1 · D cerrado; E1 bloqueado antes de Xcode
+
+- D cerrado localmente en56ea42a4dab77f3e3251915c23d9c3b0da05b5d4, padre C/C.1.
+  Diez rutas exclusivamente;172 Jest y12checks Swift/modo reutilizados por hashes
+  coincidentes. Sin push/merge/tags; main/checkpoint/apps intactos.
+- Metadatos preparados sin commit:1.8.1/build19, identidad por entorno reprotest.
+  Dependencias JSON y gemas sin cambios. Node22.19, Ruby4.0.7/Bundler2.4.22,
+  CocoaPods1.16.2 y cinco archives fijados SHA PASS; Python ARM64 y QuickJS presentes.
+  Perfil de reprotest verificado, con vencimiento registrado el
+  11/11/2026 07:40:54 CDMX, TeamHK927RUDLZ/certificado coincidente.
+- Faltan cinco fuentes nuevas de A–D en el proyecto generado Pods. Una preparación
+  necesaria pod install --deployment --no-repo-update, red bloqueada, falló64.27s
+  antes de generar proyecto: índice CDN all_pods_versions_a_9_3.txt ausente en
+  caché privada. No descarga ni cambios de dependencias. Locks y Pods.xcodeproj
+  conservan hashes; codegen ignorado regenerado por la preparación fallida.
+- Alternativa acreditada: índice ya presente en caché global, reutilizable mediante
+  CP_REPOS_DIR oficial. Segundo intento aislado/con caché global solo lectura
+  RECHAZADO por revisión automática de aprobación; no llegó a ejecutarse. Exige
+  autorización específica para repetir pod install; no encadenar alternativas.
+- Xcode/build NO ejecutados, no artefacto19 ni SHA. Info.plist nativo temporal
+  restaurado byte a byte; conservar metadatos versionados preparados. Sin renovar
+  firma, pruebas host repetidas, acceso a contenedores, builds o instalaciones.
+- Evidencia: DropValidationEvidence/v1.8.1-E1-build19-m17y1rj7/RESULT.json.
+  BLOCKED E1/NO-GO E2 hasta sincronizar fuentes y verificar candidata firmada.
+
+### E2 previsto, sin ejecutar
+
+Cerrar solo reprotest con autorización E2; identificar versión e inventario real,
+SQLite/WAL coherentes, IDs/medios/portadas/relaciones/Cola/progreso/preferencias.
+Comparar respaldo previo, proteger diferencias incrementalmente, hashes/integridad
+/FK y manifiesto recuperable. Ensayar recuperación en destino host independiente,
+con inventario y hashes coincidentes, sin restaurar sobre el iPhone. Revalidar
+artefacto19/perfil/firma/dispositivo y ejecutar una sola actualización in-place
+únicamente tras autorización. Luego comparar inventario y migración v4→v5.
+Build18 no revierte esquema5; conservar backup pre-v5 para recuperación autorizada.
+Cinco pruebas físicas focales: importar con etiquetas/portada; completar existente;
+persistencia al reabrir; datos anteriores; Cola con v5. No repetir toda1.8.0.
+Crash de imágenes sin journal sigue pendiente: pueden quedar restos propios sin
+asociar; no ampliar E1 ni limpiar Artwork. E2 NO iniciado.
 
 ## Drop 1.8.1 · D revisado para cierre local
 
