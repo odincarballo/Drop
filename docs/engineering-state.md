@@ -1,9 +1,47 @@
 # Estado operativo de Drop
 
-Actualizado: 10 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 11 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Drop 1.8.1 · cierre técnico documental; E2-D PARTIAL
+## Drop 1.8.1 · cierre de la original del 11/11/2026
+
+- **Actualización PASS.** Drop original `com.odincarballo.mediadrop` pasó de
+  1.7.1 build 16 a 1.8.1 build 19 en una sola instalación in-place.
+- **Migración PASS.** Biblioteca cargó en el único primer arranque manual.
+  SQLite pasó de v3 a v5 con `integrity_check=ok` y FK=0. Se añadieron
+  `artist`, `album`, `genre` y `year` con valores nulos. Se verificó la
+  recuperación de los 39 archivos sobre una copia aislada.
+- **Validación funcional PARTIAL.** Biblioteca, Colecciones, búsqueda,
+  Lista/Cuadrícula y portadas PASS por confirmación física del usuario.
+  Apertura del reproductor NOT TESTED: seleccionar un elemento de Biblioteca
+  inicia la reproducción y puede modificar el progreso.
+- **Cierre técnico PASS.** Tras el cierre de la app, SQLite v5 conservó
+  `integrity_check=ok` y FK=0. Los mismos 17 identificadores, 17 medios,
+  16 portadas, una colección, cero relaciones y Cola vacía. Progreso y
+  preferencias coincidieron con la captura posterior a la migración.
+  El episodio eliminado intencionalmente sigue ausente del inventario y
+  no debe restaurarse.
+- La build 19 original usa código de producción y tiene su propio artefacto
+  firmado. La build 20 de reprotest es diagnóstica y su instrumentación
+  permanece en el worktree separado. E2-D conserva el resultado PARTIAL
+  y los casos NOT TESTED registrados en el cierre histórico.
+- El perfil original incorporado vence el 11/11/2026 a las 11:56:12 CDMX.
+  La vigencia deberá verificarse antes de cualquier ejecución futura.
+
+Evidencias bajo `DropValidationEvidence`:
+
+- Original: `v1.8.1-build19-original-continued-2026-11-10-393velud/CLOSURE.json`.
+- Instalación y protección v3: `v1.8.1-original-install-2026-11-11-0y37pjgk/`
+  (`RESULT.json`, `INCREMENTAL-RECOVERY-MANIFEST.json`).
+- Primer arranque y recuperación v5: `v1.8.1-original-first-launch-2026-11-11-ujd5sd8i/`
+  (`RESULT.json`, `RECOVERY-MANIFEST-v5.json`).
+- Cierre funcional: `v1.8.1-original-functional-2026-11-11-wf9a8j0m/RESULT.json`.
+
+**GO condicionado para revisión de integración en main.** Aceptar los casos
+físicos pendientes y revisar el delta final sin instrumentación diagnóstica.
+Consolidar este registro y obtener autorización específica antes de integrar.
+
+## Drop 1.8.1 · cierre histórico de reprotest del 10/11/2026; E2-D PARTIAL
 
 Estado consolidado el 10 de noviembre de 2026, a partir de evidencias existentes
 y confirmaciones del usuario; no es una inspección nueva del iPhone.
