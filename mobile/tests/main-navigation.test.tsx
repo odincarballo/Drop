@@ -1,3 +1,4 @@
+import { resetDownloadRecoveryFixture } from './support/downloadRecoverySQLite';
 import { useLayoutEffect } from 'react';
 import {
   act,
@@ -8,6 +9,7 @@ import {
 } from '@testing-library/react-native';
 import {
   ActionSheetIOS,
+  AppState,
   Keyboard,
   StyleSheet,
   type KeyboardEvent,
@@ -223,6 +225,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 beforeEach(async () => {
+  AppState.currentState = 'active';
+  await resetDownloadRecoveryFixture();
   await AsyncStorage.clear();
   jest.mocked(listLibrary).mockResolvedValue([mockItem]);
   jest.mocked(getLibraryItem).mockResolvedValue(mockItem);

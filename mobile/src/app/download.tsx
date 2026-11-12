@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionButton } from '@/components/ActionButton';
 import { DownloadOptions } from '@/components/DownloadOptions';
+import { DownloadRecoveryCard } from '@/components/DownloadRecoveryCard';
 import { DownloadStatusCard } from '@/components/DownloadStatusCard';
 import { MetadataCard } from '@/components/MetadataCard';
 import { LocalYoutubeDiagnosticsCard } from '@/components/LocalYoutubeDiagnosticsCard';
@@ -35,6 +36,9 @@ export default function HomeScreen() {
     download,
     localYoutube,
     isBusy,
+    recovery,
+    needsLink,
+    retryRecovered,
     changeUrl,
     newDownload,
     runAnalysis,
@@ -80,80 +84,99 @@ export default function HomeScreen() {
               Descarga archivos multimedia
             </Text>
           </View>
-          <View style={styles.composer}>
-            <Text style={[styles.label, { color: colors.text }]}>Enlace</Text>
-            <View style={styles.inputRow}>
-              <TextInput
-                accessibilityLabel="URL del recurso multimedia"
-                accessibilityHint="Introduce una dirección completa HTTP o HTTPS"
-                placeholder="https://example.com/video.mp4"
-                placeholderTextColor={colors.secondary}
-                selectionColor={colors.accent}
-                value={url}
-                onChangeText={changeUrl}
-                editable={!isBusy}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                returnKeyType="go"
-                textContentType="URL"
-                maxLength={config.maxUrlLength}
-                onSubmitEditing={() => void runAnalysis()}
-                style={[
-                  styles.input,
-                  {
-                    color: colors.text,
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                  },
-                ]}
-              />
-              <ActionButton
-                label="Pegar"
-                secondary
-                disabled={isBusy}
-                loading={isPasting}
-                onPress={() => void pasteUrl()}
-              />
-            </View>
-            {state.status === 'error' && (
-              <View
-                style={[
-                  styles.error,
-                  { backgroundColor: colors.errorBackground },
-                ]}
-              >
-                <Text
-                  accessibilityRole="alert"
-                  accessibilityLiveRegion="assertive"
-                  style={[styles.errorText, { color: colors.error }]}
-                >
-                  {state.message}
-                </Text>
-              </View>
-            )}
-            <ActionButton
-              label={
-                state.status === 'loading' || spike.state.status === 'loading'
-                  ? 'Analizando…'
-                  : 'Analizar'
-              }
-              disabled={isBusy}
-              loading={state.status === 'loading'}
-              onPress={() => void runAnalysis()}
-            />
-            <Text style={[styles.notice, { color: colors.secondary }]}>
-              Utiliza únicamente contenido que tengas permiso para descargar.
+          <DownloadRecoveryCard
+            recovery={recovery}
+            onRetry={() => void retryRecovered()}
+          />
+          {(download.persistenceError || spike.persistenceError) && (
+            <Text accessibilityRole="alert" style={{ color: colors.error }}>
+              {download.persistenceError ?? spike.persistenceError}
             </Text>
-          </View>
-          {localYoutube && spike.state.status !== 'idle' && (
-            <LocalYoutubeMainCard
-              spike={spike}
-              disabled={isBusy}
-              onNewDownload={newDownload}
-            />
           )}
-          {localYoutube &&
+          {!recovery.record && (
+            <View style={styles.composer}>
+              {needsLink && (
+                <Text style={{ color: colors.secondary }}>
+                  Introduce el enlace de nuevo y elige el formato.
+                </Text>
+              )}
+              <Text style={[styles.label, { color: colors.text }]}>Enlace</Text>
+              <View style={styles.inputRow}>
+                <TextInput
+                  accessibilityLabel="URL del recurso multimedia"
+                  accessibilityHint="Introduce una dirección completa HTTP o HTTPS"
+                  placeholder="https://example.com/video.mp4"
+                  placeholderTextColor={colors.secondary}
+                  selectionColor={colors.accent}
+                  value={url}
+                  onChangeText={changeUrl}
+                  editable={!isBusy}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  returnKeyType="go"
+                  textContentType="URL"
+                  maxLength={config.maxUrlLength}
+                  onSubmitEditing={() => void runAnalysis()}
+                  style={[
+                    styles.input,
+                    {
+                      color: colors.text,
+                      backgroundColor: colors.surface,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                />
+                <ActionButton
+                  label="Pegar"
+                  secondary
+                  disabled={isBusy}
+                  loading={isPasting}
+                  onPress={() => void pasteUrl()}
+                />
+              </View>
+              {state.status === 'error' && (
+                <View
+                  style={[
+                    styles.error,
+                    { backgroundColor: colors.errorBackground },
+                  ]}
+                >
+                  <Text
+                    accessibilityRole="alert"
+                    accessibilityLiveRegion="assertive"
+                    style={[styles.errorText, { color: colors.error }]}
+                  >
+                    {state.message}
+                  </Text>
+                </View>
+              )}
+              <ActionButton
+                label={
+                  state.status === 'loading' || spike.state.status === 'loading'
+                    ? 'Analizando…'
+                    : 'Analizar'
+                }
+                disabled={isBusy}
+                loading={state.status === 'loading'}
+                onPress={() => void runAnalysis()}
+              />
+              <Text style={[styles.notice, { color: colors.secondary }]}>
+                Utiliza únicamente contenido que tengas permiso para descargar.
+              </Text>
+            </View>
+          )}
+          {!recovery.record &&
+            localYoutube &&
+            spike.state.status !== 'idle' && (
+              <LocalYoutubeMainCard
+                spike={spike}
+                disabled={isBusy}
+                onNewDownload={newDownload}
+              />
+            )}
+          {!recovery.record &&
+            localYoutube &&
             hasLocalYoutubeEngine() &&
             spike.state.status !== 'idle' && (
               <>
@@ -178,10 +201,11 @@ export default function HomeScreen() {
                 )}
               </>
             )}
-          {!localYoutube && state.status === 'success' && (
+          {!recovery.record && !localYoutube && state.status === 'success' && (
             <MetadataCard state={state} />
           )}
-          {!localYoutube &&
+          {!recovery.record &&
+            !localYoutube &&
             state.status === 'success' &&
             download.state.status !== 'completed' &&
             !download.isActive && (
@@ -189,13 +213,13 @@ export default function HomeScreen() {
                 media={state.data}
                 selection={state.selection}
                 onSelect={select}
-                disabled={download.isActive || spike.isBusy}
+                disabled={isBusy}
                 onDownload={() =>
                   void download.start(state.data, state.selection)
                 }
               />
             )}
-          {!localYoutube && (
+          {!recovery.record && !localYoutube && (
             <DownloadStatusCard
               state={download.state}
               onCancel={() => void download.cancel()}

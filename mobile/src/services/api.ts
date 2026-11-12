@@ -14,6 +14,7 @@ type RequestOptions<T> = {
   method?: 'GET' | 'POST' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
+  beforeSend?: () => void;
   schema: z.ZodType<T>;
 };
 
@@ -37,6 +38,7 @@ export function createApiClient({
       try {
         const token = await getToken?.();
         if (controller.signal.aborted) throw new Error('Request aborted');
+        options.beforeSend?.();
         const response = await (fetcher ?? fetch)(
           `${baseUrl.replace(/\/+$/, '')}${path}`,
           {

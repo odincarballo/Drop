@@ -6,7 +6,17 @@ import {
   selectedDownloadRequest,
   type DownloadSelection,
 } from '@/models/selection';
-import { ApiError, jobError } from '@/services/errors';
+import {
+  DownloadRecoveryError,
+  rememberDownload,
+  type DownloadAttempt,
+  type DownloadRecord,
+} from '@/services/downloadRecovery';
+import {
+  ApiError,
+  DownloadStartInterrupted,
+  jobError,
+} from '@/services/errors';
 import { withNamedLibraryFile } from '@/services/fileExport';
 import { promoteToLibrary, withLibraryLease } from '@/services/library';
 import {
@@ -52,8 +62,15 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-export function useMediaDownload() {
+export function useMediaDownload(
+  foregroundGeneration: () => number | null,
+  canStart: () => boolean,
+  onInterrupted: (record: DownloadRecord) => void,
+) {
   const [state, setState] = useState<DownloadState>({ status: 'idle' });
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
+  const attempt = useRef<Promise<DownloadAttempt> | null>(null);
+  const committing = useRef(false);
   const mounted = useRef(true);
   const active = useRef(false);
   const operation = useRef(0);
@@ -66,13 +83,14 @@ export function useMediaDownload() {
     return () => {
       mounted.current = false;
       controller.current?.abort();
-      if (jobId.current)
-        void deleteDownloadJob(jobId.current).catch(() => undefined);
     };
   }, []);
 
   async function start(media: MediaAnalysis, selection: DownloadSelection) {
-    if (active.current) return;
+    if (active.current || !canStart()) return;
+    const foreground = foregroundGeneration();
+    if (foreground === null) return;
+    const isStillForeground = () => foregroundGeneration() === foreground;
     if (media.source !== 'direct' && media.source !== 'youtube') {
       setState({
         status: 'error',
@@ -84,21 +102,49 @@ export function useMediaDownload() {
     if (!downloadRequest) return;
 
     active.current = true;
+    jobId.current = null;
     const currentOperation = ++operation.current;
     const requestController = new AbortController();
     controller.current = requestController;
     setState({ status: 'creating' });
-    let ownedJobId: string | null = null;
+    setPersistenceError(null);
+    const recorded = rememberDownload({
+      source: 'direct',
+      selection: { mode: selection.type },
+    });
+    attempt.current = recorded;
+    let journal: DownloadAttempt | undefined;
     const isCurrent = () =>
       mounted.current &&
       operation.current === currentOperation &&
       !requestController.signal.aborted;
     try {
-      let job = await createDownloadJob(
-        downloadRequest,
-        requestController.signal,
-      );
-      ownedJobId = job.id;
+      journal = await recorded;
+      if (!isCurrent()) return;
+      const ownsReservation = await journal.ownsReservation();
+      if (!isCurrent()) return;
+      if (!ownsReservation) {
+        setState({ status: 'idle' });
+        return;
+      }
+      let job: DownloadJob;
+      try {
+        if (!isStillForeground()) throw new DownloadStartInterrupted();
+        job = await createDownloadJob(
+          downloadRequest,
+          requestController.signal,
+          isStillForeground,
+        );
+      } catch (error) {
+        if (!(error instanceof DownloadStartInterrupted)) throw error;
+        if (!isCurrent()) return;
+        const interrupted = await journal.interrupt();
+        if (isCurrent()) {
+          setState({ status: 'idle' });
+          if (interrupted) onInterrupted(interrupted);
+        }
+        return;
+      }
       // A cancelled creation may still resolve. Never adopt it into a new
       // session or start its transfer, even if the transport ignored abort.
       if (!isCurrent()) {
@@ -106,15 +152,23 @@ export function useMediaDownload() {
         return;
       }
       jobId.current = job.id;
+      const accepted = await journal.update(
+        'downloading',
+        job.bytesDownloaded,
+        job.id,
+      );
+      if (!accepted || !isCurrent()) return;
       while (
         job.status === 'PENDING' ||
         job.status === 'PREPARING' ||
         job.status === 'DOWNLOADING' ||
         job.status === 'PROCESSING'
       ) {
-        if (mounted.current && operation.current === currentOperation) {
-          setState({ status: 'downloading', job });
-        }
+        journal.observe(
+          job.status === 'PROCESSING' ? 'processing' : 'downloading',
+          job.bytesDownloaded,
+        );
+        setState({ status: 'downloading', job });
         await pause(config.jobPollIntervalMs, requestController.signal);
         if (requestController.signal.aborted) return;
         job = await getDownloadJob(job.id, requestController.signal);
@@ -122,24 +176,25 @@ export function useMediaDownload() {
       }
       if (job.status === 'FAILED') throw jobError(job.error?.code);
       if (job.status === 'CANCELLED') {
-        if (mounted.current) setState({ status: 'cancelled' });
+        await journal.cancel();
+        if (isCurrent()) setState({ status: 'cancelled' });
         return;
       }
       if (job.status !== 'COMPLETED') throw jobError('DOWNLOAD_FAILED');
 
-      if (mounted.current && operation.current === currentOperation) {
-        setState({
-          status: 'transferring',
-          job,
-          bytesDownloaded: 0,
-          totalBytes: job.fileSize,
-        });
-      }
+      if (!(await journal.update('transferring')) || !isCurrent()) return;
+      setState({
+        status: 'transferring',
+        job,
+        bytesDownloaded: 0,
+        totalBytes: job.fileSize,
+      });
       const file = await downloadJobFile(
         job,
         requestController.signal,
         (bytesDownloaded, totalBytes) => {
-          if (mounted.current && operation.current === currentOperation) {
+          if (isCurrent() && !committing.current) {
+            journal?.observe('transferring', bytesDownloaded);
             setState({
               status: 'transferring',
               job,
@@ -149,16 +204,23 @@ export function useMediaDownload() {
           }
         },
       );
-      if (
-        requestController.signal.aborted ||
-        operation.current !== currentOperation ||
-        !mounted.current
-      ) {
+      if (!isCurrent()) {
         deleteLocalFile(file.uri);
         return;
       }
-      if (mounted.current && operation.current === currentOperation)
-        setState({ status: 'saving', job });
+      let canSave: boolean;
+      try {
+        canSave = await journal.update('saving', file.size);
+      } catch (error) {
+        deleteLocalFile(file.uri);
+        throw error;
+      }
+      if (!canSave || !isCurrent()) {
+        deleteLocalFile(file.uri);
+        return;
+      }
+      committing.current = true;
+      setState({ status: 'saving', job });
       const video =
         'videoIndex' in selection && selection.videoIndex !== null
           ? media.videoFormats[selection.videoIndex]
@@ -181,6 +243,7 @@ export function useMediaDownload() {
           selection.type === 'AUDIO_ONLY' ? audio?.container : video?.container,
       });
       // The source was moved. A visual reset must never delete Library media.
+      await journal.finish().catch(() => undefined);
       localUri.current = null;
       if (operation.current === currentOperation) jobId.current = null;
       void deleteDownloadJob(job.id).catch(() => undefined);
@@ -195,9 +258,22 @@ export function useMediaDownload() {
         });
       }
     } catch (error) {
-      if (ownedJobId) {
-        void deleteDownloadJob(ownedJobId).catch(() => undefined);
-        if (operation.current === currentOperation) jobId.current = null;
+      if (isCurrent()) {
+        const failedJob = jobId.current;
+        jobId.current = null;
+        if (failedJob) void deleteDownloadJob(failedJob).catch(() => undefined);
+        if (!(
+          error instanceof DownloadRecoveryError &&
+          error.code === 'DOWNLOAD_INTERRUPTION'
+        ))
+          await journal
+            ?.fail(
+              error instanceof ApiError &&
+                ['JOB_NOT_FOUND', 'FILE_EXPIRED'].includes(error.code)
+                ? 'REMOTE_EXPIRED'
+                : 'DOWNLOAD_FAILED',
+            )
+            .catch(() => undefined);
       }
       if (
         mounted.current &&
@@ -207,10 +283,10 @@ export function useMediaDownload() {
         setState({
           status: 'error',
           message:
-            error instanceof ApiError
+            error instanceof ApiError || error instanceof DownloadRecoveryError
               ? error.message
-              : error instanceof Error
-                ? `No se pudo guardar en Biblioteca: ${error.message}`
+              : !journal
+                ? 'No se pudo guardar el estado de la descarga. Inténtalo de nuevo.'
                 : 'No se pudo guardar en Biblioteca. Inténtalo de nuevo.',
         });
       }
@@ -218,12 +294,29 @@ export function useMediaDownload() {
       if (operation.current === currentOperation) {
         active.current = false;
         controller.current = null;
+        attempt.current = null;
+        committing.current = false;
       }
     }
   }
 
   async function cancel() {
-    if (!active.current) return;
+    if (!active.current || !attempt.current || committing.current) return;
+    const currentOperation = operation.current;
+    const recorded = attempt.current;
+    try {
+      const journal = await recorded;
+      if (!(await journal.cancel()) || operation.current !== currentOperation)
+        return;
+    } catch {
+      if (mounted.current && operation.current === currentOperation)
+        setPersistenceError(
+          'No se pudo registrar la cancelación. Inténtalo de nuevo.',
+        );
+      return;
+    }
+    setPersistenceError(null);
+    attempt.current = null;
     const cancellation = ++operation.current;
     controller.current?.abort();
     const currentJobId = jobId.current;
@@ -256,7 +349,9 @@ export function useMediaDownload() {
   }
 
   function reset() {
+    if (active.current) return;
     ++operation.current;
+    setPersistenceError(null);
     controller.current?.abort();
     controller.current = null;
     active.current = false;
@@ -274,5 +369,14 @@ export function useMediaDownload() {
     'transferring',
     'saving',
   ].includes(state.status);
-  return { state, isActive, start, cancel, share, reset };
+  return {
+    state,
+    isActive,
+    hasActiveOperation: () => active.current,
+    start,
+    cancel,
+    share,
+    reset,
+    persistenceError,
+  };
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import * as SecureStore from 'expo-secure-store';
 
 import { config } from '@/config';
 import { mediaAnalysisSchema } from '@/models/media';
@@ -83,6 +84,34 @@ test('job service creates and cancels a typed job', async () => {
     `${config.apiBaseUrl}/jobs/job-1`,
     expect.objectContaining({ method: 'DELETE' }),
   );
+});
+
+test('a job POST is withheld if foreground ownership changes during token lookup', async () => {
+  let releaseToken!: (token: string) => void;
+  jest.mocked(SecureStore.getItemAsync).mockReturnValueOnce(
+    new Promise((resolve) => {
+      releaseToken = resolve;
+    }),
+  );
+  const fetchSpy = jest
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValue(jsonResponse({ id: 'job-1', status: 'PENDING' }));
+  let active = true;
+  const job = createDownloadJob(
+    {
+      mediaId: 'direct-media',
+      downloadType: 'VIDEO_AUDIO',
+      formatId: 'original',
+    },
+    undefined,
+    () => active,
+  );
+  active = false;
+  releaseToken('test-token-0123456789abcdef0123456789abcdef');
+  await expect(job).rejects.toMatchObject({
+    code: 'DOWNLOAD_START_INTERRUPTED',
+  });
+  expect(fetchSpy).not.toHaveBeenCalled();
 });
 
 test('job service sends typed YouTube audio conversion choices', async () => {

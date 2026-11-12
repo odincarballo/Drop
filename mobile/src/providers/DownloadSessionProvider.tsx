@@ -5,6 +5,8 @@ import {
   type PropsWithChildren,
 } from 'react';
 
+import { useDownloadRecovery } from '@/hooks/useDownloadRecovery';
+import { useDownloadForeground } from '@/hooks/useDownloadForeground';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
 import { useMediaAnalysis } from '@/hooks/useMediaAnalysis';
 import { useMediaDownload } from '@/hooks/useMediaDownload';
@@ -12,37 +14,90 @@ import { isYoutubeUrl } from '@/services/onDeviceYoutube';
 
 function useSession() {
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
-  const spike = useLocalYoutubeSpike();
+  const recovery = useDownloadRecovery();
+  const foregroundGeneration = useDownloadForeground();
   const {
     url,
     state,
     isBusy: isAnalyzing,
     isPasting,
     updateUrl,
-    pasteUrl,
+    isPastePending,
+    pasteUrl: readClipboard,
     analyze,
     resetAnalysis,
     select,
-  } = useMediaAnalysis(() => {
+  } = useMediaAnalysis();
+  const canStartDownload = () =>
+    recovery.loaded && !recovery.record && !isPastePending();
+  const spike = useLocalYoutubeSpike(
+    foregroundGeneration,
+    canStartDownload,
+    recovery.showInterrupted,
+  );
+  const download = useMediaDownload(
+    foregroundGeneration,
+    canStartDownload,
+    recovery.showInterrupted,
+  );
+  const canChangeInput = () =>
+    !recovery.record &&
+    !download.hasActiveOperation() &&
+    !spike.hasActiveOperation();
+
+  const localYoutube = isYoutubeUrl(url);
+  const isBusy =
+    !recovery.loaded ||
+    recovery.working ||
+    isAnalyzing ||
+    download.isActive ||
+    spike.isBusy;
+  const [needsLink, setNeedsLink] = useState(false);
+
+  function replaceInput(value: string) {
+    download.reset();
     spike.reset();
     setShowTechnicalDetails(false);
-  });
-  const download = useMediaDownload();
-  const localYoutube = isYoutubeUrl(url);
-  const isBusy = isAnalyzing || download.isActive || spike.isBusy;
+    updateUrl(value);
+  }
+
+  function retryRecovered() {
+    return recovery.dismiss((record) => {
+      if (record.source === 'direct') {
+        setNeedsLink(true);
+        replaceInput('');
+      } else {
+        const link =
+          'https://www.youtube.com/watch?v=' + record.selection.videoId;
+        replaceInput(link);
+        void spike.analyze(link, record.selection);
+      }
+    });
+  }
 
   function changeUrl(value: string) {
-    download.reset();
-    updateUrl(value);
+    if (!canChangeInput()) return;
+    setNeedsLink(false);
+    replaceInput(value);
+  }
+
+  function pasteUrl() {
+    if (isBusy) return;
+    return readClipboard(canChangeInput, changeUrl);
   }
 
   function newDownload() {
     changeUrl('');
-    setShowTechnicalDetails(false);
   }
 
   async function runAnalysis() {
-    if (download.isActive || spike.isBusy) return;
+    if (
+      !canStartDownload() ||
+      download.hasActiveOperation() ||
+      spike.hasActiveOperation() ||
+      spike.isBusy
+    )
+      return;
     download.reset();
     if (localYoutube) {
       resetAnalysis();
@@ -62,6 +117,9 @@ function useSession() {
     download,
     localYoutube,
     isBusy,
+    recovery,
+    needsLink,
+    retryRecovered,
     changeUrl,
     newDownload,
     runAnalysis,

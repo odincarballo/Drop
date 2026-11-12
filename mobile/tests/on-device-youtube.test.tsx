@@ -1,3 +1,4 @@
+import { resetDownloadRecoveryFixture } from './support/downloadRecoverySQLite';
 import {
   act,
   fireEvent,
@@ -6,11 +7,13 @@ import {
   waitFor,
 } from '@testing-library/react-native';
 import { requireOptionalNativeModule } from 'expo';
+import { AppState } from 'react-native';
 
 import { LocalYoutubeMainCard } from '@/components/LocalYoutubeMainCard';
 import { LocalYoutubeDiagnosticsCard } from '@/components/LocalYoutubeDiagnosticsCard';
 import { ActionButton } from '@/components/ActionButton';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
+import { useDownloadForeground } from '@/hooks/useDownloadForeground';
 import {
   localAudioDownloadEventSchema,
   localCombinedDownloadEventSchema,
@@ -52,6 +55,7 @@ let videoListener: ((event: unknown) => void) | null = null;
 let combinedListener: ((event: unknown) => void) | null = null;
 const native = {
   analyze: jest.fn(),
+  downloadForegroundGeneration: jest.fn(() => 7),
   startAudioDownload: jest.fn(),
   cancelAudioDownload: jest.fn(),
   startVideoDownload: jest.fn(),
@@ -158,7 +162,9 @@ const result = {
   networkRequests: 3,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
+  AppState.currentState = 'active';
+  await resetDownloadRecoveryFixture();
   jest.clearAllMocks();
   jest.mocked(promoteToLibrary).mockImplementation(
     async (_uri) =>
@@ -248,7 +254,7 @@ test('cancel delegates to the native engine', () => {
 });
 
 function TestCard() {
-  const spike = useLocalYoutubeSpike();
+  const spike = useLocalYoutubeSpike(useDownloadForeground());
   return (
     <>
       <ActionButton
@@ -271,7 +277,7 @@ function TestCard() {
 }
 
 function TestAudioDiagnostics() {
-  const spike = useLocalYoutubeSpike();
+  const spike = useLocalYoutubeSpike(useDownloadForeground());
   return (
     <>
       <ActionButton
@@ -432,6 +438,7 @@ test('local metadata card selects direct M4A without exposing a stream URL', asy
     'a'.repeat(32),
     '140',
     754,
+    7,
   );
   expect(JSON.stringify(native.startAudioDownload.mock.calls)).not.toContain(
     'googlevideo',
@@ -467,6 +474,7 @@ test.each(['audio', 'combined'] as const)(
         'a'.repeat(32),
         selectedTrack,
         754,
+        7,
       );
     } else {
       expect(native.startCombinedDownload).toHaveBeenCalledWith(
@@ -476,6 +484,7 @@ test.each(['audio', 'combined'] as const)(
         754,
         null,
         2_000_000,
+        7,
       );
     }
     expect(JSON.stringify(native.startAudioDownload.mock.calls)).not.toContain(
@@ -494,7 +503,11 @@ test('native video-only progress completes, shares, and never exposes its URL', 
   expect(screen.getByText(/Video seleccionado: ID 134 · 360p/)).toBeTruthy();
   await fireEvent.press(screen.getByRole('radio', { name: 'Solo video' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
-  expect(native.startVideoDownload).toHaveBeenCalledWith('a'.repeat(32), '134');
+  expect(native.startVideoDownload).toHaveBeenCalledWith(
+    'a'.repeat(32),
+    '134',
+    7,
+  );
   expect(JSON.stringify(native.startVideoDownload.mock.calls)).not.toContain(
     'googlevideo',
   );
@@ -579,6 +592,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
     754,
     null,
     2_000_000,
+    7,
   );
   expect(JSON.stringify(native.startCombinedDownload.mock.calls)).not.toContain(
     'googlevideo',
@@ -666,6 +680,7 @@ test('720p selection is dynamic and remains opaque to React Native', async () =>
     754,
     null,
     2_000_000,
+    7,
   );
   expect(JSON.stringify(native.startCombinedDownload.mock.calls)).not.toContain(
     'googlevideo',

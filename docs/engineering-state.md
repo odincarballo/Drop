@@ -1,7 +1,39 @@
 # Estado operativo de Drop
 
-Actualizado: 11 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 12 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
+
+## Descargas persistentes · Bloques A, A.1 y A.2 · consolidación local
+
+- Consolidación de A, A.1 y A.2 en `codex/download-recovery-a`, desde la base
+  `0e2d1ccbfc604263cc74f17e583d955c101b3d2f`.
+- A.1 sustituye AsyncStorage por `drop-downloads.sqlite` v1, separado de
+  Biblioteca. Una fila, transiciones transaccionales por ID y generación,
+  cancelación confirmada antes de abortar y reserva común entre motores.
+  Pegados tardíos invalidados. Mensajes y códigos de limpieza sanitizados.
+- RED A.1: seis casos reprodujeron los defectos. GREEN A.1: 120 pruebas en
+  seis suites focales, incluido fallo real de COMMIT, rollback y reapertura.
+  TypeScript, formato y diff check PASS. Lint focal sin errores y con tres
+  advertencias preexistentes en los mocks de pruebas. Los 153 resultados
+  históricos de A son una ejecución distinta.
+- A.2 cierra el inicio tardío de YouTube y el POST directo reproducido en la
+  misma ventana. Comprueba la generación de primer plano y la propiedad de
+  la fila tras la reserva. El bridge YouTube comprueba su generación y el
+  estado de UIKit en la cola principal antes de iniciar. Solo se presenta
+  la interrupción confirmada por SQLite. Volver a la app exige reintento
+  explícito.
+- A.2: seis RED, siete casos focales GREEN y 144 pruebas acreditadas en
+  siete suites afectadas. TypeScript, formato, diff check y typecheck Swift
+  estricto ARM64 iOS 16.4 PASS. Lint focal sin errores y con las tres
+  advertencias anteriores. Pendiente de validación física.
+- Reapertura sin POST automático. Consultar un job directo requiere acción
+  explícita. Reintentar YouTube vuelve al análisis del enlace canónico.
+  Sigue pendiente la validación física. La recuperación de archivos y la
+  reanudación de bytes quedan fuera del bloque.
+- Continuidad de la original: Biblioteca abrió tras renovar la firma y se
+  verificó la conservación de datos. El perfil vigente vence el
+  18/11/2026 a las 18:54:48 CDMX. Priorizar la renovación preventiva antes
+  de nuevas instalaciones o publicaciones si se aproxima el vencimiento.
 
 ## Drop 1.8.1 · cierre de la original del 11/11/2026
 

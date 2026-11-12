@@ -10,6 +10,15 @@ export class ApiError extends Error {
   }
 }
 
+export class DownloadStartInterrupted extends ApiError {
+  constructor() {
+    super(
+      'DOWNLOAD_START_INTERRUPTED',
+      'La descarga se interrumpió antes de iniciar.',
+    );
+  }
+}
+
 const messages = {
   AUTH_REQUIRED: 'Configura el token de acceso de Drop.',
   AUTH_INVALID: 'El token de acceso no es válido. Revisa la configuración.',

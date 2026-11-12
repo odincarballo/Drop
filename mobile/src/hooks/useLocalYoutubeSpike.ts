@@ -10,8 +10,15 @@ import type {
   LocalYoutubeResult,
   LocalYoutubeMetadata,
 } from '@/models/onDeviceYoutube';
+import {
+  DownloadRecoveryError,
+  rememberDownload,
+  type DownloadAttempt,
+  type DownloadRecord,
+} from '@/services/downloadRecovery';
+import { DownloadStartInterrupted } from '@/services/errors';
 import { withNamedLibraryFile } from '@/services/fileExport';
-import { shareLocalFile } from '@/services/jobs';
+import { deleteLocalFile, shareLocalFile } from '@/services/jobs';
 import { promoteToLibrary, withLibraryLease } from '@/services/library';
 import {
   analyzeYoutubeOnDevice,
@@ -19,6 +26,8 @@ import {
   cancelLocalCombinedDownload,
   cancelLocalVideoDownload,
   cancelLocalYoutube,
+  hasLocalYoutubeEngine,
+  localDownloadForegroundGeneration,
   localAudioError,
   localCombinedError,
   localVideoError,
@@ -151,7 +160,43 @@ export type LocalCombinedState =
       audioHttpDiagnostics: LocalHttpTransferDiagnostics | null;
     };
 
-export function useLocalYoutubeSpike() {
+type YoutubeSelection = Extract<
+  DownloadRecord,
+  { source: 'youtube' }
+>['selection'];
+
+async function saveLiveDownload(
+  attempt: DownloadAttempt | null,
+  uri: string,
+  metadata: Parameters<typeof promoteToLibrary>[1],
+  isCurrent: () => boolean,
+) {
+  let canSave: boolean;
+  try {
+    canSave = !!attempt && (await attempt.update('saving'));
+  } catch (error) {
+    deleteLocalFile(uri);
+    throw error;
+  }
+  if (!canSave || !isCurrent()) {
+    deleteLocalFile(uri);
+    return;
+  }
+  const saved = await promoteToLibrary(uri, metadata);
+  await attempt?.finish().catch(() => undefined);
+  return saved;
+}
+
+export function useLocalYoutubeSpike(
+  foregroundGeneration: () => number | null,
+  canStart: () => boolean = () => true,
+  onInterrupted?: (record: DownloadRecord) => void,
+) {
+  const downloadAttempt = useRef<DownloadAttempt | null>(null);
+  const recordingNative = useRef(false);
+  const savingAttempt = useRef<DownloadAttempt | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [state, setState] = useState<State>({ status: 'idle' });
   const [audioState, setAudioState] = useState<LocalAudioState>({
     status: 'idle',
@@ -179,193 +224,263 @@ export function useLocalYoutubeSpike() {
   const analyzedMetadata = useRef<LocalYoutubeMetadata | null>(null);
   const mounted = useRef(true);
 
-  const handleAudioEvent = useCallback((event: LocalAudioDownloadEvent) => {
-    if (!mounted.current) return;
-    if (audioJobId.current !== event.jobId) return;
-    if (event.status === 'PREPARING') {
-      setAudioState({
-        status: 'preparing',
-        jobId: event.jobId,
-        formatId: event.formatId ?? '',
-      });
-    } else if (event.status === 'DOWNLOADING' || event.status === 'RETRYING') {
-      setAudioState({
-        status: 'downloading',
-        jobId: event.jobId,
-        formatId: event.formatId ?? '',
-        container: 'm4a',
-        codec: event.codec ?? null,
-        bytesDownloaded: event.bytesDownloaded ?? 0,
-        totalBytes: event.totalBytes ?? null,
-        progress: event.progress ?? null,
-        retrying: event.status === 'RETRYING',
-        retryCategory:
-          event.status === 'RETRYING' ? (event.retryCategory ?? null) : null,
-      });
-    } else if (
-      event.status === 'COMPLETED' &&
-      event.fileName &&
-      event.fileSize !== undefined &&
-      event.localUri
-    ) {
-      audioJobId.current = null;
-      const metadata = analyzedMetadata.current;
-      const generation = analysisGeneration.current;
-      setAudioState({ status: 'saving', jobId: event.jobId });
-      void promoteToLibrary(event.localUri, {
-        sourceKind: 'youtube',
-        sourceVideoId: metadata?.id,
-        title: metadata?.title ?? event.fileName,
-        mediaType: 'audio',
-        durationSeconds: metadata?.duration,
-        audioCodec: event.codec,
-        container: 'm4a',
-        thumbnailUrl: metadata?.thumbnail,
-      })
-        .then((saved) => {
-          if (!mounted.current || analysisGeneration.current !== generation)
-            return;
-          setAudioState({
-            status: 'completed',
-            jobId: event.jobId,
-            formatId: event.formatId ?? '',
-            container: 'm4a',
-            codec: event.codec ?? null,
-            fileName: event.fileName!,
-            fileSize: saved.sizeBytes,
-            localUri: saved.uri,
-            libraryId: saved.id,
-            actionError: null,
-            httpDiagnostics: event.httpDiagnostics ?? null,
-          });
-        })
-        .catch((error: unknown) => {
-          if (mounted.current && analysisGeneration.current === generation)
-            setAudioState({
-              status: 'error',
-              code: 'LIBRARY_SAVE_FAILED',
-              message:
-                error instanceof Error
-                  ? `No se pudo guardar en Biblioteca: ${error.message}`
-                  : 'No se pudo guardar en Biblioteca.',
-              httpDiagnostics: event.httpDiagnostics ?? null,
-            });
-        });
-    } else if (event.status === 'CANCELLED') {
-      audioJobId.current = null;
-      setAudioState({ status: 'cancelled' });
-    } else if (event.status === 'FAILED') {
-      audioJobId.current = null;
-      const code = event.errorCode ?? 'AUDIO_DOWNLOAD_FAILED';
-      setAudioState({
-        status: 'error',
-        code,
-        message: localAudioError(code),
-        httpDiagnostics: event.httpDiagnostics ?? null,
-      });
-    }
-  }, []);
+  const interruptNative = useCallback(
+    async (attempt: DownloadAttempt | null, clear: () => void) => {
+      if (!attempt) return;
+      try {
+        const record = await attempt.interrupt();
+        if (record && mounted.current && downloadAttempt.current === attempt) {
+          clear();
+          onInterrupted?.(record);
+        }
+      } catch (error) {
+        if (mounted.current && downloadAttempt.current === attempt) {
+          clear();
+          if (error instanceof DownloadRecoveryError)
+            setPersistenceError(error.message);
+        }
+      }
+    },
+    [onInterrupted],
+  );
 
-  const handleVideoEvent = useCallback((event: LocalVideoDownloadEvent) => {
-    if (!mounted.current) return;
-    if (videoJobId.current !== event.jobId) return;
-    if (event.status === 'PREPARING') {
-      setVideoState({
-        status: 'preparing',
-        jobId: event.jobId,
-        formatId: event.formatId ?? '',
-      });
-    } else if (event.status === 'DOWNLOADING' || event.status === 'RETRYING') {
-      setVideoState({
-        status: 'downloading',
-        jobId: event.jobId,
-        formatId: event.formatId ?? '',
-        container: 'mp4',
-        codec: event.codec ?? null,
-        height: event.height ?? null,
-        bytesDownloaded: event.bytesDownloaded ?? 0,
-        totalBytes: event.totalBytes ?? null,
-        progress: event.progress ?? null,
-        retrying: event.status === 'RETRYING',
-        retryCategory:
-          event.status === 'RETRYING' ? (event.retryCategory ?? null) : null,
-      });
-    } else if (
-      event.status === 'COMPLETED' &&
-      event.fileName &&
-      event.fileSize !== undefined &&
-      event.localUri
-    ) {
-      videoJobId.current = null;
-      const metadata = analyzedMetadata.current;
-      const generation = analysisGeneration.current;
-      const format = metadata?.videoFormats.find(
-        (entry) => entry.id === event.formatId,
-      );
-      setVideoState({ status: 'saving', jobId: event.jobId });
-      void promoteToLibrary(event.localUri, {
-        sourceKind: 'youtube',
-        sourceVideoId: metadata?.id,
-        title: metadata?.title ?? event.fileName,
-        mediaType: 'video',
-        durationSeconds: metadata?.duration,
-        resolution: format?.resolution,
-        height: event.height,
-        fps: format?.fps,
-        videoCodec: event.codec,
-        container: 'mp4',
-        thumbnailUrl: metadata?.thumbnail,
-      })
-        .then((saved) => {
-          if (!mounted.current || analysisGeneration.current !== generation)
-            return;
-          setVideoState({
-            status: 'completed',
-            jobId: event.jobId,
-            formatId: event.formatId ?? '',
-            container: 'mp4',
-            codec: event.codec ?? null,
-            height: event.height ?? null,
-            fileName: event.fileName!,
-            fileSize: saved.sizeBytes,
-            localUri: saved.uri,
-            libraryId: saved.id,
-            actionError: null,
-            httpDiagnostics: event.httpDiagnostics ?? null,
-          });
-        })
-        .catch((error: unknown) => {
-          if (mounted.current && analysisGeneration.current === generation)
-            setVideoState({
-              status: 'error',
-              code: 'LIBRARY_SAVE_FAILED',
-              message:
-                error instanceof Error
-                  ? `No se pudo guardar en Biblioteca: ${error.message}`
-                  : 'No se pudo guardar en Biblioteca.',
+  const handleAudioEvent = useCallback(
+    (event: LocalAudioDownloadEvent) => {
+      if (!mounted.current) return;
+      if (audioJobId.current !== event.jobId) return;
+      const attempt = downloadAttempt.current;
+      if (event.status === 'PREPARING') {
+        attempt?.observe('preparing');
+        setAudioState({
+          status: 'preparing',
+          jobId: event.jobId,
+          formatId: event.formatId ?? '',
+        });
+      } else if (
+        event.status === 'DOWNLOADING' ||
+        event.status === 'RETRYING'
+      ) {
+        attempt?.observe('downloading', event.bytesDownloaded);
+        setAudioState({
+          status: 'downloading',
+          jobId: event.jobId,
+          formatId: event.formatId ?? '',
+          container: 'm4a',
+          codec: event.codec ?? null,
+          bytesDownloaded: event.bytesDownloaded ?? 0,
+          totalBytes: event.totalBytes ?? null,
+          progress: event.progress ?? null,
+          retrying: event.status === 'RETRYING',
+          retryCategory:
+            event.status === 'RETRYING' ? (event.retryCategory ?? null) : null,
+        });
+      } else if (
+        event.status === 'COMPLETED' &&
+        event.fileName &&
+        event.fileSize !== undefined &&
+        event.localUri
+      ) {
+        audioJobId.current = null;
+        const metadata = analyzedMetadata.current;
+        const generation = analysisGeneration.current;
+        savingAttempt.current = attempt;
+        setAudioState({ status: 'saving', jobId: event.jobId });
+        void saveLiveDownload(
+          attempt,
+          event.localUri,
+          {
+            sourceKind: 'youtube',
+            sourceVideoId: metadata?.id,
+            title: metadata?.title ?? event.fileName,
+            mediaType: 'audio',
+            durationSeconds: metadata?.duration,
+            audioCodec: event.codec,
+            container: 'm4a',
+            thumbnailUrl: metadata?.thumbnail,
+          },
+          () =>
+            mounted.current &&
+            analysisGeneration.current === generation &&
+            downloadAttempt.current === attempt,
+        )
+          .then((saved) => {
+            if (
+              !saved ||
+              !mounted.current ||
+              analysisGeneration.current !== generation
+            )
+              return;
+            setAudioState({
+              status: 'completed',
+              jobId: event.jobId,
+              formatId: event.formatId ?? '',
+              container: 'm4a',
+              codec: event.codec ?? null,
+              fileName: event.fileName!,
+              fileSize: saved.sizeBytes,
+              localUri: saved.uri,
+              libraryId: saved.id,
+              actionError: null,
               httpDiagnostics: event.httpDiagnostics ?? null,
             });
+          })
+          .catch(() => {
+            void attempt?.fail().catch(() => undefined);
+            if (mounted.current && analysisGeneration.current === generation)
+              setAudioState({
+                status: 'error',
+                code: 'LIBRARY_SAVE_FAILED',
+                message: 'No se pudo guardar en Biblioteca.',
+                httpDiagnostics: event.httpDiagnostics ?? null,
+              });
+          })
+          .finally(() => {
+            if (savingAttempt.current === attempt) savingAttempt.current = null;
+          });
+      } else if (event.status === 'CANCELLED') {
+        audioJobId.current = null;
+        void interruptNative(attempt, () => setAudioState({ status: 'idle' }));
+      } else if (event.status === 'FAILED') {
+        void attempt?.fail().catch(() => undefined);
+        audioJobId.current = null;
+        const code = event.errorCode ?? 'AUDIO_DOWNLOAD_FAILED';
+        setAudioState({
+          status: 'error',
+          code,
+          message: localAudioError(code),
+          httpDiagnostics: event.httpDiagnostics ?? null,
         });
-    } else if (event.status === 'CANCELLED') {
-      videoJobId.current = null;
-      setVideoState({ status: 'cancelled' });
-    } else if (event.status === 'FAILED') {
-      videoJobId.current = null;
-      const code = event.errorCode ?? 'VIDEO_DOWNLOAD_FAILED';
-      setVideoState({
-        status: 'error',
-        code,
-        message: localVideoError(code),
-        httpDiagnostics: event.httpDiagnostics ?? null,
-      });
-    }
-  }, []);
+      }
+    },
+    [interruptNative],
+  );
+
+  const handleVideoEvent = useCallback(
+    (event: LocalVideoDownloadEvent) => {
+      if (!mounted.current) return;
+      if (videoJobId.current !== event.jobId) return;
+      const attempt = downloadAttempt.current;
+      if (event.status === 'PREPARING') {
+        attempt?.observe('preparing');
+        setVideoState({
+          status: 'preparing',
+          jobId: event.jobId,
+          formatId: event.formatId ?? '',
+        });
+      } else if (
+        event.status === 'DOWNLOADING' ||
+        event.status === 'RETRYING'
+      ) {
+        attempt?.observe('downloading', event.bytesDownloaded);
+        setVideoState({
+          status: 'downloading',
+          jobId: event.jobId,
+          formatId: event.formatId ?? '',
+          container: 'mp4',
+          codec: event.codec ?? null,
+          height: event.height ?? null,
+          bytesDownloaded: event.bytesDownloaded ?? 0,
+          totalBytes: event.totalBytes ?? null,
+          progress: event.progress ?? null,
+          retrying: event.status === 'RETRYING',
+          retryCategory:
+            event.status === 'RETRYING' ? (event.retryCategory ?? null) : null,
+        });
+      } else if (
+        event.status === 'COMPLETED' &&
+        event.fileName &&
+        event.fileSize !== undefined &&
+        event.localUri
+      ) {
+        videoJobId.current = null;
+        const metadata = analyzedMetadata.current;
+        const generation = analysisGeneration.current;
+        const format = metadata?.videoFormats.find(
+          (entry) => entry.id === event.formatId,
+        );
+        savingAttempt.current = attempt;
+        setVideoState({ status: 'saving', jobId: event.jobId });
+        void saveLiveDownload(
+          attempt,
+          event.localUri,
+          {
+            sourceKind: 'youtube',
+            sourceVideoId: metadata?.id,
+            title: metadata?.title ?? event.fileName,
+            mediaType: 'video',
+            durationSeconds: metadata?.duration,
+            resolution: format?.resolution,
+            height: event.height,
+            fps: format?.fps,
+            videoCodec: event.codec,
+            container: 'mp4',
+            thumbnailUrl: metadata?.thumbnail,
+          },
+          () =>
+            mounted.current &&
+            analysisGeneration.current === generation &&
+            downloadAttempt.current === attempt,
+        )
+          .then((saved) => {
+            if (
+              !saved ||
+              !mounted.current ||
+              analysisGeneration.current !== generation
+            )
+              return;
+            setVideoState({
+              status: 'completed',
+              jobId: event.jobId,
+              formatId: event.formatId ?? '',
+              container: 'mp4',
+              codec: event.codec ?? null,
+              height: event.height ?? null,
+              fileName: event.fileName!,
+              fileSize: saved.sizeBytes,
+              localUri: saved.uri,
+              libraryId: saved.id,
+              actionError: null,
+              httpDiagnostics: event.httpDiagnostics ?? null,
+            });
+          })
+          .catch(() => {
+            void attempt?.fail().catch(() => undefined);
+            if (mounted.current && analysisGeneration.current === generation)
+              setVideoState({
+                status: 'error',
+                code: 'LIBRARY_SAVE_FAILED',
+                message: 'No se pudo guardar en Biblioteca.',
+                httpDiagnostics: event.httpDiagnostics ?? null,
+              });
+          })
+          .finally(() => {
+            if (savingAttempt.current === attempt) savingAttempt.current = null;
+          });
+      } else if (event.status === 'CANCELLED') {
+        videoJobId.current = null;
+        void interruptNative(attempt, () => setVideoState({ status: 'idle' }));
+      } else if (event.status === 'FAILED') {
+        void attempt?.fail().catch(() => undefined);
+        videoJobId.current = null;
+        const code = event.errorCode ?? 'VIDEO_DOWNLOAD_FAILED';
+        setVideoState({
+          status: 'error',
+          code,
+          message: localVideoError(code),
+          httpDiagnostics: event.httpDiagnostics ?? null,
+        });
+      }
+    },
+    [interruptNative],
+  );
 
   const handleCombinedEvent = useCallback(
     (event: LocalCombinedDownloadEvent) => {
       if (!mounted.current) return;
       if (combinedJobId.current !== event.jobId) return;
+      const attempt = downloadAttempt.current;
       if (event.status === 'PREPARING') {
+        attempt?.observe('preparing');
         setCombinedState({ status: 'preparing', jobId: event.jobId });
       } else if (
         event.status === 'DOWNLOADING_VIDEO' ||
@@ -373,6 +488,7 @@ export function useLocalYoutubeSpike() {
         event.status === 'RETRYING_VIDEO' ||
         event.status === 'RETRYING_AUDIO'
       ) {
+        attempt?.observe('downloading', event.bytesDownloaded);
         setCombinedState({
           status:
             event.status === 'DOWNLOADING_VIDEO' ||
@@ -389,6 +505,7 @@ export function useLocalYoutubeSpike() {
             : null,
         });
       } else if (event.status === 'MUXING') {
+        attempt?.observe('processing');
         setCombinedState({
           status: 'muxing',
           jobId: event.jobId,
@@ -407,23 +524,36 @@ export function useLocalYoutubeSpike() {
         const format = metadata?.videoFormats.find(
           (entry) => entry.id === selectedVideoFormat.current,
         );
+        savingAttempt.current = attempt;
         setCombinedState({ status: 'saving', jobId: event.jobId });
-        void promoteToLibrary(event.localUri, {
-          sourceKind: 'youtube',
-          sourceVideoId: metadata?.id,
-          title: metadata?.title ?? event.fileName,
-          mediaType: 'video',
-          durationSeconds: event.durationSeconds,
-          resolution: format?.resolution,
-          height: event.height,
-          fps: format?.fps,
-          videoCodec: event.videoCodec,
-          audioCodec: event.audioCodec,
-          container: 'mp4',
-          thumbnailUrl: metadata?.thumbnail,
-        })
+        void saveLiveDownload(
+          attempt,
+          event.localUri,
+          {
+            sourceKind: 'youtube',
+            sourceVideoId: metadata?.id,
+            title: metadata?.title ?? event.fileName,
+            mediaType: 'video',
+            durationSeconds: event.durationSeconds,
+            resolution: format?.resolution,
+            height: event.height,
+            fps: format?.fps,
+            videoCodec: event.videoCodec,
+            audioCodec: event.audioCodec,
+            container: 'mp4',
+            thumbnailUrl: metadata?.thumbnail,
+          },
+          () =>
+            mounted.current &&
+            analysisGeneration.current === generation &&
+            downloadAttempt.current === attempt,
+        )
           .then((saved) => {
-            if (!mounted.current || analysisGeneration.current !== generation)
+            if (
+              !saved ||
+              !mounted.current ||
+              analysisGeneration.current !== generation
+            )
               return;
             setCombinedState({
               status: 'completed',
@@ -441,23 +571,27 @@ export function useLocalYoutubeSpike() {
               audioHttpDiagnostics: event.audioHttpDiagnostics ?? null,
             });
           })
-          .catch((error: unknown) => {
+          .catch(() => {
+            void attempt?.fail().catch(() => undefined);
             if (mounted.current && analysisGeneration.current === generation)
               setCombinedState({
                 status: 'error',
                 code: 'LIBRARY_SAVE_FAILED',
-                message:
-                  error instanceof Error
-                    ? `No se pudo guardar en Biblioteca: ${error.message}`
-                    : 'No se pudo guardar en Biblioteca.',
+                message: 'No se pudo guardar en Biblioteca.',
                 videoHttpDiagnostics: event.videoHttpDiagnostics ?? null,
                 audioHttpDiagnostics: event.audioHttpDiagnostics ?? null,
               });
+          })
+          .finally(() => {
+            if (savingAttempt.current === attempt) savingAttempt.current = null;
           });
       } else if (event.status === 'CANCELLED') {
         combinedJobId.current = null;
-        setCombinedState({ status: 'cancelled' });
+        void interruptNative(attempt, () =>
+          setCombinedState({ status: 'idle' }),
+        );
       } else if (event.status === 'FAILED') {
+        void attempt?.fail().catch(() => undefined);
         combinedJobId.current = null;
         const code = event.errorCode ?? 'COMBINED_DOWNLOAD_FAILED';
         setCombinedState({
@@ -469,7 +603,7 @@ export function useLocalYoutubeSpike() {
         });
       }
     },
-    [],
+    [interruptNative],
   );
 
   useEffect(() => {
@@ -490,7 +624,7 @@ export function useLocalYoutubeSpike() {
     };
   }, [handleAudioEvent, handleCombinedEvent, handleVideoEvent]);
 
-  async function analyze(url: string) {
+  async function analyze(url: string, retry?: YoutubeSelection) {
     if (busy.current) return;
     busy.current = true;
     const generation = ++analysisGeneration.current;
@@ -512,16 +646,21 @@ export function useLocalYoutubeSpike() {
         const preferred = options.find(
           (format) => format.id === result.metadata?.preferredVideoFormatId,
         );
-        setSelectedVideoFormatId(preferred?.id ?? options[0]?.id ?? null);
+        const prior = options.find(
+          (format) => format.id === retry?.videoFormatId,
+        );
+        setSelectedVideoFormatId(
+          prior?.id ?? preferred?.id ?? options[0]?.id ?? null,
+        );
+        if (retry) setRequestedMode(retry.mode);
       }
-    } catch (error) {
+    } catch {
       if (mounted.current && analysisGeneration.current === generation)
         setState({
           status: 'error',
-          message:
-            error instanceof Error
-              ? error.message
-              : 'No se pudo iniciar el análisis local. Revisa la URL y esta build.',
+          message: hasLocalYoutubeEngine()
+            ? 'No se pudo iniciar el análisis local. Revisa la URL y esta build.'
+            : 'Esta versión no incluye el motor de YouTube en el iPhone. Actualiza Drop para analizar este enlace.',
         });
     } finally {
       if (analysisGeneration.current === generation) busy.current = false;
@@ -573,14 +712,93 @@ export function useLocalYoutubeSpike() {
     setVideoState({ status: 'idle' });
     setCombinedState({ status: 'idle' });
   }
-  function downloadAudio() {
-    if (
-      busy.current ||
+  function hasActiveOperation() {
+    return !!(
+      recordingNative.current ||
+      savingAttempt.current ||
       audioJobId.current ||
       videoJobId.current ||
-      combinedJobId.current ||
-      state.status !== 'result'
-    )
+      combinedJobId.current
+    );
+  }
+
+  async function startTracked(
+    selection: YoutubeSelection,
+    startNative: (generation: number) => void,
+  ) {
+    if (hasActiveOperation() || !canStart()) return;
+    const foreground = foregroundGeneration();
+    if (foreground === null) return;
+    const nativeGeneration = localDownloadForegroundGeneration();
+    if (nativeGeneration === null) return;
+    recordingNative.current = true;
+    setRecording(true);
+    setPersistenceError(null);
+    const generation = analysisGeneration.current;
+    try {
+      const attempt = await rememberDownload({ source: 'youtube', selection });
+      if (!(await attempt.ownsReservation())) return;
+      const isCurrent = () =>
+        mounted.current && generation === analysisGeneration.current;
+      if (isCurrent() && foregroundGeneration() === foreground) {
+        downloadAttempt.current = attempt;
+        try {
+          startNative(nativeGeneration);
+          return;
+        } catch (error) {
+          downloadAttempt.current = null;
+          if (!(error instanceof DownloadStartInterrupted)) {
+            void attempt.fail().catch(() => undefined);
+            throw error;
+          }
+        }
+      }
+      const interrupted = await attempt.interrupt();
+      if (interrupted && isCurrent()) onInterrupted?.(interrupted);
+    } finally {
+      recordingNative.current = false;
+      if (mounted.current) setRecording(false);
+    }
+  }
+
+  async function cancelTracked(
+    job: { current: string | null },
+    cancelNative: () => void,
+    cancelled: () => void,
+  ) {
+    const id = job.current;
+    const attempt = downloadAttempt.current;
+    if (!id || !attempt) return;
+    try {
+      if (!(await attempt.cancel())) return;
+    } catch {
+      if (mounted.current)
+        setPersistenceError(
+          'No se pudo registrar la cancelación. Inténtalo de nuevo.',
+        );
+      return;
+    }
+    // A native completion must pass the same journal before publishing.
+    if (downloadAttempt.current !== attempt) return;
+    if (mounted.current) {
+      setPersistenceError(null);
+      cancelled();
+    }
+    if (job.current === id) {
+      job.current = null;
+      try {
+        cancelNative();
+      } catch {
+        if (mounted.current)
+          setPersistenceError(
+            'Se registró la cancelación. El motor local no confirmó la detención.',
+          );
+      }
+    }
+  }
+
+  async function downloadAudio() {
+    if (hasActiveOperation() || busy.current || state.status !== 'result')
       return;
     const metadata = state.result.metadata;
     if (!metadata?.preferredAudioFormatId) {
@@ -601,24 +819,32 @@ export function useLocalYoutubeSpike() {
       });
       return;
     }
+    const audioFormatId = metadata.preferredAudioFormatId;
+    const duration = metadata.duration;
     try {
-      const jobId = startLocalAudioDownload(
-        metadata.analysisId,
-        metadata.preferredAudioFormatId,
-        metadata.duration,
+      await startTracked(
+        { mode: 'AUDIO_ONLY', videoId: metadata.id, audioFormatId },
+        (foreground) => {
+          const jobId = startLocalAudioDownload(
+            metadata.analysisId,
+            audioFormatId,
+            duration,
+            foreground,
+          );
+          audioJobId.current = jobId;
+          setAudioState({
+            status: 'preparing',
+            jobId,
+            formatId: audioFormatId,
+          });
+        },
       );
-      audioJobId.current = jobId;
-      setAudioState({
-        status: 'preparing',
-        jobId,
-        formatId: metadata.preferredAudioFormatId,
-      });
     } catch (error) {
       setAudioState({
         status: 'error',
         code: 'AUDIO_DOWNLOAD_FAILED',
         message:
-          error instanceof Error
+          error instanceof DownloadRecoveryError
             ? error.message
             : localAudioError('AUDIO_DOWNLOAD_FAILED'),
         httpDiagnostics: null,
@@ -627,10 +853,9 @@ export function useLocalYoutubeSpike() {
   }
 
   function cancelAudio() {
-    if (!audioJobId.current) return;
-    audioJobId.current = null;
-    setAudioState({ status: 'cancelled' });
-    cancelLocalAudioDownload();
+    return cancelTracked(audioJobId, cancelLocalAudioDownload, () =>
+      setAudioState({ status: 'cancelled' }),
+    );
   }
 
   async function shareAudio() {
@@ -649,14 +874,8 @@ export function useLocalYoutubeSpike() {
     }
   }
 
-  function downloadVideo() {
-    if (
-      busy.current ||
-      audioJobId.current ||
-      videoJobId.current ||
-      combinedJobId.current ||
-      state.status !== 'result'
-    )
+  async function downloadVideo() {
+    if (hasActiveOperation() || busy.current || state.status !== 'result')
       return;
     const metadata = state.result.metadata;
     if (!metadata || !selectedVideoFormatId) {
@@ -669,22 +888,32 @@ export function useLocalYoutubeSpike() {
       return;
     }
     try {
-      const jobId = startLocalVideoDownload(
-        metadata.analysisId,
-        selectedVideoFormatId,
+      await startTracked(
+        {
+          mode: 'VIDEO_ONLY',
+          videoId: metadata.id,
+          videoFormatId: selectedVideoFormatId,
+        },
+        (foreground) => {
+          const jobId = startLocalVideoDownload(
+            metadata.analysisId,
+            selectedVideoFormatId,
+            foreground,
+          );
+          videoJobId.current = jobId;
+          setVideoState({
+            status: 'preparing',
+            jobId,
+            formatId: selectedVideoFormatId,
+          });
+        },
       );
-      videoJobId.current = jobId;
-      setVideoState({
-        status: 'preparing',
-        jobId,
-        formatId: selectedVideoFormatId,
-      });
     } catch (error) {
       setVideoState({
         status: 'error',
         code: 'VIDEO_DOWNLOAD_FAILED',
         message:
-          error instanceof Error
+          error instanceof DownloadRecoveryError
             ? error.message
             : localVideoError('VIDEO_DOWNLOAD_FAILED'),
         httpDiagnostics: null,
@@ -693,10 +922,9 @@ export function useLocalYoutubeSpike() {
   }
 
   function cancelVideo() {
-    if (!videoJobId.current) return;
-    videoJobId.current = null;
-    setVideoState({ status: 'cancelled' });
-    cancelLocalVideoDownload();
+    return cancelTracked(videoJobId, cancelLocalVideoDownload, () =>
+      setVideoState({ status: 'cancelled' }),
+    );
   }
 
   async function shareVideo() {
@@ -715,14 +943,8 @@ export function useLocalYoutubeSpike() {
     }
   }
 
-  function downloadCombined() {
-    if (
-      busy.current ||
-      audioJobId.current ||
-      videoJobId.current ||
-      combinedJobId.current ||
-      state.status !== 'result'
-    )
+  async function downloadCombined() {
+    if (hasActiveOperation() || busy.current || state.status !== 'result')
       return;
     const metadata = state.result.metadata;
     if (
@@ -740,27 +962,40 @@ export function useLocalYoutubeSpike() {
       });
       return;
     }
+    const audioFormatId = metadata.preferredAudioFormatId;
+    const duration = metadata.duration;
     try {
-      const jobId = startLocalCombinedDownload(
-        metadata.analysisId,
-        selectedVideoFormatId,
-        metadata.preferredAudioFormatId,
-        metadata.duration,
-        metadata.audioFormats.find(
-          (format) => format.id === metadata.preferredAudioFormatId,
-        )?.exactSize ?? null,
-        metadata.audioFormats.find(
-          (format) => format.id === metadata.preferredAudioFormatId,
-        )?.estimatedSize ?? null,
+      await startTracked(
+        {
+          mode: 'VIDEO_AUDIO',
+          videoId: metadata.id,
+          videoFormatId: selectedVideoFormatId,
+          audioFormatId,
+        },
+        (foreground) => {
+          const jobId = startLocalCombinedDownload(
+            metadata.analysisId,
+            selectedVideoFormatId,
+            audioFormatId,
+            duration,
+            metadata.audioFormats.find(
+              (format) => format.id === metadata.preferredAudioFormatId,
+            )?.exactSize ?? null,
+            metadata.audioFormats.find(
+              (format) => format.id === metadata.preferredAudioFormatId,
+            )?.estimatedSize ?? null,
+            foreground,
+          );
+          combinedJobId.current = jobId;
+          setCombinedState({ status: 'preparing', jobId });
+        },
       );
-      combinedJobId.current = jobId;
-      setCombinedState({ status: 'preparing', jobId });
     } catch (error) {
       setCombinedState({
         status: 'error',
         code: 'COMBINED_DOWNLOAD_FAILED',
         message:
-          error instanceof Error
+          error instanceof DownloadRecoveryError
             ? error.message
             : localCombinedError('COMBINED_DOWNLOAD_FAILED'),
         videoHttpDiagnostics: null,
@@ -770,10 +1005,9 @@ export function useLocalYoutubeSpike() {
   }
 
   function cancelCombined() {
-    if (!combinedJobId.current) return;
-    combinedJobId.current = null;
-    setCombinedState({ status: 'cancelled' });
-    cancelLocalCombinedDownload();
+    return cancelTracked(combinedJobId, cancelLocalCombinedDownload, () =>
+      setCombinedState({ status: 'cancelled' }),
+    );
   }
 
   async function shareCombined() {
@@ -814,7 +1048,10 @@ export function useLocalYoutubeSpike() {
     cancel: cancelAnalysis,
     requestedMode,
     setRequestedMode,
+    persistenceError,
+    hasActiveOperation,
     isBusy:
+      recording ||
       state.status === 'loading' ||
       audioState.status === 'preparing' ||
       audioState.status === 'saving' ||

@@ -7,17 +7,22 @@ import {
   type DownloadRequest,
 } from '@/models/media';
 import { apiClient, apiUrl } from './api';
-import { ApiError } from './errors';
+import { ApiError, DownloadStartInterrupted } from './errors';
 import { getApiToken } from './token';
 
 export function createDownloadJob(
   request: DownloadRequest,
   signal?: AbortSignal,
+  isStillForeground?: () => boolean,
 ): Promise<DownloadJob> {
   return apiClient.request('/jobs', {
     method: 'POST',
     body: request,
     signal,
+    beforeSend: () => {
+      if (isStillForeground && !isStillForeground())
+        throw new DownloadStartInterrupted();
+    },
     schema: jobSchema,
   });
 }
@@ -84,11 +89,8 @@ export async function downloadJobFile(
   } catch (error) {
     try {
       if (destination.exists) destination.delete();
-    } catch (cleanupError) {
-      console.warn(
-        '[Drop files] Could not clean failed direct download',
-        cleanupError,
-      );
+    } catch {
+      console.warn('[Drop files] DIRECT_TEMP_CLEANUP_FAILED');
     }
     if (signal.aborted) throw error;
     throw new ApiError(
@@ -124,8 +126,8 @@ function removeLocalFile(uri: string): void {
       const directory = new Directory(directoryUri);
       if (directory.exists && directory.list().length === 0) directory.delete();
     }
-  } catch (error) {
-    console.warn('[Drop files] Could not clean completed file', error);
+  } catch {
+    console.warn('[Drop files] DOWNLOAD_TEMP_CLEANUP_FAILED');
   }
 }
 

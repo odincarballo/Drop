@@ -15,7 +15,7 @@ import {
   useDownloadSession,
 } from '@/providers/DownloadSessionProvider';
 import { useEffect, useState } from 'react';
-import { Pressable, Text } from 'react-native';
+import { AppState, Pressable, Text, type AppStateStatus } from 'react-native';
 import type { MediaAnalysis } from '@/models/media';
 import { ApiError } from '@/services/errors';
 import { promoteToLibrary } from '@/services/library';
@@ -25,9 +25,18 @@ import {
   deleteDownloadJob,
   deleteLocalFile,
   downloadJobFile,
+  getDownloadJob,
   shareLocalFile,
 } from '@/services/jobs';
 import { demoMedia, youtubeMedia } from './fixtures/media';
+import {
+  allowDownloadWrites,
+  readRawDownloadRecovery,
+  rejectDownloadWrite,
+  resetDownloadRecoveryFixture,
+  seedDownloadRecovery,
+} from './support/downloadRecoverySQLite';
+import { RealSQLite } from './support/realSQLite';
 
 function HomeScreen() {
   return (
@@ -81,7 +90,19 @@ jest.mock(
   () => require('react-native-safe-area-context/jest/mock').default,
 );
 
-beforeEach(() => {
+const appStateListeners = new Set<(state: AppStateStatus) => void>();
+
+beforeEach(async () => {
+  AppState.currentState = 'active';
+  appStateListeners.clear();
+  jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation((type, handler) => {
+      const listener = handler as (state: AppStateStatus) => void;
+      if (type === 'change') appStateListeners.add(listener);
+      return { remove: () => appStateListeners.delete(listener) };
+    });
+  await resetDownloadRecoveryFixture();
   jest
     .mocked(promoteToLibrary)
     .mockReset()
@@ -161,6 +182,7 @@ const localYoutubeMetadata = {
 function localYoutubeNativeEngine() {
   const listeners = new Map<string, Set<(event: unknown) => void>>();
   return {
+    downloadForegroundGeneration: jest.fn(() => 7),
     analyze: jest.fn().mockResolvedValue(JSON.stringify(localYoutubeMetadata)),
     startAudioDownload: jest.fn(),
     cancelAudioDownload: jest.fn(),
@@ -332,6 +354,7 @@ test('normal YouTube flow uses real 364p and direct 720p, never HLS', async () =
     121,
     null,
     2_000_000,
+    7,
   );
   expect(analyzeMedia).not.toHaveBeenCalled();
 });
@@ -383,6 +406,7 @@ test.each(['Video + audio', 'Solo video'] as const)(
       expect(native.startVideoDownload).toHaveBeenCalledWith(
         'a'.repeat(32),
         'opaque-1080',
+        7,
       );
     } else {
       expect(native.startCombinedDownload).toHaveBeenCalledWith(
@@ -392,6 +416,7 @@ test.each(['Video + audio', 'Solo video'] as const)(
         121,
         null,
         2_000_000,
+        7,
       );
       await act(() =>
         native.emit('onCombinedDownloadState', {
@@ -451,7 +476,11 @@ test('normal YouTube modes dispatch video-only and audio-only to the local engin
   await screen.findByText('YouTube local');
   await fireEvent.press(screen.getByRole('radio', { name: 'Solo video' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
-  expect(native.startVideoDownload).toHaveBeenCalledWith('a'.repeat(32), '134');
+  expect(native.startVideoDownload).toHaveBeenCalledWith(
+    'a'.repeat(32),
+    '134',
+    7,
+  );
   expect(createDownloadJob).not.toHaveBeenCalled();
 });
 
@@ -493,6 +522,7 @@ test('normal YouTube progress, cancellation, audio-only and sharing stay on-devi
     'a'.repeat(32),
     '140',
     121,
+    7,
   );
   await act(() =>
     native.emit('onAudioDownloadState', {
@@ -555,6 +585,7 @@ test('unknown local stream sizes remain downloadable', async () => {
     'a'.repeat(32),
     '140',
     121,
+    7,
   );
 });
 
@@ -692,6 +723,7 @@ test('direct file downloads to iPhone storage and can be shared', async () => {
       formatId: 'format-original',
     },
     expect.any(AbortSignal),
+    expect.any(Function),
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Más opciones' }));
   expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4');
@@ -789,6 +821,7 @@ test('YouTube offers real resolution, automatic audio, M4A and MP3 output', asyn
       audioFormatId: '140',
     },
     expect.any(AbortSignal),
+    expect.any(Function),
   );
 
   await fireEvent.press(screen.getByRole('button', { name: 'Nueva descarga' }));
@@ -810,6 +843,7 @@ test('YouTube offers real resolution, automatic audio, M4A and MP3 output', asyn
       audioBitrate: 256000,
     },
     expect.any(AbortSignal),
+    expect.any(Function),
   );
 });
 
@@ -939,7 +973,10 @@ test('clipboard denial leaves manual input available', async () => {
 // removed, not merely hidden, while its session owner remains mounted.
 let session: ReturnType<typeof useDownloadSession>;
 function SessionRoutes() {
-  session = useDownloadSession();
+  const currentSession = useDownloadSession();
+  useEffect(() => {
+    session = currentSession;
+  }, [currentSession]);
   const [visible, setVisible] = useState(true);
   useEffect(() => {
     mockPush.mockImplementation(() => setVisible(false));
@@ -986,7 +1023,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const completedDirectJob = {
-  id: 'navigation-job',
+  id: 'ac'.repeat(16),
   status: 'COMPLETED' as const,
   progress: 1,
   bytesDownloaded: 12,
@@ -994,7 +1031,7 @@ const completedDirectJob = {
   fileName: 'clip.mp4',
   fileSize: 12,
   error: null,
-  downloadUrl: '/jobs/navigation-job/file',
+  downloadUrl: '/jobs/' + 'ac'.repeat(16) + '/file',
 };
 const navigationDirectMedia: MediaAnalysis = {
   ...demoMedia,
@@ -1353,7 +1390,16 @@ test.each(['cancel', 'teardown'] as const)(
       await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
     } else await view.unmount();
     expect(signal.aborted).toBe(true);
-    expect(deleteDownloadJob).toHaveBeenCalledWith(completedDirectJob.id);
+    if (action === 'cancel') {
+      expect(deleteDownloadJob).toHaveBeenCalledWith(completedDirectJob.id);
+    } else {
+      expect(deleteDownloadJob).not.toHaveBeenCalled();
+      await render(<HomeScreen />);
+      expect(
+        await screen.findByRole('button', { name: 'Continuar consulta' }),
+      ).toBeTruthy();
+      expect(createDownloadJob).toHaveBeenCalledTimes(1);
+    }
     await act(() =>
       transfer.resolve({ uri: 'file:///cache/late-route.mp4', size: 12 }),
     );
@@ -1415,4 +1461,571 @@ test('synchronous video and audio actions cannot start two native jobs', async (
   });
   expect(native.startVideoDownload).toHaveBeenCalledTimes(1);
   expect(native.startAudioDownload).not.toHaveBeenCalled();
+});
+
+const recoverableJobId = 'a'.repeat(32);
+const persistedDownload = {
+  version: 1,
+  id: 'local-1',
+  generation: 1,
+  source: 'direct',
+  selection: { mode: 'VIDEO_AUDIO' },
+  status: 'pending',
+  phase: 'transferring',
+  bytes: 512,
+  errorCode: null,
+  remoteJobId: recoverableJobId,
+};
+
+test('reopening presents historical progress and queries an existing direct job only on request', async () => {
+  await seedDownloadRecovery(JSON.stringify(persistedDownload));
+  jest.mocked(getDownloadJob).mockResolvedValue({
+    ...completedDirectJob,
+    id: recoverableJobId,
+  });
+  await render(<HomeScreen />);
+  expect(await screen.findByText('Descarga interrumpida')).toBeTruthy();
+  expect(screen.getByText(/Progreso anterior/)).toBeTruthy();
+  expect(getDownloadJob).not.toHaveBeenCalled();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Continuar consulta' }),
+  );
+  expect(
+    await screen.findByText('El servidor informa que el trabajo terminó.'),
+  ).toBeTruthy();
+  expect(getDownloadJob).toHaveBeenCalledWith(
+    recoverableJobId,
+    expect.any(AbortSignal),
+  );
+  expect(downloadJobFile).not.toHaveBeenCalled();
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+});
+
+test('a vanished direct job offers a fresh link without creating a job', async () => {
+  await seedDownloadRecovery(JSON.stringify(persistedDownload));
+  jest
+    .mocked(getDownloadJob)
+    .mockRejectedValue(new ApiError('JOB_NOT_FOUND', 'private details'));
+  await render(<HomeScreen />);
+  await fireEvent.press(
+    await screen.findByRole('button', { name: 'Continuar consulta' }),
+  );
+  expect(
+    await screen.findByText('El servidor ya no conserva esta descarga.'),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole('button', { name: 'Continuar consulta' }),
+  ).toBeNull();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Reintentar desde cero' }),
+  );
+  expect(screen.getByLabelText('URL del recurso multimedia')).toBeTruthy();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+});
+
+test('a missing job ID shows uncertainty and restoration never submits a POST', async () => {
+  await seedDownloadRecovery(
+    JSON.stringify({
+      ...persistedDownload,
+      phase: 'creating',
+      remoteJobId: null,
+    }),
+  );
+  await render(<HomeScreen />);
+  expect(
+    await screen.findByText(
+      'No se pudo confirmar si el servidor creó la descarga.',
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole('button', { name: 'Continuar consulta' }),
+  ).toBeNull();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+});
+
+test('an explicitly cancelled record cannot be resumed', async () => {
+  await seedDownloadRecovery(
+    JSON.stringify({
+      ...persistedDownload,
+      status: 'cancelled',
+    }),
+  );
+  await render(<HomeScreen />);
+  expect(await screen.findByText('Descarga cancelada')).toBeTruthy();
+  expect(
+    screen.queryByRole('button', { name: 'Continuar consulta' }),
+  ).toBeNull();
+  expect(getDownloadJob).not.toHaveBeenCalled();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+});
+
+test.each([
+  '{',
+  JSON.stringify({ ...persistedDownload, generation: undefined }),
+])(
+  'an invalid recovery record leaves the download form available',
+  async (record) => {
+    await seedDownloadRecovery(record);
+    await render(<HomeScreen />);
+    expect(screen.getByRole('button', { name: 'Analizar' })).toBeEnabled();
+    expect(screen.queryByText('Descarga interrumpida')).toBeNull();
+    expect(getDownloadJob).not.toHaveBeenCalled();
+    expect(createDownloadJob).not.toHaveBeenCalled();
+  },
+);
+
+test('the journal excludes private input and a late POST cannot undo persisted cancellation', async () => {
+  const reply = deferred<typeof completedDirectJob>();
+  jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+  jest.mocked(createDownloadJob).mockReturnValue(reply.promise);
+  await render(<HomeScreen />);
+  await fireEvent.changeText(
+    screen.getByLabelText('URL del recurso multimedia'),
+    'https://example.com/secret-path.mp4?token=secret',
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await fireEvent.press(await screen.findByRole('radio', { name: /360p/ }));
+  await fireEvent.press(
+    await screen.findByRole('button', { name: 'Descargar' }),
+  );
+  await waitFor(() => expect(createDownloadJob).toHaveBeenCalledTimes(1));
+  const raw = await readRawDownloadRecovery();
+  expect(raw).not.toBeNull();
+  expect(raw).not.toMatch(/https:|secret|Bearer|Authorization|file:\/\//i);
+  expect(JSON.parse(raw!)).toMatchObject({
+    phase: 'creating',
+    remoteJobId: null,
+  });
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    status: 'cancelled',
+  });
+  await act(() =>
+    reply.resolve({ ...completedDirectJob, id: recoverableJobId }),
+  );
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    status: 'cancelled',
+    remoteJobId: null,
+  });
+  expect(downloadJobFile).not.toHaveBeenCalled();
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+});
+
+test('YouTube recovery reanalyses the canonical video only on explicit retry', async () => {
+  const native = localYoutubeNativeEngine();
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await seedDownloadRecovery(
+    JSON.stringify({
+      ...persistedDownload,
+      source: 'youtube',
+      selection: {
+        mode: 'VIDEO_ONLY',
+        videoId: 'AWGPaFraPN4',
+        videoFormatId: '134',
+      },
+      remoteJobId: null,
+    }),
+  );
+  await render(<HomeScreen />);
+  const retry = await screen.findByRole('button', {
+    name: 'Reintentar desde cero',
+  });
+  expect(native.analyze).not.toHaveBeenCalled();
+  await fireEvent.press(retry);
+  expect(native.analyze).toHaveBeenCalledWith(
+    'https://www.youtube.com/watch?v=AWGPaFraPN4',
+  );
+  expect(await screen.findByRole('button', { name: 'Descargar' })).toBeTruthy();
+  expect(native.startVideoDownload).not.toHaveBeenCalled();
+  expect(native.startAudioDownload).not.toHaveBeenCalled();
+  expect(native.startCombinedDownload).not.toHaveBeenCalled();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+});
+
+test('a failed cancellation write keeps the direct attempt alive and retryable', async () => {
+  const reply = deferred<typeof completedDirectJob>();
+  jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+  jest.mocked(createDownloadJob).mockReturnValue(reply.promise);
+  await render(<HomeScreen />);
+  await analyzeExample();
+  await fireEvent.press(await screen.findByRole('radio', { name: /360p/ }));
+  await fireEvent.press(
+    await screen.findByRole('button', { name: 'Descargar' }),
+  );
+  await waitFor(() => expect(createDownloadJob).toHaveBeenCalledTimes(1));
+  const signal = jest.mocked(createDownloadJob).mock.calls[0]?.[1];
+  await rejectDownloadWrite('UPDATE');
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
+  expect(
+    await screen.findByText(
+      'No se pudo registrar la cancelación. Inténtalo de nuevo.',
+    ),
+  ).toBeTruthy();
+  expect(signal?.aborted).toBe(false);
+  await allowDownloadWrites();
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
+  await waitFor(() => expect(signal?.aborted).toBe(true));
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    status: 'cancelled',
+  });
+  await act(() => reply.resolve(completedDirectJob));
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+});
+
+test('a download cannot submit a POST when its first durable write fails', async () => {
+  jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+  await render(<HomeScreen />);
+  await analyzeExample();
+  await fireEvent.press(await screen.findByRole('radio', { name: /360p/ }));
+  await rejectDownloadWrite('INSERT');
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(
+    await screen.findByText(
+      'No se pudo guardar el estado de la descarga. Inténtalo de nuevo.',
+    ),
+  ).toBeTruthy();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  expect(downloadJobFile).not.toHaveBeenCalled();
+});
+
+test('an interrupted save directs the user to Library and cannot publish or restart a file', async () => {
+  await seedDownloadRecovery(
+    JSON.stringify({ ...persistedDownload, phase: 'saving' }),
+  );
+  await render(<HomeScreen />);
+  expect(
+    await screen.findByText(/El último paso fue guardar el archivo/),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole('button', { name: 'Reintentar desde cero' }),
+  ).toBeNull();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  expect(downloadJobFile).not.toHaveBeenCalled();
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+});
+
+test('a pending paste blocks downloading the old analysis', async () => {
+  const paste = deferred<string>();
+  jest.mocked(Clipboard.getStringAsync).mockReturnValueOnce(paste.promise);
+  jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+  jest.mocked(createDownloadJob).mockReturnValue(new Promise(() => undefined));
+  await render(<HomeScreen />);
+  await analyzeExample();
+  await fireEvent.press(await screen.findByRole('radio', { name: /360p/ }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Pegar' }));
+  const download = screen.getByRole('button', { name: 'Descargar' });
+  await fireEvent.press(download);
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  expect(download).toBeDisabled();
+  await act(() => paste.resolve('https://example.com/next.mp4'));
+});
+
+test('a YouTube start error cannot display a private path or signed request', async () => {
+  const secret =
+    'file:///private/A1_PRIVATE https://example.test/?sig=A1_SECRET Bearer A1_BEARER';
+  const native = localYoutubeNativeEngine();
+  native.startAudioDownload.mockImplementation(() => {
+    throw new Error(secret);
+  });
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  await fireEvent.press(await screen.findByText('Solo audio'));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(screen.queryByText(/A1_PRIVATE|A1_SECRET|A1_BEARER/)).toBeNull();
+});
+
+test('a superseded paste cannot replace an input while its new job is active', async () => {
+  const paste = deferred<string>();
+  const reply = deferred<typeof completedDirectJob>();
+  jest.mocked(Clipboard.getStringAsync).mockReturnValueOnce(paste.promise);
+  jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+  jest.mocked(createDownloadJob).mockReturnValue(reply.promise);
+  await render(<NavigableSession />);
+  await analyzeExample();
+  await fireEvent.press(screen.getByRole('button', { name: 'Pegar' }));
+  await act(() => session.changeUrl('https://example.com/current.mp4'));
+  await act(() => session.runAnalysis());
+  await fireEvent.press(await screen.findByRole('radio', { name: /360p/ }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  await waitFor(() => expect(createDownloadJob).toHaveBeenCalledTimes(1));
+  await act(() => paste.resolve('https://youtu.be/AWGPaFraPN4'));
+  expect(
+    screen.getByLabelText('URL del recurso multimedia'),
+  ).toHaveDisplayValue('https://example.com/current.mp4');
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
+  await act(() => reply.resolve(completedDirectJob));
+  expect(downloadJobFile).not.toHaveBeenCalled();
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+});
+
+test('simultaneous direct and native starts keep the winning controls and journal', async () => {
+  const native = localYoutubeNativeEngine();
+  native.startAudioDownload.mockReturnValue(nativeJob);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<NavigableSession />);
+  await analyzeYoutube();
+  await fireEvent.press(await screen.findByText('Solo audio'));
+  await act(async () => {
+    const current = session;
+    await Promise.all([
+      current.spike.downloadAudio(),
+      current.download.start(navigationDirectMedia, {
+        type: 'VIDEO_AUDIO',
+        videoIndex: 0,
+        audioIndex: null,
+      }),
+    ]);
+  });
+  expect(native.startAudioDownload).toHaveBeenCalledTimes(1);
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    source: 'youtube',
+    status: 'pending',
+  });
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Cancelar descarga' }),
+  );
+  expect(native.cancelAudioDownload).toHaveBeenCalledTimes(1);
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    source: 'youtube',
+    status: 'cancelled',
+  });
+  await act(() => native.emit('onAudioDownloadState', completeNative));
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+});
+
+test('recovery errors keep request and storage details out of the UI and record', async () => {
+  const secret =
+    'file:///private/A1_PRIVATE https://example.test/?sig=A1_SECRET Authorization: Bearer A1_BEARER';
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  jest.mocked(getDownloadJob).mockRejectedValueOnce(new Error(secret));
+  await seedDownloadRecovery(JSON.stringify(persistedDownload));
+  await render(<HomeScreen />);
+  await fireEvent.press(
+    await screen.findByRole('button', { name: 'Continuar consulta' }),
+  );
+  expect(
+    await screen.findByText(
+      'No se pudo consultar o actualizar el estado. Inténtalo de nuevo.',
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/A1_PRIVATE|A1_SECRET|A1_BEARER/)).toBeNull();
+  expect(await readRawDownloadRecovery()).not.toMatch(
+    /A1_PRIVATE|A1_SECRET|A1_BEARER/,
+  );
+  expect(warn.mock.calls.flat().map(String).join(' ')).not.toMatch(
+    /A1_PRIVATE|A1_SECRET|A1_BEARER/,
+  );
+});
+
+test('native cancellation stays active on a rejected write and aborts only after a successful retry', async () => {
+  const native = localYoutubeNativeEngine();
+  native.startAudioDownload.mockReturnValue(nativeJob);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  await fireEvent.press(await screen.findByText('Solo audio'));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  const cancel = await screen.findByRole('button', {
+    name: 'Cancelar descarga',
+  });
+  await rejectDownloadWrite('UPDATE');
+  await fireEvent.press(cancel);
+  expect(native.cancelAudioDownload).not.toHaveBeenCalled();
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    status: 'pending',
+  });
+  expect(screen.getByText(/No se pudo registrar la cancelación/)).toBeTruthy();
+  await allowDownloadWrites();
+  await fireEvent.press(cancel);
+  expect(native.cancelAudioDownload).toHaveBeenCalledTimes(1);
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    status: 'cancelled',
+  });
+  expect(screen.queryByText(/No se pudo registrar la cancelación/)).toBeNull();
+});
+
+function holdReservationCommit() {
+  const reached = deferred<void>();
+  const release = deferred<void>();
+  const execAsync = RealSQLite.prototype.execAsync;
+  jest
+    .spyOn(RealSQLite.prototype, 'execAsync')
+    .mockImplementation(async function (this: RealSQLite, sql) {
+      if (sql === 'COMMIT') {
+        reached.resolve();
+        await release.promise;
+      }
+      await execAsync.call(this, sql);
+    });
+  return { reached: reached.promise, release: release.resolve };
+}
+
+function changeAppState(state: AppStateStatus) {
+  AppState.currentState = state;
+  appStateListeners.forEach((listener) => listener(state));
+}
+
+test.each(['youtube', 'direct'] as const)(
+  '%s cannot start after Drop backgrounds during its SQLite reservation',
+  async (source) => {
+    const native = localYoutubeNativeEngine();
+    native.startAudioDownload.mockReturnValue(nativeJob);
+    jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+    jest.mocked(createDownloadJob).mockResolvedValue(completedDirectJob);
+    const previous = AppState.currentState;
+    AppState.currentState = 'active';
+    await render(<NavigableSession />);
+    await analyzeYoutube();
+    await fireEvent.press(await screen.findByText('Solo audio'));
+    const commit = holdReservationCommit();
+    try {
+      await act(async () => {
+        const start =
+          source === 'youtube'
+            ? session.spike.downloadAudio()
+            : session.download.start(navigationDirectMedia, {
+                type: 'VIDEO_AUDIO',
+                videoIndex: 0,
+                audioIndex: null,
+              });
+        await commit.reached;
+        expect(native.startAudioDownload).not.toHaveBeenCalled();
+        expect(createDownloadJob).not.toHaveBeenCalled();
+        changeAppState('background');
+        native.cancel();
+        native.cancelAudioDownload();
+        native.cancelCombinedDownload();
+        commit.release();
+        await start;
+      });
+      expect(native.startAudioDownload).not.toHaveBeenCalled();
+      expect(createDownloadJob).not.toHaveBeenCalled();
+      expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+        source,
+        status: 'interrupted',
+      });
+      expect(screen.getByText('Descarga interrumpida')).toBeTruthy();
+    } finally {
+      commit.release();
+      AppState.currentState = previous;
+    }
+  },
+);
+
+test('a foreground round trip invalidates the old reservation and requires an explicit retry', async () => {
+  const native = localYoutubeNativeEngine();
+  native.startAudioDownload.mockReturnValue(nativeJob);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  const previous = AppState.currentState;
+  AppState.currentState = 'active';
+  await render(<NavigableSession />);
+  await analyzeYoutube();
+  await fireEvent.press(await screen.findByText('Solo audio'));
+  const commit = holdReservationCommit();
+  try {
+    await act(async () => {
+      const start = session.spike.downloadAudio();
+      await commit.reached;
+      changeAppState('background');
+      changeAppState('active');
+      commit.release();
+      await start;
+    });
+    expect(native.startAudioDownload).not.toHaveBeenCalled();
+    const interrupted = await readRawDownloadRecovery();
+    await act(() => native.emit('onAudioDownloadState', completeNative));
+    expect(promoteToLibrary).not.toHaveBeenCalled();
+    expect(await readRawDownloadRecovery()).toBe(interrupted);
+    await fireEvent.press(
+      await screen.findByRole('button', { name: 'Reintentar desde cero' }),
+    );
+    const download = await screen.findByRole('button', { name: 'Descargar' });
+    expect(native.startAudioDownload).not.toHaveBeenCalled();
+    await fireEvent.press(download);
+    expect(native.startAudioDownload).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+      source: 'youtube',
+      status: 'pending',
+    });
+  } finally {
+    commit.release();
+    AppState.currentState = previous;
+  }
+});
+
+test('a foreground rejection at the native boundary is persisted as an interruption', async () => {
+  const native = localYoutubeNativeEngine();
+  native.startAudioDownload.mockReturnValue('APP_NOT_ACTIVE');
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  await render(<HomeScreen />);
+  await analyzeYoutube();
+  await fireEvent.press(await screen.findByText('Solo audio'));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(await screen.findByText('Descarga interrumpida')).toBeTruthy();
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    status: 'interrupted',
+  });
+  expect(screen.queryByText('Descarga cancelada')).toBeNull();
+});
+
+test('a native background cancellation invalidates subsequent callbacks without marking user cancellation', async () => {
+  const { native } = await startNavigableAudio();
+  await act(() => {
+    changeAppState('background');
+    native.emit('onAudioDownloadState', {
+      jobId: nativeJob,
+      status: 'CANCELLED',
+    });
+    native.emit('onAudioDownloadState', completeNative);
+    changeAppState('active');
+  });
+  expect(await screen.findByText('Descarga interrumpida')).toBeTruthy();
+  expect(screen.queryByText('Descarga cancelada')).toBeNull();
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    status: 'interrupted',
+  });
+  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(native.startAudioDownload).toHaveBeenCalledTimes(1);
+});
+
+test('a rejected interruption write keeps the confirmed reservation and never starts YouTube', async () => {
+  const native = localYoutubeNativeEngine();
+  native.startAudioDownload.mockReturnValue(nativeJob);
+  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+  const previous = AppState.currentState;
+  AppState.currentState = 'active';
+  await render(<NavigableSession />);
+  await analyzeYoutube();
+  await fireEvent.press(await screen.findByText('Solo audio'));
+  await rejectDownloadWrite('UPDATE');
+  const commit = holdReservationCommit();
+  try {
+    await act(async () => {
+      const start = session.spike.downloadAudio();
+      await commit.reached;
+      changeAppState('background');
+      commit.release();
+      await start;
+      changeAppState('active');
+    });
+    expect(native.startAudioDownload).not.toHaveBeenCalled();
+    expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+      status: 'pending',
+      phase: 'creating',
+    });
+    expect(screen.queryByText('Descarga interrumpida')).toBeNull();
+    expect(
+      screen.getByText(/No se pudo registrar la interrupción/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/fixture write rejection/)).toBeNull();
+  } finally {
+    commit.release();
+    AppState.currentState = previous;
+  }
 });

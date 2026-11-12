@@ -9,17 +9,23 @@ import {
   type LocalCombinedDownloadEvent,
   type LocalVideoDownloadEvent,
 } from '@/models/onDeviceYoutube';
-import { serverError } from '@/services/errors';
+import { DownloadStartInterrupted, serverError } from '@/services/errors';
 
 type LocalEngine = {
   analyze: (url: string) => Promise<string>;
+  downloadForegroundGeneration: () => number | null;
   startAudioDownload: (
     analysisId: string,
     formatId: string,
     durationSeconds: number,
+    foregroundGeneration: number,
   ) => string | null;
   cancelAudioDownload: () => void;
-  startVideoDownload: (analysisId: string, formatId: string) => string | null;
+  startVideoDownload: (
+    analysisId: string,
+    formatId: string,
+    foregroundGeneration: number,
+  ) => string | null;
   cancelVideoDownload: () => void;
   startCombinedDownload: (
     analysisId: string,
@@ -28,6 +34,7 @@ type LocalEngine = {
     durationSeconds: number,
     audioExactBytes: number | null,
     audioApproximateBytes: number | null,
+    foregroundGeneration: number,
   ) => string | null;
   cancelCombinedDownload: () => void;
   cancel: () => void;
@@ -82,23 +89,35 @@ export function cancelLocalYoutube() {
   engine()?.cancel();
 }
 
+export function localDownloadForegroundGeneration() {
+  return engine()?.downloadForegroundGeneration() ?? null;
+}
+
+function checkedStart(jobId: string | null) {
+  if (jobId === 'APP_NOT_ACTIVE') throw new DownloadStartInterrupted();
+  if (!jobId) throw new Error('Ya hay una descarga local activa.');
+  return jobId;
+}
+
 export function startLocalAudioDownload(
   analysisId: string,
   formatId: string,
   durationSeconds: number,
+  foregroundGeneration: number,
 ): string {
   const native = engine();
   if (!native)
     throw new Error('Esta build no incluye el motor local experimental.');
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0)
     throw new Error('No se puede preparar el audio sin una duración válida.');
-  const jobId = native.startAudioDownload(
-    analysisId,
-    formatId,
-    durationSeconds,
+  return checkedStart(
+    native.startAudioDownload(
+      analysisId,
+      formatId,
+      durationSeconds,
+      foregroundGeneration,
+    ),
   );
-  if (!jobId) throw new Error('Ya hay una descarga local activa.');
-  return jobId;
 }
 
 export function cancelLocalAudioDownload(): void {
@@ -188,13 +207,14 @@ export function localAudioError(code: string): string {
 export function startLocalVideoDownload(
   analysisId: string,
   formatId: string,
+  foregroundGeneration: number,
 ): string {
   const native = engine();
   if (!native)
     throw new Error('Esta build no incluye el motor local experimental.');
-  const jobId = native.startVideoDownload(analysisId, formatId);
-  if (!jobId) throw new Error('Ya hay una descarga local activa.');
-  return jobId;
+  return checkedStart(
+    native.startVideoDownload(analysisId, formatId, foregroundGeneration),
+  );
 }
 
 export function cancelLocalVideoDownload(): void {
@@ -275,20 +295,22 @@ export function startLocalCombinedDownload(
   durationSeconds: number,
   audioExactBytes: number | null,
   audioApproximateBytes: number | null,
+  foregroundGeneration: number,
 ): string {
   const native = engine();
   if (!native)
     throw new Error('Esta build no incluye el motor local experimental.');
-  const jobId = native.startCombinedDownload(
-    analysisId,
-    videoFormatId,
-    audioFormatId,
-    durationSeconds,
-    audioExactBytes,
-    audioApproximateBytes,
+  return checkedStart(
+    native.startCombinedDownload(
+      analysisId,
+      videoFormatId,
+      audioFormatId,
+      durationSeconds,
+      audioExactBytes,
+      audioApproximateBytes,
+      foregroundGeneration,
+    ),
   );
-  if (!jobId) throw new Error('Ya hay una descarga local activa.');
-  return jobId;
 }
 
 export function cancelLocalCombinedDownload(): void {

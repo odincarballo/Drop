@@ -13,12 +13,12 @@ import { ApiError } from '@/services/errors';
 import { analyzeMedia } from '@/services/media';
 import { validateMediaUrl } from '@/utils/validation';
 
-export function useMediaAnalysis(onUrlChange?: () => void) {
+export function useMediaAnalysis() {
   const [url, setUrl] = useState('');
   const [state, setState] = useState<AnalysisState>({ status: 'idle' });
   const [isPasting, setIsPasting] = useState(false);
   const request = useRef<AbortController | null>(null);
-  const pasteInProgress = useRef(false);
+  const pasteInProgress = useRef<symbol | null>(null);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -30,9 +30,10 @@ export function useMediaAnalysis(onUrlChange?: () => void) {
   }, []);
 
   function updateUrl(value: string) {
+    pasteInProgress.current = null;
+    setIsPasting(false);
     request.current?.abort();
     request.current = null;
-    onUrlChange?.();
     setUrl(value);
     setState({ status: 'idle' });
   }
@@ -43,13 +44,23 @@ export function useMediaAnalysis(onUrlChange?: () => void) {
     setState({ status: 'idle' });
   }
 
-  async function pasteUrl() {
-    if (pasteInProgress.current || request.current) return;
-    pasteInProgress.current = true;
+  function isPastePending() {
+    return pasteInProgress.current !== null;
+  }
+
+  async function pasteUrl(
+    canApply: () => boolean,
+    applyUrl: (value: string) => void,
+  ) {
+    if (isPastePending() || request.current || !canApply()) return;
+    const paste = Symbol();
+    pasteInProgress.current = paste;
+    const isCurrent = () =>
+      mounted.current && pasteInProgress.current === paste && canApply();
     setIsPasting(true);
     try {
       const text = (await Clipboard.getStringAsync()).trim();
-      if (!mounted.current) return;
+      if (!isCurrent()) return;
       if (!text) {
         setState({
           status: 'error',
@@ -62,18 +73,20 @@ export function useMediaAnalysis(onUrlChange?: () => void) {
           message: 'La URL copiada es demasiado larga.',
         });
       } else {
-        updateUrl(text);
+        applyUrl(text);
       }
     } catch {
-      if (mounted.current) {
+      if (isCurrent()) {
         setState({
           status: 'error',
           message: 'No se pudo pegar. Puedes introducir la URL manualmente.',
         });
       }
     } finally {
-      pasteInProgress.current = false;
-      if (mounted.current) setIsPasting(false);
+      if (pasteInProgress.current === paste) {
+        pasteInProgress.current = null;
+        if (mounted.current) setIsPasting(false);
+      }
     }
   }
 
@@ -131,6 +144,7 @@ export function useMediaAnalysis(onUrlChange?: () => void) {
     state,
     isBusy,
     isPasting,
+    isPastePending,
     updateUrl,
     pasteUrl,
     analyze,
