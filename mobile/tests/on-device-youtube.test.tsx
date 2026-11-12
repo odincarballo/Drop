@@ -29,7 +29,7 @@ import {
   localVideoError,
 } from '@/services/onDeviceYoutube';
 import { shareLocalFile } from '@/services/jobs';
-import { promoteToLibrary } from '@/services/library';
+import { publishDownloadAsset } from '@/services/library';
 
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
 
@@ -41,7 +41,15 @@ jest.mock('@/services/fileExport', () => ({
   ),
 }));
 jest.mock('@/services/library', () => ({
-  promoteToLibrary: jest.fn(),
+  publishDownloadAsset: jest.fn(),
+  stageDownloadAsset: jest.fn(
+    async (_key: string, file: { sizeBytes: number }) => ({
+      id: '00000000-0000-0000-0000-000000000001',
+      ext: 'mp4',
+      sha256: 'c'.repeat(64),
+      sizeBytes: file.sizeBytes,
+    }),
+  ),
   withLibraryLease: jest.fn((_id, operation) =>
     operation({ uri: 'file:///library/clip.mp4' }),
   ),
@@ -166,7 +174,7 @@ beforeEach(async () => {
   AppState.currentState = 'active';
   await resetDownloadRecoveryFixture();
   jest.clearAllMocks();
-  jest.mocked(promoteToLibrary).mockImplementation(
+  jest.mocked(publishDownloadAsset).mockImplementation(
     async (_uri) =>
       ({
         id: '00000000-0000-0000-0000-000000000001',

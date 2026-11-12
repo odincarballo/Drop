@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
+  discardTransferredDownload,
+  recoverTransferredDownload,
+} from '@/services/downloadPublication';
+import {
   discardRecoveredDownload,
   readDownloadRecord,
   updateRecoveredDownload,
@@ -73,6 +77,7 @@ export function useDownloadRecovery() {
   function query() {
     if (
       !record?.remoteJobId ||
+      record.publication ||
       record.status === 'cancelled' ||
       record.errorCode === 'REMOTE_EXPIRED'
     )
@@ -111,12 +116,50 @@ export function useDownloadRecovery() {
     });
   }
 
+  function saveCompleted() {
+    if (!record?.publication || record.publication.discarding) return;
+    return run(async (signal) => {
+      try {
+        const item = await recoverTransferredDownload(record);
+        if (item && record.remoteJobId)
+          void deleteDownloadJob(record.remoteJobId).catch(() => undefined);
+        if (signal.aborted) return;
+        const latest = await readDownloadRecord();
+        if (!signal.aborted) {
+          setRecord(latest);
+          if (item) setMessage('Archivo guardado en Biblioteca.');
+        }
+      } catch {
+        if (!signal.aborted)
+          setMessage(
+            'No se pudo verificar o guardar el archivo. Inténtalo de nuevo.',
+          );
+      }
+    });
+  }
+
   function dismiss(retry?: (record: DownloadRecord) => void) {
     if (!record) return;
     return run(async (signal) => {
       // Cancel only the job owned by this record. Removing the record first keeps
       // an interrupted network cleanup from making it resumable on next launch.
-      const discarded = await discardRecoveredDownload(record);
+      let discarded: DownloadRecord | null;
+      try {
+        discarded = await (record.publication
+          ? discardTransferredDownload(record)
+          : discardRecoveredDownload(record));
+      } catch {
+        try {
+          const latest = await readDownloadRecord();
+          if (!signal.aborted) setRecord(latest);
+        } catch {
+          if (!signal.aborted) {
+            setRecord(null);
+            setLoaded(false);
+          }
+        }
+        throw new Error('No se pudo completar el descarte.');
+      }
       if (signal.aborted) return;
       if (!discarded) {
         const latest = await readDownloadRecord();
@@ -141,6 +184,7 @@ export function useDownloadRecovery() {
     message,
     load,
     query,
+    saveCompleted,
     dismiss,
     showInterrupted: setRecord,
   };

@@ -7,21 +7,33 @@ enum DropLocalMediaInspection {
     let ext = url.pathExtension.lowercased()
     let folder = DropLibraryPaths.MediaFolder.imported
     guard url.isFileURL, folder.accepts(ext) else { throw DropLibraryStorageError.invalidSource }
-    if ext != "mp3" { try checkMP4Container(url) }
+    return try await inspect(url, extension: ext, mediaType: ext == "mp4" ? .video : .audio)
+  }
 
+  static func inspectCompletedDownload(_ url: URL, mediaType: String) async throws {
+    let ext = url.pathExtension.lowercased()
+    guard url.isFileURL, DropLibraryPaths.MediaFolder.downloaded.accepts(ext),
+          mediaType == "audio" || (mediaType == "video" && ext == "mp4") else {
+      throw DropLibraryStorageError.invalidSource
+    }
+    _ = try await inspect(url, extension: ext, mediaType: mediaType == "audio" ? .audio : .video)
+  }
+
+  private static func inspect(_ url: URL, extension ext: String, mediaType: AVMediaType)
+    async throws -> (mediaType: String, durationSeconds: Double) {
+    if ext == "mp4" || ext == "m4a" { try checkMP4Container(url) }
     let asset = AVURLAsset(url: url, options: [
       AVURLAssetReferenceRestrictionsKey: NSNumber(value: AVAssetReferenceRestrictions.forbidAll.rawValue)
     ])
     let (playable, protected, duration, tracks) = try await asset.load(
       .isPlayable, .hasProtectedContent, .duration, .tracks)
     let seconds = duration.seconds
-    let mediaType: AVMediaType = ext == "mp4" ? .video : .audio
     guard playable, !protected, seconds.isFinite, seconds > 0,
           let track = tracks.first(where: { $0.mediaType == mediaType }),
           mediaType == .video || !tracks.contains(where: { $0.mediaType == .video }) else {
       throw DropLibraryStorageError.invalidSource
     }
-    if mediaType == .audio {
+    if mediaType == .audio && ext != "mp4" {
       let expectedFormat = ext == "mp3" ? kAudioFormatMPEGLayer3 : kAudioFormatMPEG4AAC
       let descriptions = try await track.load(.formatDescriptions)
       guard descriptions.contains(where: {

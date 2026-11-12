@@ -8,6 +8,8 @@ import { formatSize } from '@/utils/format';
 
 function description(record: DownloadRecord) {
   if (record.status === 'cancelled') return null;
+  if (record.publication)
+    return 'Verifica el archivo local antes de guardarlo en Biblioteca.';
   if (record.source === 'youtube' && record.phase === 'saving') return null;
   if (record.source === 'youtube')
     return 'Puedes volver a analizar el video y elegir el formato antes de descargar desde cero.';
@@ -36,7 +38,25 @@ export function DownloadRecoveryCard({
   onRetry: () => void;
 }) {
   const { colors } = useTheme();
-  const { record, loaded, message, working, load, query, dismiss } = recovery;
+  const {
+    record,
+    loaded,
+    message,
+    working,
+    load,
+    query,
+    saveCompleted,
+    dismiss,
+  } = recovery;
+  if (!record && loaded && message)
+    return (
+      <Text
+        accessibilityLiveRegion="polite"
+        style={{ color: colors.secondary }}
+      >
+        {message}
+      </Text>
+    );
   if (!record)
     return !loaded && message ? (
       <View style={{ gap: 8 }}>
@@ -52,17 +72,24 @@ export function DownloadRecoveryCard({
     ) : null;
 
   const cancelled = record.status === 'cancelled';
-  const detail = description(record);
+  const discarding = record.publication?.discarding;
+  const detail = discarding
+    ? 'La limpieza de esta descarga quedó pendiente.'
+    : description(record);
   return (
     <View style={{ gap: 8 }}>
       <Text
         accessibilityRole="header"
         style={{ color: colors.text, fontWeight: '600' }}
       >
-        {cancelled ? 'Descarga cancelada' : 'Descarga interrumpida'}
+        {discarding
+          ? 'Descarte pendiente'
+          : cancelled
+            ? 'Descarga cancelada'
+            : 'Descarga interrumpida'}
       </Text>
       {detail && <Text style={{ color: colors.secondary }}>{detail}</Text>}
-      {!cancelled && record.phase === 'saving' && (
+      {!cancelled && !record.publication && record.phase === 'saving' && (
         <Text style={{ color: colors.secondary }}>
           El último paso fue guardar el archivo. Revisa Biblioteca antes de
           descargarlo de nuevo.
@@ -88,6 +115,7 @@ export function DownloadRecoveryCard({
         </Text>
       )}
       {!cancelled &&
+        !record.publication &&
         record.remoteJobId &&
         record.errorCode !== 'REMOTE_EXPIRED' && (
           <ActionButton
@@ -103,8 +131,15 @@ export function DownloadRecoveryCard({
           disabled={working}
         />
       )}
+      {record.publication && !discarding && (
+        <ActionButton
+          label="Verificar y guardar archivo"
+          onPress={() => void saveCompleted()}
+          disabled={working}
+        />
+      )}
       <ActionButton
-        label="Descartar"
+        label={discarding ? 'Finalizar descarte' : 'Descartar'}
         onPress={() => void dismiss()}
         secondary
         disabled={working}

@@ -16,6 +16,15 @@ const phase = z.enum([
   'saving',
 ]);
 const errorCode = z.enum(['DOWNLOAD_FAILED', 'REMOTE_EXPIRED']);
+export const completedDownloadAssetSchema = z.strictObject({
+  id: z.string().regex(/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/),
+  ext: z.enum(['mp4', 'm4a', 'mp3', 'aac']),
+  sizeBytes: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type CompletedDownloadAsset = z.infer<
+  typeof completedDownloadAssetSchema
+>;
 const fields = {
   version: z.literal(1),
   id: z.string().regex(/^[a-z0-9-]{1,64}$/),
@@ -30,6 +39,12 @@ const fields = {
   phase,
   bytes: z.number().int().nonnegative(),
   errorCode: errorCode.nullable(),
+  publication: z
+    .strictObject({
+      asset: completedDownloadAssetSchema.optional(),
+      discarding: z.literal(true).optional(),
+    })
+    .optional(),
 };
 const schema = z.discriminatedUnion('source', [
   z.strictObject({
@@ -166,6 +181,15 @@ function decode(row: StoredAttempt | null): DownloadRecord | null {
     return null;
   try {
     const record = schema.safeParse(JSON.parse(row.payload)).data;
+    if (
+      record?.publication &&
+      (record.status !== 'pending' ||
+        record.phase !== 'saving' ||
+        record.bytes < 1 ||
+        (record.publication.asset &&
+          record.publication.asset.sizeBytes !== record.bytes))
+    )
+      return null;
     return record?.id === row.id && record.generation === row.generation
       ? record
       : null;
@@ -240,12 +264,66 @@ export function updateRecoveredDownload(
   update: Update,
 ) {
   return change(record, (db, current) =>
-    write(db, { ...current, ...update } as DownloadRecord, current),
+    current.publication
+      ? Promise.resolve(null)
+      : write(db, { ...current, ...update } as DownloadRecord, current),
   );
 }
 
 export function discardRecoveredDownload(record: DownloadRecord) {
   return change(record, async (db, current) => {
+    if (current.publication) return null;
+    await remove(db, current);
+    return current;
+  });
+}
+
+export function recordCompletedAsset(
+  record: Identity,
+  asset: CompletedDownloadAsset,
+) {
+  return change(record, async (db, current) => {
+    if (
+      !current.publication ||
+      current.publication.discarding ||
+      current.bytes !== asset.sizeBytes
+    )
+      return null;
+    const existing = current.publication.asset;
+    if (existing)
+      return existing.id === asset.id &&
+        existing.ext === asset.ext &&
+        existing.sha256 === asset.sha256
+        ? current
+        : null;
+    return write(db, { ...current, publication: { asset } }, current);
+  });
+}
+
+export function beginDownloadDiscard(
+  record: Identity,
+  discovered?: CompletedDownloadAsset,
+) {
+  return change(record, async (db, current) => {
+    if (!current.publication) return null;
+    if (current.publication.discarding) return current;
+    const asset = current.publication.asset ?? discovered;
+    if (asset && asset.sizeBytes !== current.bytes) return null;
+    return write(
+      db,
+      { ...current, publication: { asset, discarding: true } },
+      current,
+    );
+  });
+}
+
+export function finishDownloadPublication(record: DownloadRecord) {
+  return change(record, async (db, current) => {
+    if (
+      !current.publication ||
+      current.publication.discarding !== record.publication?.discarding
+    )
+      return null;
     await remove(db, current);
     return current;
   });
@@ -305,6 +383,7 @@ function attemptFor(record: DownloadRecord) {
   function pending(update: Update) {
     return change(record, async (db, current) =>
       current.status === 'pending' &&
+      !current.publication &&
       (current.phase !== 'saving' || !update.phase || update.phase === 'saving')
         ? write(db, { ...current, ...update } as DownloadRecord, current)
         : null,
@@ -348,6 +427,28 @@ function attemptFor(record: DownloadRecord) {
   }
   return {
     update,
+    beginPublication(sizeBytes: number, owner: string) {
+      return change(record, async (db, current) => {
+        if (
+          !Number.isSafeInteger(sizeBytes) ||
+          sizeBytes <= 0 ||
+          current.status !== 'pending' ||
+          current.phase === 'saving' ||
+          (current.source === 'direct' && current.remoteJobId !== owner)
+        )
+          return null;
+        return write(
+          db,
+          {
+            ...current,
+            phase: 'saving',
+            bytes: sizeBytes,
+            publication: {},
+          },
+          current,
+        );
+      });
+    },
     async ownsReservation() {
       const current = await readDownloadRecord().catch(() => {
         throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
@@ -390,7 +491,8 @@ function attemptFor(record: DownloadRecord) {
     },
     finish() {
       return change(record, async (db, current) => {
-        if (current.status === 'pending') await remove(db, current);
+        if (current.status === 'pending' && !current.publication)
+          await remove(db, current);
         return null;
       });
     },

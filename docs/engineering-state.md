@@ -3,6 +3,42 @@
 Actualizado: 12 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
+## Descargas persistentes · Bloque B · revisión local
+
+- Rama `codex/download-recovery-b`, derivada de
+  `38de0601b39b8d6cfb06fd90aac95186484ba467`. Cambios sin commit.
+  [Contrato de publicación y recuperación](download-recovery-block-b.md).
+- Archivo terminado con prueba SHA-256 en staging de Application Support.
+  Publicación por UUID estable y reconciliación verificada de `pending`
+  y `ready` en Biblioteca SQLite v5. La recuperación pide confirmación
+  explícita y no inicia una transferencia. El descarte se limita al intento.
+- RED reprodujo la confirmación por tamaño de bytes corruptos y la
+  eliminación prematura del job remoto al fallar la reserva. GREEN acreditó
+  190 pruebas en siete suites afectadas, incluidas 13 de publicación con
+  SQLite real y disco. TypeScript, formato, diff check y typecheck Swift
+  estricto ARM64 iOS 16.4 PASS. Lint focal con cero errores y tres avisos
+  preexistentes. Falta validar el cierre y reapertura en iPhone.
+
+## Descargas persistentes · Bloque B.1 · corrección local
+
+- B.1 corrige la ventana entre SHA-256 y `ready`, el descarte previo a
+  confirmar su intención y la atribución por nombre del temporal.
+  El destino validado queda bajo reserva nativa hasta el cierre de la
+  transacción de Biblioteca. El sello liga el archivo al intento, a su
+  generación y a la identidad del objeto de disco.
+- Una intención SQLite confirmada permite finalizar el descarte tras un
+  cierre. La limpieza verifica la identidad antes y después del renombrado
+  exclusivo a cuarentena. La reapertura ofrece «Finalizar descarte» sin
+  transferir ni publicar. SQLite de Biblioteca permanece en v5.
+- RED reprodujo los tres defectos. GREEN acreditó 207 pruebas en siete
+  suites, incluidas 29 de publicación y descarte con SQLite y disco reales
+  y un doble del bridge. TypeScript y formato PASS. Typecheck ARM64
+  iOS 16.4 en Swift 5 con concurrencia estricta y Swift 6 para almacenamiento.
+  Lint focal sin errores, con un aviso preexistente en el alcance revisado.
+- Pendiente de comprobación física en iPhone: sello y bridge reales,
+  recuperación tras cerrar el proceso, descarte interrumpido y reproducción
+  completa. B.1 sigue sin commit.
+
 ## Descargas persistentes · Bloques A, A.1 y A.2 · consolidación local
 
 - Consolidación de A, A.1 y A.2 en `codex/download-recovery-a`, desde la base

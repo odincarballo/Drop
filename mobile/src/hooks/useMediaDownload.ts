@@ -6,6 +6,7 @@ import {
   selectedDownloadRequest,
   type DownloadSelection,
 } from '@/models/selection';
+import { saveTransferredDownload } from '@/services/downloadPublication';
 import {
   DownloadRecoveryError,
   rememberDownload,
@@ -18,7 +19,7 @@ import {
   jobError,
 } from '@/services/errors';
 import { withNamedLibraryFile } from '@/services/fileExport';
-import { promoteToLibrary, withLibraryLease } from '@/services/library';
+import { withLibraryLease } from '@/services/library';
 import {
   createDownloadJob,
   deleteDownloadJob,
@@ -208,16 +209,12 @@ export function useMediaDownload(
         deleteLocalFile(file.uri);
         return;
       }
-      let canSave: boolean;
-      try {
-        canSave = await journal.update('saving', file.size);
-      } catch (error) {
+      if (!job.fileSize || file.size !== job.fileSize) {
         deleteLocalFile(file.uri);
-        throw error;
-      }
-      if (!canSave || !isCurrent()) {
-        deleteLocalFile(file.uri);
-        return;
+        throw new ApiError(
+          'INCOMPLETE_DOWNLOAD',
+          'No se pudo verificar el tamaño del archivo terminado.',
+        );
       }
       committing.current = true;
       setState({ status: 'saving', job });
@@ -229,21 +226,34 @@ export function useMediaDownload(
         'audioIndex' in selection && selection.audioIndex !== null
           ? media.audioFormats[selection.audioIndex]
           : null;
-      const saved = await promoteToLibrary(file.uri, {
-        sourceKind: 'direct',
-        title: media.title ?? job.fileName ?? 'Archivo de Drop',
-        mediaType: selection.type === 'AUDIO_ONLY' ? 'audio' : 'video',
-        durationSeconds: media.duration,
-        resolution: video?.resolution,
-        height: video?.height,
-        fps: video?.fps,
-        videoCodec: video?.codec,
-        audioCodec: audio?.codec,
-        container:
-          selection.type === 'AUDIO_ONLY' ? audio?.container : video?.container,
-      });
+      const result = await saveTransferredDownload(
+        journal,
+        { uri: file.uri, owner: job.id, sizeBytes: job.fileSize },
+        {
+          sourceKind: 'direct',
+          title: media.title ?? job.fileName ?? 'Archivo de Drop',
+          mediaType: selection.type === 'AUDIO_ONLY' ? 'audio' : 'video',
+          durationSeconds: media.duration,
+          resolution: video?.resolution,
+          height: video?.height,
+          fps: video?.fps,
+          videoCodec: video?.codec,
+          audioCodec: audio?.codec,
+          container:
+            selection.type === 'AUDIO_ONLY'
+              ? audio?.container
+              : video?.container,
+        },
+      );
+      if (!result?.item) {
+        if (isCurrent()) {
+          setState({ status: 'idle' });
+          if (result?.record) onInterrupted(result.record);
+        }
+        return;
+      }
+      const saved = result.item;
       // The source was moved. A visual reset must never delete Library media.
-      await journal.finish().catch(() => undefined);
       localUri.current = null;
       if (operation.current === currentOperation) jobId.current = null;
       void deleteDownloadJob(job.id).catch(() => undefined);
@@ -261,7 +271,8 @@ export function useMediaDownload(
       if (isCurrent()) {
         const failedJob = jobId.current;
         jobId.current = null;
-        if (failedJob) void deleteDownloadJob(failedJob).catch(() => undefined);
+        if (failedJob && !committing.current)
+          void deleteDownloadJob(failedJob).catch(() => undefined);
         if (!(
           error instanceof DownloadRecoveryError &&
           error.code === 'DOWNLOAD_INTERRUPTION'

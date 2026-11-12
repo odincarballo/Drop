@@ -35,7 +35,7 @@ import { createDownloadJob, downloadJobFile } from '@/services/jobs';
 import {
   initializeLibrary,
   listLibrary,
-  promoteToLibrary,
+  publishDownloadAsset,
   getLibraryItem,
 } from '@/services/library';
 import { playback, type PlaybackState } from '@/services/playback';
@@ -65,7 +65,15 @@ jest.mock('@/services/library', () => ({
   listLibrary: jest.fn(async () => [mockItem]),
   getLibraryItem: jest.fn(async () => mockItem),
   observeLibrary: jest.fn(() => jest.fn()),
-  promoteToLibrary: jest.fn(),
+  publishDownloadAsset: jest.fn(),
+  stageDownloadAsset: jest.fn(
+    async (_key: string, file: { sizeBytes: number }) => ({
+      id: '00000000-0000-0000-0000-000000000001',
+      ext: 'mp4',
+      sha256: 'c'.repeat(64),
+      sizeBytes: file.sizeBytes,
+    }),
+  ),
 }));
 jest.mock('@/services/collections', () => ({
   listCollections: jest.fn(async () => [
@@ -234,7 +242,7 @@ beforeEach(async () => {
   jest.mocked(playback.getState).mockResolvedValue(mockPlaying);
   jest.mocked(playback.startInContext).mockResolvedValue(mockPlaying);
   jest.mocked(playback.open).mockResolvedValue(mockPlaying);
-  jest.mocked(promoteToLibrary).mockResolvedValue(mockItem);
+  jest.mocked(publishDownloadAsset).mockResolvedValue(mockItem);
 });
 
 test('Library opens directly, primary sections replace history and keep a single player/provider', async () => {
@@ -314,7 +322,7 @@ test.each([false, true])(
   async (missing) => {
     const transfer = deferred<{ uri: string; size: number }>();
     jest.mocked(createDownloadJob).mockResolvedValue({
-      id: 'active-job',
+      id: 'a'.repeat(32),
       status: 'COMPLETED',
       progress: 1,
       bytesDownloaded: 12,
@@ -322,7 +330,7 @@ test.each([false, true])(
       fileName: 'clip.mp4',
       fileSize: 12,
       error: null,
-      downloadUrl: '/jobs/active-job/file',
+      downloadUrl: '/jobs/' + 'a'.repeat(32) + '/file',
     });
     jest.mocked(downloadJobFile).mockReturnValue(transfer.promise);
     await openApp('/download');
@@ -348,7 +356,7 @@ test.each([false, true])(
     await tab('Descargar');
     expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
     expect(createDownloadJob).toHaveBeenCalledTimes(1);
-    expect(promoteToLibrary).toHaveBeenCalledTimes(1);
+    expect(publishDownloadAsset).toHaveBeenCalledTimes(1);
     expect(session.download.state).toMatchObject({ libraryId: mockItem.id });
     if (missing)
       jest.mocked(getLibraryItem).mockResolvedValueOnce({

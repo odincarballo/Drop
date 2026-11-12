@@ -67,7 +67,7 @@ public final class DropLibraryStorage {
     let relativeMediaPath: String
   }
 
-  private func cacheRelativePath(for uri: String) throws -> String {
+  func cacheRelativePath(for uri: String) throws -> String {
     guard let url = URL(string: uri), url.isFileURL, (url.host ?? "").isEmpty else {
       throw DropLibraryStorageError.invalidSource
     }
@@ -143,7 +143,9 @@ public final class DropLibraryStorage {
         throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
       }
     } else {
-      try manager.moveItem(at: source, to: destination)
+      try withUnleasedDownloadPath(destination) {
+        try manager.moveItem(at: source, to: destination)
+      }
     }
     if relative.hasPrefix("MediaDrop/") || folder == .imported {
       removeEmptyWorkspace(source.deletingLastPathComponent())
@@ -172,7 +174,7 @@ public final class DropLibraryStorage {
     return metadata
   }
 
-  private func ensureDirectory(_ directory: URL) throws {
+  func ensureDirectory(_ directory: URL) throws {
     guard DropLibraryPaths.isUnredirected(directory) else {
       throw DropLibraryStorageError.invalidManagedPath
     }
@@ -240,7 +242,10 @@ public final class DropLibraryStorage {
   }
 
   func removeMedia(relative: String) throws {
-    if let (url, _) = try managedMedia(relative: relative) { try manager.removeItem(at: url) }
+    let destination = root.appendingPathComponent(relative)
+    try withUnleasedDownloadPath(destination) {
+      if let (url, _) = try managedMedia(relative: relative) { try manager.removeItem(at: url) }
+    }
   }
 
   func removeArtwork(id: String) throws {

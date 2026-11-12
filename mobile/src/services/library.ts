@@ -9,6 +9,7 @@ import {
   type LibraryDescriptiveMetadata,
   type LibrarySourceKind,
 } from '@/models/library';
+import type { CompletedDownloadAsset } from '@/services/downloadRecovery';
 import {
   openLibraryDatabase,
   withLibraryForeignKeyTransaction,
@@ -35,6 +36,32 @@ type LocalArtworkPublication = {
   token?: string;
 };
 type NativeLibrary = {
+  stageCompletedDownload(
+    key: string,
+    uri: string,
+    origin: string,
+    owner: string,
+    sizeBytes: number,
+    mediaType: string,
+  ): Promise<unknown>;
+  findCompletedDownload(key: string, sizeBytes: number): Promise<unknown>;
+  placeCompletedDownload(
+    key: string,
+    id: string,
+    ext: string,
+    sha256: string,
+    sizeBytes: number,
+    move: boolean,
+  ): Promise<string>;
+  verifyCompletedDownload(token: string): Promise<void>;
+  releaseCompletedDownload(token: string): Promise<void>;
+  discardCompletedDownload(
+    key: string,
+    id: string,
+    ext: string,
+    sha256: string,
+    sizeBytes: number,
+  ): Promise<void>;
   inspectExistingMetadata(
     request: number,
     id: string,
@@ -383,7 +410,11 @@ async function reconcile(): Promise<void> {
       }
       // A confirmed record is durable metadata, not proof of current disk availability.
       // Only an explicit deleting tombstone authorizes removing it and its relations.
-      if (row.lifecycle === 'ready') continue;
+      if (
+        row.lifecycle === 'ready' ||
+        row.sourceCacheRelativePath?.startsWith('DownloadStaging/')
+      )
+        continue;
       await recoverPending(row, storage);
       // Artwork references survive missing/partial images; hydration uses a
       // fallback without changing the stored reference or expected metadata.
@@ -654,45 +685,84 @@ async function attachLocalImportArtwork(
   });
 }
 
+async function insertPending(
+  prepared: {
+    id: string;
+    relativeMediaPath: string;
+    cacheRelativePath: string;
+    sizeBytes: number;
+  },
+  safe: LibraryMetadata,
+) {
+  const db = await openLibraryDatabase();
+  const relative = prepared.relativeMediaPath;
+  const downloadedAt = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO library_items (
+      id, sourceKind, sourceVideoId, title, mediaType, relativeMediaPath,
+      sourceCacheRelativePath, durationSeconds, sizeBytes, resolution, height, fps,
+      videoCodec, audioCodec, container, downloadedAt, artist, album, genre, year, lifecycle
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    prepared.id,
+    safe.sourceKind,
+    safe.sourceVideoId ?? null,
+    safe.title,
+    safe.mediaType,
+    relative,
+    prepared.cacheRelativePath,
+    safe.durationSeconds ?? null,
+    prepared.sizeBytes,
+    safe.resolution ?? null,
+    safe.height ?? null,
+    safe.fps ?? null,
+    safe.videoCodec ?? null,
+    safe.audioCodec ?? null,
+    safe.container ?? null,
+    downloadedAt,
+    safe.artist ?? null,
+    safe.album ?? null,
+    safe.genre ?? null,
+    safe.year ?? null,
+  );
+}
+
+function saveDownloadArtwork(
+  storage: NativeLibrary,
+  safe: LibraryMetadata,
+  id: string,
+) {
+  if (safe.thumbnailUrl && safe.sourceKind === 'youtube') {
+    void storage
+      .saveArtwork(safe.thumbnailUrl, id)
+      .then(async ({ sizeBytes }) => {
+        const db = await openLibraryDatabase();
+        const result = await db.runAsync(
+          `UPDATE library_items SET relativeArtworkPath = ?, artworkSizeBytes = ?
+           WHERE id = ? AND lifecycle = 'ready'`,
+          `Artwork/${id}.jpg`,
+          sizeBytes,
+          id,
+        );
+        if (result.changes === 0) await storage.removeArtwork(id);
+        changed();
+      })
+      .catch(() => {
+        // Artwork is optional. A local fallback is always available.
+      });
+  }
+}
+
 export async function promoteToLibrary(
   uri: string,
   metadata: LibraryMetadata,
 ): Promise<AvailableLibraryItem> {
   await initializeLibrary();
   const storage = native();
-  const db = await openLibraryDatabase();
   const safe = validatedMetadata(metadata);
   const prepared = await storage.inspectSource(uri, safe.sourceKind);
   const relative = prepared.relativeMediaPath;
-  const downloadedAt = new Date().toISOString();
   try {
-    await db.runAsync(
-      `INSERT INTO library_items (
-      id, sourceKind, sourceVideoId, title, mediaType, relativeMediaPath,
-      sourceCacheRelativePath, durationSeconds, sizeBytes, resolution, height, fps,
-      videoCodec, audioCodec, container, downloadedAt, artist, album, genre, year, lifecycle
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-      prepared.id,
-      safe.sourceKind,
-      safe.sourceVideoId ?? null,
-      safe.title,
-      safe.mediaType,
-      relative,
-      prepared.cacheRelativePath,
-      safe.durationSeconds ?? null,
-      prepared.sizeBytes,
-      safe.resolution ?? null,
-      safe.height ?? null,
-      safe.fps ?? null,
-      safe.videoCodec ?? null,
-      safe.audioCodec ?? null,
-      safe.container ?? null,
-      downloadedAt,
-      safe.artist ?? null,
-      safe.album ?? null,
-      safe.genre ?? null,
-      safe.year ?? null,
-    );
+    await insertPending(prepared, safe);
   } catch (error) {
     if (safe.sourceKind === 'local') {
       try {
@@ -757,25 +827,152 @@ export async function promoteToLibrary(
   if (!isAvailableLibraryItem(item))
     throw new Error('No se pudo verificar el archivo en Biblioteca.');
   changed();
-  if (safe.thumbnailUrl && safe.sourceKind === 'youtube') {
-    void storage
-      .saveArtwork(safe.thumbnailUrl, prepared.id)
-      .then(async ({ sizeBytes }) => {
-        const result = await db.runAsync(
-          `UPDATE library_items SET relativeArtworkPath = ?, artworkSizeBytes = ?
-           WHERE id = ? AND lifecycle = 'ready'`,
-          `Artwork/${prepared.id}.jpg`,
-          sizeBytes,
-          prepared.id,
+  saveDownloadArtwork(storage, safe, prepared.id);
+  return item;
+}
+
+export function stageDownloadAsset(
+  key: string,
+  file: { uri: string; owner: string; sizeBytes: number },
+  metadata: LibraryMetadata,
+) {
+  return native().stageCompletedDownload(
+    key,
+    file.uri,
+    metadata.sourceKind,
+    file.owner,
+    file.sizeBytes,
+    metadata.mediaType,
+  );
+}
+
+export function findDownloadAsset(key: string, sizeBytes: number) {
+  return native().findCompletedDownload(key, sizeBytes);
+}
+
+export async function publishDownloadAsset(
+  key: string,
+  asset: CompletedDownloadAsset,
+  metadata: LibraryMetadata,
+) {
+  await initializeLibrary();
+  return withMediaDeletionLease(asset.id, () =>
+    publishOwnedDownloadAsset(key, asset, metadata),
+  );
+}
+
+async function publishOwnedDownloadAsset(
+  key: string,
+  asset: CompletedDownloadAsset,
+  metadata: LibraryMetadata,
+) {
+  const storage = native();
+  const safe = validatedMetadata(metadata);
+  const relativeMediaPath = `Media/${asset.id}.${asset.ext}`;
+  const cacheRelativePath = `DownloadStaging/${key}`;
+  let row = await rowFor(asset.id);
+  if (!row) {
+    // A durable stage is required for a new row. A missing row with a final
+    // file is not evidence of ownership, including after a user deletion.
+    const staged = (await storage.findCompletedDownload(
+      key,
+      asset.sizeBytes,
+    )) as CompletedDownloadAsset | null;
+    if (
+      staged?.id !== asset.id ||
+      staged.ext !== asset.ext ||
+      staged.sha256 !== asset.sha256
+    )
+      throw new Error('No se pudo verificar el archivo terminado.');
+    await insertPending(
+      { ...asset, relativeMediaPath, cacheRelativePath },
+      safe,
+    );
+    row = await rowFor(asset.id);
+  }
+  if (
+    !row ||
+    row.lifecycle === 'deleting' ||
+    row.sourceKind !== safe.sourceKind ||
+    row.mediaType !== safe.mediaType ||
+    row.relativeMediaPath !== relativeMediaPath ||
+    row.sizeBytes !== asset.sizeBytes ||
+    (row.lifecycle === 'pending' &&
+      row.sourceCacheRelativePath !== cacheRelativePath)
+  )
+    throw new Error('El registro de Biblioteca no corresponde a la descarga.');
+
+  const pending = row.lifecycle === 'pending';
+  const token = await storage.placeCompletedDownload(
+    key,
+    asset.id,
+    asset.ext,
+    asset.sha256,
+    asset.sizeBytes,
+    pending,
+  );
+  try {
+    if (pending) {
+      await withLibraryForeignKeyTransaction(async (txn) => {
+        const result = await txn.runAsync(
+          `UPDATE library_items SET lifecycle = 'ready', sourceCacheRelativePath = NULL
+           WHERE id = ? AND lifecycle = 'pending' AND sourceCacheRelativePath = ?
+             AND relativeMediaPath = ? AND sizeBytes = ?`,
+          asset.id,
+          cacheRelativePath,
+          relativeMediaPath,
+          asset.sizeBytes,
         );
-        if (result.changes === 0) await storage.removeArtwork(prepared.id);
-        changed();
-      })
-      .catch(() => {
-        // Artwork is optional. A local fallback is always available.
+        if (result.changes !== 1)
+          throw new Error('No se pudo confirmar el archivo en Biblioteca.');
+        await storage.verifyCompletedDownload(token);
       });
+      row = await rowFor(asset.id);
+      if (row?.lifecycle !== 'ready')
+        throw new Error('No se pudo confirmar el archivo en Biblioteca.');
+    }
+  } finally {
+    await storage.releaseCompletedDownload(token);
+  }
+  const item = await attach(row);
+  if (!isAvailableLibraryItem(item))
+    throw new Error('No se pudo verificar el archivo en Biblioteca.');
+  if (pending) {
+    changed();
+    saveDownloadArtwork(storage, safe, asset.id);
   }
   return item;
+}
+
+export async function discardDownloadAsset(
+  key: string,
+  asset: CompletedDownloadAsset,
+) {
+  const storage = native();
+  const relative = `Media/${asset.id}.${asset.ext}`;
+  const row = await rowFor(asset.id);
+  if (row && row.lifecycle !== 'pending') return;
+  await storage.discardCompletedDownload(
+    key,
+    asset.id,
+    asset.ext,
+    asset.sha256,
+    asset.sizeBytes,
+  );
+  if (
+    row?.lifecycle !== 'pending' ||
+    row.sourceCacheRelativePath !== `DownloadStaging/${key}` ||
+    row.relativeMediaPath !== relative ||
+    (await storage.statMedia(relative)).exists
+  )
+    return;
+  await withLibraryForeignKeyTransaction(async (txn) => {
+    await txn.runAsync(
+      "DELETE FROM library_items WHERE id = ? AND lifecycle = 'pending' AND sourceCacheRelativePath = ?",
+      row.id,
+      row.sourceCacheRelativePath,
+    );
+  });
 }
 
 export async function withLibraryLease<T>(
@@ -783,15 +980,24 @@ export async function withLibraryLease<T>(
   operation: (item: AvailableLibraryItem) => Promise<T>,
 ): Promise<T> {
   await initializeLibrary();
-  leases.set(id, (leases.get(id) ?? 0) + 1);
-  try {
+  return withMediaDeletionLease(id, async () => {
     const row = await rowFor(id);
     if (!row || row.lifecycle !== 'ready')
       throw new Error('El archivo ya no está en Biblioteca.');
     const item = await attach(row);
     if (!isAvailableLibraryItem(item))
       throw new Error('El archivo ya no está disponible.');
-    return await operation(item);
+    return operation(item);
+  });
+}
+
+async function withMediaDeletionLease<T>(
+  id: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  leases.set(id, (leases.get(id) ?? 0) + 1);
+  try {
+    return await operation();
   } finally {
     const remaining = (leases.get(id) ?? 1) - 1;
     if (remaining > 0) leases.set(id, remaining);

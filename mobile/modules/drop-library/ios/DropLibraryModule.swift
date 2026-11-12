@@ -187,6 +187,36 @@ public final class DropLibraryModule: Module {
               "relativeMediaPath": source.relativeMediaPath]
     }
 
+    AsyncFunction("stageCompletedDownload") {
+      (key: String, uri: String, origin: String, owner: String, size: Int, mediaType: String) async throws -> [String: Any] in
+      try await DropLibraryStorage().stageCompletedDownload(
+        key: key, uri: uri, origin: origin, owner: owner, size: Int64(size), mediaType: mediaType).payload
+    }
+
+    AsyncFunction("findCompletedDownload") { (key: String, size: Int) throws -> [String: Any]? in
+      try DropLibraryStorage().findCompletedDownload(key: key, size: Int64(size))?.payload
+    }
+
+    AsyncFunction("placeCompletedDownload") {
+      (key: String, id: String, ext: String, sha256: String, size: Int, move: Bool) throws -> String in
+      let asset = DropCompletedDownloadAsset(id: id, ext: ext, sizeBytes: Int64(size), sha256: sha256)
+      return try DropLibraryStorage().placeCompletedDownload(key: key, asset: asset, move: move)
+    }
+
+    AsyncFunction("verifyCompletedDownload") { (token: String) throws in
+      try DropLibraryStorage.verifyCompletedDownload(token: token)
+    }
+
+    AsyncFunction("releaseCompletedDownload") { (token: String) in
+      DropLibraryStorage.releaseCompletedDownload(token: token)
+    }
+
+    AsyncFunction("discardCompletedDownload") {
+      (key: String, id: String, ext: String, sha256: String, size: Int) throws in
+      let asset = DropCompletedDownloadAsset(id: id, ext: ext, sizeBytes: Int64(size), sha256: sha256)
+      try DropLibraryStorage().discardCompletedDownload(key: key, asset: asset)
+    }
+
     AsyncFunction("movePrepared") {
       (relative: String, id: String, ext: String, origin: String, size: Int, path: String) throws -> [String: Any] in
       let (destination, url, actualSize) = try DropLibraryStorage().moveFromCache(

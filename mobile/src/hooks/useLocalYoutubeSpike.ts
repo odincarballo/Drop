@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { DownloadType } from '@/models/media';
+import type { LibraryMetadata } from '@/models/library';
 
 import type {
   LocalAudioDownloadEvent,
@@ -10,6 +11,7 @@ import type {
   LocalYoutubeResult,
   LocalYoutubeMetadata,
 } from '@/models/onDeviceYoutube';
+import { saveTransferredDownload } from '@/services/downloadPublication';
 import {
   DownloadRecoveryError,
   rememberDownload,
@@ -18,8 +20,8 @@ import {
 } from '@/services/downloadRecovery';
 import { DownloadStartInterrupted } from '@/services/errors';
 import { withNamedLibraryFile } from '@/services/fileExport';
-import { deleteLocalFile, shareLocalFile } from '@/services/jobs';
-import { promoteToLibrary, withLibraryLease } from '@/services/library';
+import { shareLocalFile } from '@/services/jobs';
+import { withLibraryLease } from '@/services/library';
 import {
   analyzeYoutubeOnDevice,
   cancelLocalAudioDownload,
@@ -167,24 +169,15 @@ type YoutubeSelection = Extract<
 
 async function saveLiveDownload(
   attempt: DownloadAttempt | null,
-  uri: string,
-  metadata: Parameters<typeof promoteToLibrary>[1],
+  file: { uri: string; owner: string; sizeBytes: number },
+  metadata: LibraryMetadata,
   isCurrent: () => boolean,
+  onInterrupted?: (record: DownloadRecord) => void,
 ) {
-  let canSave: boolean;
-  try {
-    canSave = !!attempt && (await attempt.update('saving'));
-  } catch (error) {
-    deleteLocalFile(uri);
-    throw error;
-  }
-  if (!canSave || !isCurrent()) {
-    deleteLocalFile(uri);
-    return;
-  }
-  const saved = await promoteToLibrary(uri, metadata);
-  await attempt?.finish().catch(() => undefined);
-  return saved;
+  if (!attempt || !isCurrent()) return;
+  const result = await saveTransferredDownload(attempt, file, metadata);
+  if (result?.record && isCurrent()) onInterrupted?.(result.record);
+  return result?.item;
 }
 
 export function useLocalYoutubeSpike(
@@ -287,7 +280,11 @@ export function useLocalYoutubeSpike(
         setAudioState({ status: 'saving', jobId: event.jobId });
         void saveLiveDownload(
           attempt,
-          event.localUri,
+          {
+            uri: event.localUri,
+            owner: event.jobId,
+            sizeBytes: event.fileSize,
+          },
           {
             sourceKind: 'youtube',
             sourceVideoId: metadata?.id,
@@ -302,14 +299,16 @@ export function useLocalYoutubeSpike(
             mounted.current &&
             analysisGeneration.current === generation &&
             downloadAttempt.current === attempt,
+          onInterrupted,
         )
           .then((saved) => {
-            if (
-              !saved ||
-              !mounted.current ||
-              analysisGeneration.current !== generation
-            )
+            if (!mounted.current || analysisGeneration.current !== generation)
               return;
+
+            if (!saved) {
+              setAudioState({ status: 'idle' });
+              return;
+            }
             setAudioState({
               status: 'completed',
               jobId: event.jobId,
@@ -352,7 +351,7 @@ export function useLocalYoutubeSpike(
         });
       }
     },
-    [interruptNative],
+    [interruptNative, onInterrupted],
   );
 
   const handleVideoEvent = useCallback(
@@ -402,7 +401,11 @@ export function useLocalYoutubeSpike(
         setVideoState({ status: 'saving', jobId: event.jobId });
         void saveLiveDownload(
           attempt,
-          event.localUri,
+          {
+            uri: event.localUri,
+            owner: event.jobId,
+            sizeBytes: event.fileSize,
+          },
           {
             sourceKind: 'youtube',
             sourceVideoId: metadata?.id,
@@ -420,14 +423,16 @@ export function useLocalYoutubeSpike(
             mounted.current &&
             analysisGeneration.current === generation &&
             downloadAttempt.current === attempt,
+          onInterrupted,
         )
           .then((saved) => {
-            if (
-              !saved ||
-              !mounted.current ||
-              analysisGeneration.current !== generation
-            )
+            if (!mounted.current || analysisGeneration.current !== generation)
               return;
+
+            if (!saved) {
+              setVideoState({ status: 'idle' });
+              return;
+            }
             setVideoState({
               status: 'completed',
               jobId: event.jobId,
@@ -471,7 +476,7 @@ export function useLocalYoutubeSpike(
         });
       }
     },
-    [interruptNative],
+    [interruptNative, onInterrupted],
   );
 
   const handleCombinedEvent = useCallback(
@@ -528,7 +533,11 @@ export function useLocalYoutubeSpike(
         setCombinedState({ status: 'saving', jobId: event.jobId });
         void saveLiveDownload(
           attempt,
-          event.localUri,
+          {
+            uri: event.localUri,
+            owner: event.jobId,
+            sizeBytes: event.fileSize,
+          },
           {
             sourceKind: 'youtube',
             sourceVideoId: metadata?.id,
@@ -547,14 +556,16 @@ export function useLocalYoutubeSpike(
             mounted.current &&
             analysisGeneration.current === generation &&
             downloadAttempt.current === attempt,
+          onInterrupted,
         )
           .then((saved) => {
-            if (
-              !saved ||
-              !mounted.current ||
-              analysisGeneration.current !== generation
-            )
+            if (!mounted.current || analysisGeneration.current !== generation)
               return;
+
+            if (!saved) {
+              setCombinedState({ status: 'idle' });
+              return;
+            }
             setCombinedState({
               status: 'completed',
               jobId: event.jobId,
@@ -603,7 +614,7 @@ export function useLocalYoutubeSpike(
         });
       }
     },
-    [interruptNative],
+    [interruptNative, onInterrupted],
   );
 
   useEffect(() => {

@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 import { AppState, Pressable, Text, type AppStateStatus } from 'react-native';
 import type { MediaAnalysis } from '@/models/media';
 import { ApiError } from '@/services/errors';
-import { promoteToLibrary } from '@/services/library';
+import { publishDownloadAsset } from '@/services/library';
 import { analyzeMedia } from '@/services/media';
 import {
   createDownloadJob,
@@ -55,7 +55,15 @@ jest.mock('@/services/fileExport', () => ({
   ),
 }));
 jest.mock('@/services/library', () => ({
-  promoteToLibrary: jest.fn(),
+  publishDownloadAsset: jest.fn(),
+  stageDownloadAsset: jest.fn(
+    async (_key: string, file: { sizeBytes: number }) => ({
+      id: '00000000-0000-0000-0000-000000000001',
+      ext: 'mp4',
+      sha256: 'c'.repeat(64),
+      sizeBytes: file.sizeBytes,
+    }),
+  ),
   withLibraryLease: jest.fn((_id, operation) =>
     operation({ uri: 'file:///library/clip.mp4' }),
   ),
@@ -104,7 +112,7 @@ beforeEach(async () => {
     });
   await resetDownloadRecoveryFixture();
   jest
-    .mocked(promoteToLibrary)
+    .mocked(publishDownloadAsset)
     .mockReset()
     .mockResolvedValue({
       id: '00000000-0000-0000-0000-000000000001',
@@ -689,7 +697,7 @@ test('direct file downloads to iPhone storage and can be shared', async () => {
     audioFormats: [],
   };
   const completedJob = {
-    id: 'job-1',
+    id: 'b'.repeat(32),
     status: 'COMPLETED' as const,
     progress: 1,
     bytesDownloaded: 12,
@@ -697,7 +705,7 @@ test('direct file downloads to iPhone storage and can be shared', async () => {
     fileName: 'clip.mp4',
     fileSize: 12,
     error: null,
-    downloadUrl: '/jobs/job-1/file',
+    downloadUrl: '/jobs/' + 'b'.repeat(32) + '/file',
   };
   jest.mocked(analyzeMedia).mockResolvedValue(directMedia);
   jest.mocked(createDownloadJob).mockResolvedValue(completedJob);
@@ -750,7 +758,7 @@ test('a direct transfer finishing after cancellation cannot become a completed r
     audioFormats: [],
   };
   const completedJob = {
-    id: 'job-1',
+    id: 'b'.repeat(32),
     status: 'COMPLETED' as const,
     progress: 1,
     bytesDownloaded: 12,
@@ -758,7 +766,7 @@ test('a direct transfer finishing after cancellation cannot become a completed r
     fileName: 'clip.mp4',
     fileSize: 12,
     error: null,
-    downloadUrl: '/jobs/job-1/file',
+    downloadUrl: '/jobs/' + 'b'.repeat(32) + '/file',
   };
   let finishTransfer!: (value: { uri: string; size: number }) => void;
   jest.mocked(analyzeMedia).mockResolvedValue(directMedia);
@@ -785,7 +793,7 @@ test('a direct transfer finishing after cancellation cannot become a completed r
 
 test('YouTube offers real resolution, automatic audio, M4A and MP3 output', async () => {
   const completedJob = {
-    id: 'job-youtube',
+    id: 'c'.repeat(32),
     status: 'COMPLETED' as const,
     phase: 'FINALIZING' as const,
     progress: 1,
@@ -794,7 +802,7 @@ test('YouTube offers real resolution, automatic audio, M4A and MP3 output', asyn
     fileName: 'Authorized YouTube video.mp4',
     fileSize: 22500000,
     error: null,
-    downloadUrl: '/jobs/job-youtube/file',
+    downloadUrl: '/jobs/' + 'c'.repeat(32) + '/file',
     message: 'Descarga completada',
   };
   jest.mocked(analyzeMedia).mockResolvedValue(youtubeMedia);
@@ -1140,8 +1148,8 @@ test.each([
     await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
     expect(native[start]).toHaveBeenCalledTimes(1);
     await leaveDownload();
-    const saved = deferred<Awaited<ReturnType<typeof promoteToLibrary>>>();
-    jest.mocked(promoteToLibrary).mockReturnValueOnce(saved.promise);
+    const saved = deferred<Awaited<ReturnType<typeof publishDownloadAsset>>>();
+    jest.mocked(publishDownloadAsset).mockReturnValueOnce(saved.promise);
     await act(() => {
       native.emit(event, {
         ...completeNative,
@@ -1155,7 +1163,7 @@ test.each([
       });
     });
     expect(session.spike[state].status).toBe('saving');
-    expect(promoteToLibrary).toHaveBeenCalledTimes(1);
+    expect(publishDownloadAsset).toHaveBeenCalledTimes(1);
     await returnToDownload();
     expect(screen.getByText('Guardando en Biblioteca…')).toBeTruthy();
     await act(() =>
@@ -1212,8 +1220,9 @@ test('video selection survives navigation without resubscribing and supplies pro
   expect(native.addListener).toHaveBeenCalledTimes(3);
   await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
   await act(() => native.emit('onCombinedDownloadState', completeNative));
-  expect(promoteToLibrary).toHaveBeenCalledWith(
-    completeNative.localUri,
+  expect(publishDownloadAsset).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.objectContaining({ sizeBytes: completeNative.fileSize }),
     expect.objectContaining({ resolution: '720p' }),
   );
 });
@@ -1250,7 +1259,7 @@ test('direct transfer keeps selection/progress while away and promotes exactly o
   });
   expect(createDownloadJob).toHaveBeenCalledTimes(1);
   expect(downloadJobFile).toHaveBeenCalledTimes(1);
-  expect(promoteToLibrary).toHaveBeenCalledTimes(1);
+  expect(publishDownloadAsset).toHaveBeenCalledTimes(1);
 });
 
 test('explicit cancellation after returning ignores late native completion', async () => {
@@ -1263,7 +1272,7 @@ test('explicit cancellation after returning ignores late native completion', asy
   await act(() => native.emit('onAudioDownloadState', completeNative));
   expect(native.cancelAudioDownload).toHaveBeenCalledTimes(1);
   expect(session.spike.audioState.status).toBe('cancelled');
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
 });
 
 test('explicit analysis cancellation invalidates a response arriving after a new analysis', async () => {
@@ -1335,7 +1344,7 @@ test('an expired native session requests reanalysis after navigation without ret
   await returnToDownload();
   expect(screen.getByText(/El análisis local caducó/)).toBeTruthy();
   expect(native.startAudioDownload).toHaveBeenCalledTimes(1);
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
   expect(native.analyze).toHaveBeenCalledTimes(2);
 });
@@ -1366,7 +1375,7 @@ test.each(['analysis', 'download'] as const)(
       pending.resolve(JSON.stringify(localYoutubeMetadata));
       native.emit('onAudioDownloadState', completeNative);
     });
-    expect(promoteToLibrary).not.toHaveBeenCalled();
+    expect(publishDownloadAsset).not.toHaveBeenCalled();
   },
 );
 
@@ -1406,7 +1415,7 @@ test.each(['cancel', 'teardown'] as const)(
     expect(deleteLocalFile).toHaveBeenCalledWith(
       'file:///cache/late-route.mp4',
     );
-    expect(promoteToLibrary).not.toHaveBeenCalled();
+    expect(publishDownloadAsset).not.toHaveBeenCalled();
   },
 );
 
@@ -1418,7 +1427,7 @@ test.each(['success', 'failure'] as const)(
     jest
       .mocked(createDownloadJob)
       .mockReturnValueOnce(oldCreation.promise)
-      .mockResolvedValue({ ...completedDirectJob, id: 'new-job' });
+      .mockResolvedValue({ ...completedDirectJob, id: 'd'.repeat(32) });
     const transfer = deferred<{ uri: string; size: number }>();
     jest.mocked(downloadJobFile).mockReturnValue(transfer.promise);
     await render(<NavigableSession />);
@@ -1437,15 +1446,15 @@ test.each(['success', 'failure'] as const)(
     expect(downloadJobFile).toHaveBeenCalledTimes(1);
     expect(session.download.state).toMatchObject({
       status: 'transferring',
-      job: { id: 'new-job' },
+      job: { id: 'd'.repeat(32) },
     });
     if (outcome === 'success')
       expect(deleteDownloadJob).toHaveBeenCalledWith(completedDirectJob.id);
-    expect(deleteDownloadJob).not.toHaveBeenCalledWith('new-job');
+    expect(deleteDownloadJob).not.toHaveBeenCalledWith('d'.repeat(32));
     await act(() =>
       transfer.resolve({ uri: 'file:///cache/new.mp4', size: 12 }),
     );
-    expect(promoteToLibrary).toHaveBeenCalledTimes(1);
+    expect(publishDownloadAsset).toHaveBeenCalledTimes(1);
   },
 );
 
@@ -1499,7 +1508,7 @@ test('reopening presents historical progress and queries an existing direct job 
     expect.any(AbortSignal),
   );
   expect(downloadJobFile).not.toHaveBeenCalled();
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
   expect(createDownloadJob).not.toHaveBeenCalled();
 });
 
@@ -1610,7 +1619,7 @@ test('the journal excludes private input and a late POST cannot undo persisted c
     remoteJobId: null,
   });
   expect(downloadJobFile).not.toHaveBeenCalled();
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
 });
 
 test('YouTube recovery reanalyses the canonical video only on explicit retry', async () => {
@@ -1642,7 +1651,7 @@ test('YouTube recovery reanalyses the canonical video only on explicit retry', a
   expect(native.startAudioDownload).not.toHaveBeenCalled();
   expect(native.startCombinedDownload).not.toHaveBeenCalled();
   expect(createDownloadJob).not.toHaveBeenCalled();
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
 });
 
 test('a failed cancellation write keeps the direct attempt alive and retryable', async () => {
@@ -1672,7 +1681,7 @@ test('a failed cancellation write keeps the direct attempt alive and retryable',
     status: 'cancelled',
   });
   await act(() => reply.resolve(completedDirectJob));
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
 });
 
 test('a download cannot submit a POST when its first durable write fails', async () => {
@@ -1704,7 +1713,7 @@ test('an interrupted save directs the user to Library and cannot publish or rest
   ).toBeNull();
   expect(createDownloadJob).not.toHaveBeenCalled();
   expect(downloadJobFile).not.toHaveBeenCalled();
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
 });
 
 test('a pending paste blocks downloading the old analysis', async () => {
@@ -1760,7 +1769,7 @@ test('a superseded paste cannot replace an input while its new job is active', a
   await fireEvent.press(screen.getByRole('button', { name: 'Cancelar' }));
   await act(() => reply.resolve(completedDirectJob));
   expect(downloadJobFile).not.toHaveBeenCalled();
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
 });
 
 test('simultaneous direct and native starts keep the winning controls and journal', async () => {
@@ -1796,7 +1805,7 @@ test('simultaneous direct and native starts keep the winning controls and journa
     status: 'cancelled',
   });
   await act(() => native.emit('onAudioDownloadState', completeNative));
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
 });
 
 test('recovery errors keep request and storage details out of the UI and record', async () => {
@@ -1940,7 +1949,7 @@ test('a foreground round trip invalidates the old reservation and requires an ex
     expect(native.startAudioDownload).not.toHaveBeenCalled();
     const interrupted = await readRawDownloadRecovery();
     await act(() => native.emit('onAudioDownloadState', completeNative));
-    expect(promoteToLibrary).not.toHaveBeenCalled();
+    expect(publishDownloadAsset).not.toHaveBeenCalled();
     expect(await readRawDownloadRecovery()).toBe(interrupted);
     await fireEvent.press(
       await screen.findByRole('button', { name: 'Reintentar desde cero' }),
@@ -1990,7 +1999,7 @@ test('a native background cancellation invalidates subsequent callbacks without 
   expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
     status: 'interrupted',
   });
-  expect(promoteToLibrary).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
   expect(native.startAudioDownload).toHaveBeenCalledTimes(1);
 });
 
@@ -2028,4 +2037,85 @@ test('a rejected interruption write keeps the confirmed reservation and never st
     commit.release();
     AppState.currentState = previous;
   }
+});
+
+test('a verified publication is offered on reopen and saved only on request', async () => {
+  await seedDownloadRecovery(
+    JSON.stringify({
+      ...persistedDownload,
+      phase: 'saving',
+      publication: {
+        asset: {
+          id: '00000000-0000-0000-0000-000000000001',
+          ext: 'mp4',
+          sizeBytes: persistedDownload.bytes,
+          sha256: 'c'.repeat(64),
+        },
+      },
+    }),
+  );
+  await render(<HomeScreen />);
+  const save = await screen.findByRole('button', {
+    name: 'Verificar y guardar archivo',
+  });
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
+  expect(
+    screen.queryByRole('button', { name: 'Continuar consulta' }),
+  ).toBeNull();
+  await fireEvent.press(save);
+  expect(
+    await screen.findByText('Archivo guardado en Biblioteca.'),
+  ).toBeTruthy();
+  expect(publishDownloadAsset).toHaveBeenCalledTimes(1);
+  expect(await readRawDownloadRecovery()).toBeNull();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  expect(downloadJobFile).not.toHaveBeenCalled();
+});
+
+test('a pending discard only offers finishing cleanup on reopen', async () => {
+  await seedDownloadRecovery(
+    JSON.stringify({
+      ...persistedDownload,
+      phase: 'saving',
+      publication: { discarding: true },
+    }),
+  );
+  await render(<HomeScreen />);
+  expect(await screen.findByText('Descarte pendiente')).toBeTruthy();
+  expect(
+    screen.queryByRole('button', { name: 'Verificar y guardar archivo' }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole('button', { name: 'Continuar consulta' }),
+  ).toBeNull();
+  expect(deleteDownloadJob).not.toHaveBeenCalled();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Finalizar descarte' }),
+  );
+  await waitFor(async () => expect(await readRawDownloadRecovery()).toBeNull());
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  expect(downloadJobFile).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
+});
+
+test('a failed publication reservation keeps the completed remote job and local file', async () => {
+  jest.mocked(analyzeMedia).mockResolvedValue(navigationDirectMedia);
+  jest.mocked(createDownloadJob).mockResolvedValue(completedDirectJob);
+  const transfer = deferred<{ uri: string; size: number }>();
+  jest.mocked(downloadJobFile).mockReturnValue(transfer.promise);
+  await render(<HomeScreen />);
+  await analyzeExample();
+  await fireEvent.press(await screen.findByRole('radio', { name: /360p/ }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  await waitFor(() => expect(downloadJobFile).toHaveBeenCalledTimes(1));
+  await rejectDownloadWrite('UPDATE');
+  await act(() => transfer.resolve({ uri: 'file:///cache/new.mp4', size: 12 }));
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(deleteDownloadJob).not.toHaveBeenCalled();
+  expect(deleteLocalFile).not.toHaveBeenCalled();
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
+  expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+    remoteJobId: completedDirectJob.id,
+    phase: 'transferring',
+  });
 });
