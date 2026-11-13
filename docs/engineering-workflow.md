@@ -167,6 +167,24 @@ Si los nombres generados difieren, resolverlos con los scripts existentes; no
 modificar fuentes para encajar la plantilla. Los nuevos archivos revisados sin
 commit necesitan sus propios `--include`. No hay inclusión automática masiva.
 
+Para verificar una Release iPhoneOS ARM64 sin firma con ExpoModulesJSI, añade
+`--expo-jsi-product` al crear el manifiesto. Retira de `--include` únicamente
+el ejecutable `ExpoModulesJSI` del slice `ios-arm64` bajo
+`expo-modules-jsi/apple/Products`. Mantén las demás entradas fijadas.
+El esquema 2 registra las fuentes y scripts del productor, los headers JSI
+referenciados, los locks y los scripts de copia e incorporación de CocoaPods.
+El SHA-256 del slice previo queda separado de las identidades de las entradas
+y se verifica antes de ejecutar. Puede corresponder al stub de la preparación.
+
+El supervisor lee del log si `[CP-User] Build ExpoModulesJSI xcframework`
+reutilizó el slice o terminó de regenerarlo para iPhoneOS. Registra el SHA-256
+final en `result.json` y exige que coincida con el binario ARM64 dentro de la
+app y de su copia archivada. Si la fase informó reutilización, exige el mismo
+SHA-256 previo y final. Un log ambiguo, un binario distinto o cambios en las
+entradas fijadas bloquean el PASS. Los manifiestos de esquema 1 conservan su
+verificación original. Esta comprobación de igualdad de bytes cubre builds
+sin firma. Una copia firmada requiere su propia evidencia de procedencia.
+
 `scripts/engineering/evidence.py` ejecuta un comando explícito sin shell. Para
 `--kind build` solo admite una Release iPhoneOS ARM64 sin firma Apple, destino
 genérico, `-jobs 2`, sin overrides de provisioning. No renueva firmas ni instala.

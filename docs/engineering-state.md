@@ -3,6 +3,17 @@
 Actualizado: 12 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
+## Descargas persistentes · contrato de evidencia Release A+B
+
+- La build 19 sin firma terminó con exit 0. Su supervisor conserva `BLOCKED`
+  por haber fijado como entrada el slice ARM64 que ExpoModulesJSI regeneró.
+  El log acredita esa regeneración y el SHA-256 final coincide con el
+  binario incorporado a la app archivada.
+- Para la siguiente verificación sin firma, el [workflow](engineering-workflow.md)
+  separa el slice generado de las entradas fijas y exige evidencia de la fase
+  de Expo y coincidencia con el binario archivado. La build 21 firmada sigue
+  pendiente de espacio, aprovisionamiento y validación en reprotest.
+
 ## Descargas persistentes · Bloque B · revisión local
 
 - Rama `codex/download-recovery-b`, derivada de

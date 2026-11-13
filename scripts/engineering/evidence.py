@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import signal
 import struct
@@ -15,6 +16,10 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 import manifest
+
+EXPO_JSI_EMBEDDED = 'Frameworks/ExpoModulesJSI.framework/ExpoModulesJSI'
+EXPO_JSI_PHASE = r'PhaseScriptExecution [CP-User]\ Build\ ExpoModulesJSI\ xcframework '
+EXPO_JSI_TARGET = "(in target 'ExpoModulesJSI' from project 'Pods')"
 
 
 def supervise(command, root, env, log, monitor, minimum, stop, interval, free=None):
@@ -200,6 +205,43 @@ def inspect_app(path, config):
     return {'executable_sha256': hashlib.sha256(data).hexdigest(), 'hermes_sha256': hashlib.sha256(js).hexdigest()}
 
 
+def expo_jsi_phase_result(log):
+    phases = 0
+    active = False
+    events = []
+    with log.open(errors='replace') as lines:
+        for line in lines:
+            line = line.strip()
+            if line.startswith('PhaseScriptExecution '):
+                active = line.startswith(EXPO_JSI_PHASE) and line.endswith(EXPO_JSI_TARGET)
+                phases += active
+            if active and line.startswith('[ExpoModulesJSI] '):
+                message = line.removeprefix('[ExpoModulesJSI] ')
+                if message == 'xcframework slices up to date, skipping build':
+                    events.append('reused')
+                elif message == 'Building framework slice for iphoneos...':
+                    events.append('building')
+                else:
+                    built = re.fullmatch(r'Built xcframework successfully in \d+s \(([^)]+)\)', message)
+                    if built and 'ios-arm64' in built[1].split(', '):
+                        events.append('finished')
+    if phases == 1 and events == ['reused']:
+        return 'reused'
+    if phases == 1 and events == ['building', 'finished']:
+        return 'regenerated'
+    raise ValueError('Missing or ambiguous ExpoModulesJSI iPhoneOS phase evidence')
+
+
+def verify_expo_jsi(artifact, log, product):
+    product['status'] = expo_jsi_phase_result(log)
+    if product['status'] == 'reused' and product['before_sha256'] != product['after_sha256']:
+        raise ValueError('ExpoModulesJSI slice changed despite reported reuse')
+    product['embedded_path'] = EXPO_JSI_EMBEDDED
+    product['embedded_sha256'] = manifest.expo_jsi_hash(artifact, EXPO_JSI_EMBEDDED)
+    if product['after_sha256'] != product['embedded_sha256']:
+        raise ValueError('Embedded ExpoModulesJSI does not match the recorded slice')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
@@ -216,6 +258,9 @@ def main():
         raise ValueError('Choose a new durable evidence directory outside checkout and temporary storage')
     record = json.loads(a.manifest.read_text())
     manifest.verify(root, record)
+    tracks_expo_jsi = record['schema'] == 2
+    if tracks_expo_jsi and a.kind != 'build':
+        raise ValueError('ExpoModulesJSI product evidence requires build mode')
     if a.kind == 'build':
         paths = build_command(command, record['config'], root)
         build_inputs(root, record, paths['workspace'])
@@ -246,12 +291,18 @@ def main():
         raise SystemExit(128 + signum)
     signal.signal(signal.SIGTERM, interrupted)
     result = {'kind': a.kind, 'command': command, 'status': 'RUNNING', 'source_id': record['source_id']}
+    if tracks_expo_jsi:
+        result['expo_jsi'] = dict(record['expo_jsi'])
     def save():
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     save()
     try:
         result.update(supervise(command, root, env, out / 'command.log', out / 'storage.jsonl', 24 if a.kind == 'build' else 1, 15 if a.kind == 'build' else 0.5, 5))
-        manifest.verify(root, record)
+        final = manifest.verify(root, record, after_build=tracks_expo_jsi)
+        if tracks_expo_jsi:
+            result['expo_jsi']['after_sha256'] = manifest.expo_jsi_hash(root, manifest.EXPO_JSI_SLICE)
+            if result['expo_jsi']['after_sha256'] != final['expo_jsi']['before_sha256']:
+                raise ValueError('ExpoModulesJSI slice changed during verification')
         if result['exit_code'] or result['stopped_for_space']:
             raise ValueError('Command failed or stopped; no PASS recorded')
         if artifact is not None and artifact.resolve() != artifact:
@@ -260,12 +311,16 @@ def main():
             if '** BUILD SUCCEEDED **' not in (out / 'command.log').read_text(errors='replace'):
                 raise ValueError('Missing BUILD SUCCEEDED in log')
             result['app'] = inspect_app(artifact, record['config'])
+            if tracks_expo_jsi:
+                verify_expo_jsi(artifact, out / 'command.log', result['expo_jsi'])
         if artifact:
             if a.kind == 'build':
                 size = sum(p.stat().st_size for p in artifact.rglob('*') if p.is_file() and not p.is_symlink())
                 if shutil.disk_usage(root).free - size < 15 * 2**30:
                     raise ValueError('Insufficient reserve to archive; build output retained')
             result['artifact_files'] = archive(artifact, out / artifact.name)
+            if tracks_expo_jsi and result['artifact_files'].get(EXPO_JSI_EMBEDDED, {}).get('sha256') != result['expo_jsi']['after_sha256']:
+                raise ValueError('Archived ExpoModulesJSI does not match the recorded slice')
         result['status'] = 'PASS'
     except BaseException as error:
         result.update({'status': 'BLOCKED', 'error': str(error)})

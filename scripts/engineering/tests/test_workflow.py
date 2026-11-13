@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,120 @@ class Repository(unittest.TestCase):
         m = manifest.snapshot(self.root, tools=['python'])
         self.assertEqual(m['source_id'], manifest.verify(self.root, m)['source_id'])
         self.assertIn('python', m['tools'])
+
+    def expo_jsi_run(self, mode, *, change_slice=False, alter_input=None, alter_embed=False,
+                    stub=False, change_before_start=False):
+        product = self.root / manifest.EXPO_JSI_SLICE
+        product.parent.mkdir(parents=True)
+        arm64_dylib = struct.pack('<IIIIIIII', 0xfeedfacf, 0x100000C, 0, 6, 0, 0, 0, 0)
+        before = b'synthetic preparation stub' if stub else arm64_dylib + b'prior'
+        after = arm64_dylib + b'new' if change_slice else before
+        product.write_bytes(before)
+        podfile = self.put('mobile/ios/Podfile', 'fixture')
+        lock = self.put('mobile/ios/Podfile.lock', 'fixture')
+        workspace = self.put('mobile/ios/Drop.xcworkspace/contents.xcworkspacedata',
+                             '<Workspace><FileRef location="group:Pods/Pods.xcodeproj"/></Workspace>')
+        pods = self.put('mobile/ios/Pods/Pods.xcodeproj/project.pbxproj', 'fixture')
+        includes = [str(p.relative_to(self.root)) for p in (podfile, lock, workspace, pods)]
+        for name in manifest.EXPO_JSI_INPUTS:
+            self.put(name, 'fixed input')
+        for directory in manifest.EXPO_JSI_SOURCE_DIRS:
+            self.put(directory + '/source.h', 'fixed source')
+        for name in ('jsi.h', 'jsi-inl.h'):
+            header = self.root / 'mobile/ios/Pods/Headers/Public/React-jsi/jsi' / name
+            header.parent.mkdir(parents=True, exist_ok=True)
+            header.symlink_to(self.root / 'mobile/node_modules/react-native/ReactCommon/jsi/jsi' / name)
+        config = {'variant': 'production', 'configuration': 'Release', 'platform': 'iphoneos',
+                  'architecture': 'arm64', 'bundle_id': 'com.odincarballo.drop.reprotest',
+                  'version': '1.8.1', 'build_number': '21', 'signing': 'unsigned'}
+        versions = dict.fromkeys(('node', 'ruby', 'bundler', 'xcode', 'swift'), 'fixture')
+        out = self.root.parent / 'run'
+        derived = self.root / 'mobile/ios/build/fixture'
+        app = derived / 'Build/Products/Release-iphoneos/Drop.app'
+        inputs = self.root.parent / 'inputs.json'
+
+        def fake_build(command, root, env, log, *args):
+            product.write_bytes(after)
+            if alter_input:
+                self.put(alter_input, 'unexpected change')
+            packaged = app / evidence.EXPO_JSI_EMBEDDED
+            packaged.parent.mkdir(parents=True)
+            packaged.write_bytes(before if alter_embed else after)
+            log.write_text(
+                r"PhaseScriptExecution [CP-User]\ Build\ ExpoModulesJSI\ xcframework fixture"
+                " (in target 'ExpoModulesJSI' from project 'Pods')\n"
+                + mode + "\n** BUILD SUCCEEDED **\n"
+            )
+            return {'exit_code': 0, 'stopped_for_space': False}
+
+        with mock.patch('manifest.tool_versions', return_value=versions):
+            record = manifest.snapshot(self.root, includes, config, versions, expo_jsi=True)
+            self.assertIn(manifest.EXPO_JSI_PRODUCER, record['files'])
+            self.assertNotIn(manifest.EXPO_JSI_SLICE, record['files'])
+            manifest.write_new(inputs, record, self.root)
+            if change_before_start:
+                product.write_bytes(arm64_dylib + b'tampered before launch')
+            args = ['evidence.py', '--root', str(self.root), '--manifest', str(inputs),
+                    '--out', str(out), '--kind', 'build', '--artifact',
+                    str(app.relative_to(self.root)), '--', 'xcodebuild', 'build']
+            with mock.patch.object(sys, 'argv', args), \
+                 mock.patch.dict(os.environ, {'TMPDIR': str(self.root / 'scratch')}), \
+                 mock.patch('evidence.build_command', return_value={'workspace': workspace.parent, 'derived': derived}), \
+                 mock.patch('evidence.supervise', side_effect=fake_build), \
+                 mock.patch('evidence.inspect_app', return_value={}), \
+                 mock.patch('evidence.shutil.disk_usage', return_value=mock.Mock(free=100 * 2**30)):
+                evidence.main()
+        result = json.loads((out / 'result.json').read_text())
+        self.assertEqual(result['status'], 'PASS')
+        hashes = [hashlib.sha256(data).hexdigest() for data in (before, after)]
+        return result['expo_jsi'], hashes
+
+    def test_expo_jsi_reuse_records_identical_hashes(self):
+        result, (before, after) = self.expo_jsi_run('[ExpoModulesJSI] xcframework slices up to date, skipping build')
+        self.assertEqual(result['status'], 'reused')
+        self.assertEqual((result['before_sha256'], result['after_sha256'], result['embedded_sha256']),
+                         (before, after, after))
+
+    def test_expo_jsi_regeneration_matches_the_archived_binary(self):
+        mode = ('[ExpoModulesJSI] Building framework slice for iphoneos...\n'
+                '[ExpoModulesJSI] Built xcframework successfully in 17s (ios-arm64)')
+        result, (before, after) = self.expo_jsi_run(mode, change_slice=True, stub=True)
+        self.assertEqual(result['status'], 'regenerated')
+        self.assertNotEqual(before, after)
+        self.assertEqual((result['before_sha256'], result['after_sha256'], result['embedded_sha256']),
+                         (before, after, after))
+
+    def test_expo_jsi_refuses_changed_product_on_reuse(self):
+        with self.assertRaisesRegex(ValueError, 'changed despite reported reuse'):
+            self.expo_jsi_run('[ExpoModulesJSI] xcframework slices up to date, skipping build', change_slice=True)
+
+    def test_expo_jsi_refuses_drift_in_pinned_inputs(self):
+        with self.assertRaisesRegex(ValueError, 'Input mismatch: files'):
+            self.expo_jsi_run('[ExpoModulesJSI] xcframework slices up to date, skipping build',
+                             alter_input=manifest.EXPO_JSI_INPUTS[0])
+
+    def test_expo_jsi_refuses_change_before_launch(self):
+        with self.assertRaisesRegex(ValueError, 'changed before the build'):
+            self.expo_jsi_run('', change_before_start=True)
+        self.assertFalse((self.root.parent / 'run').exists())
+
+    def test_expo_jsi_requires_a_completed_iphoneos_phase(self):
+        for log_message in (
+            '[ExpoModulesJSI] Building framework slice for iphoneos...',
+            '[ExpoModulesJSI] Building framework slice for iphoneos...\n'
+            '[ExpoModulesJSI] Built xcframework successfully in 17s (ios-arm64_x86_64-simulator)',
+        ):
+            with self.subTest(log_message=log_message):
+                log = self.put('command.log', evidence.EXPO_JSI_PHASE + 'fixture '
+                               + evidence.EXPO_JSI_TARGET + '\n' + log_message + '\n')
+                with self.assertRaisesRegex(ValueError, 'phase evidence'):
+                    evidence.expo_jsi_phase_result(log)
+
+    def test_expo_jsi_refuses_different_embedded_bytes(self):
+        mode = ('[ExpoModulesJSI] Building framework slice for iphoneos...\n'
+                '[ExpoModulesJSI] Built xcframework successfully in 17s (ios-arm64)')
+        with self.assertRaisesRegex(ValueError, 'Embedded ExpoModulesJSI does not match'):
+            self.expo_jsi_run(mode, change_slice=True, alter_embed=True)
 
     def test_changed_content_and_permission_refuse_reuse(self):
         m = manifest.snapshot(self.root)
