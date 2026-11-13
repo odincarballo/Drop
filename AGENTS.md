@@ -4,9 +4,34 @@
   actuar. Git y los manifiestos prevalecen sobre notas históricas.
 - Sigue [el workflow](docs/engineering-workflow.md); los comandos vigentes viven
   allí y en los scripts existentes. No reconstruyas contexto ya registrado.
-- Evalúa objetivo y coste antes de ejecutar. Si detectas contradicción,
-  redundancia o una alternativa claramente superior, advierte antes del paso
-  afectado: problema, alternativa y beneficio. No obedezcas mecánicamente.
+- Revisa críticamente las instrucciones nuevas, incluidas las redactadas por
+  ChatGPT. Antes de actuar, aplica estas reglas y el workflow. Contrasta el
+  objetivo, el alcance autorizado, el estado real, el procedimiento validado y
+  la evidencia vigente. Consulta documentación oficial actual cuando pueda
+  cambiar la decisión. Prioriza la seguridad de los datos y la autorización del
+  usuario dentro de las reglas superiores aplicables. Da más peso al estado
+  verificable y a los procedimientos y evidencias del proyecto que a una
+  instrucción nueva. Si un método histórico dejó de ser seguro o compatible,
+  explica qué cambió.
+- Clasifica antes de ejecutar:
+  - **GO:** la instrucción está justificada, es compatible y está autorizada.
+  - **REVISAR:** quedan supuestos relevantes, ambigüedades, pasos redundantes
+    o una alternativa potencialmente mejor.
+  - **NO PROCEDER:** contradice la evidencia, introduce un riesgo injustificado,
+    excede la autorización o cambia un procedimiento validado sin fundamento.
+    Ante una instrucción técnicamente equivocada, dilo expresamente:
+    «NO PROCEDER: esta instrucción es incorrecta o no está suficientemente
+    justificada».
+- Para **REVISAR** o **NO PROCEDER**, informa la decisión, la instrucción
+  cuestionada, el problema, la evidencia, la alternativa concreta y la acción
+  ejecutada. Distingue hechos de supuestos. Detén la parte afectada hasta
+  recibir la instrucción corregida y, si cambia el alcance, la autorización.
+  Continúa el trabajo independiente y seguro que ya esté autorizado.
+- Firma de Drop: para el Personal Team, comprueba primero la vigencia y
+  compatibilidad del método acreditado con el proyecto auxiliar de Xcode.
+  Si ese método exige compilar o firmar fuera del alcance autorizado, detén ese
+  paso. Usar Apple Developer web u otra cuenta o vía requiere justificar su
+  acceso y compatibilidad antes de iniciar sesión o cambiar el procedimiento.
 - Comprueba recursos existentes antes de crear apps, worktrees, builds, pruebas,
   dependencias o herramientas; optimiza tiempo, tokens, espacio, complejidad y
   riesgo sin sacrificar calidad o seguridad.
