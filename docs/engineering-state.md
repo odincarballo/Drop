@@ -1,86 +1,88 @@
 # Estado operativo de Drop
 
-Actualizado: 12 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 13 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Descargas persistentes · contrato de evidencia Release A+B
+## Descargas persistentes · A+B integrados y verificados en reprotest
 
-- La build 19 sin firma terminó con exit 0. Su supervisor conserva `BLOCKED`
-  por haber fijado como entrada el slice ARM64 que ExpoModulesJSI regeneró.
-  El log acredita esa regeneración y el SHA-256 final coincide con el
-  binario incorporado a la app archivada.
-- Para la siguiente verificación sin firma, el [workflow](engineering-workflow.md)
-  separa el slice generado de las entradas fijas y exige evidencia de la fase
-  de Expo y coincidencia con el binario archivado. La build 21 firmada sigue
-  pendiente de espacio, aprovisionamiento y validación en reprotest.
+- `main` integró localmente A (`38de0601`), B y B.1 (`ceeb491d`), el
+  protocolo de revisión crítica (`fd45fe97`) y la corrección de evidencias
+  (`e093de95`) por fast-forward desde `0e2d1cc` hasta `e093de95`.
+- **A.** Persiste un intento a la vez en `drop-downloads.sqlite` v1,
+  independiente de Biblioteca. Tras reabrir, muestra el intento
+  interrumpido y su progreso anterior. Consultar un job directo, volver a
+  analizar YouTube, reintentar o descartar requiere una acción explícita.
+- **B y B.1.** Conservan el archivo completo verificado por tamaño y
+  SHA-256. La recuperación publica por UUID en Biblioteca SQLite v5 y
+  reconcilia `pending` y `ready`. B.1 comprueba la identidad del archivo
+  antes de confirmar `ready` y registra la intención de descarte antes
+  de limpiar únicamente los temporales del intento.
+- **Reprotest build 21, PASS físico.** La reapertura mostró el intento
+  interrumpido y el progreso anterior. El usuario no observó una
+  transferencia activa en pantalla. El descarte eliminó el intento y
+  conservó los datos existentes. La observación se limita a la interfaz.
+- **Reprotest build 22, PASS físico y técnico.** La pausa diagnóstica
+  permitió cerrar después de verificar el archivo completo y antes de
+  publicar. Tras reabrir, «Verificar y guardar archivo» publicó una sola
+  copia. En la reapertura adicional, Biblioteca mantuvo 19 elementos,
+  incluidos los 18 anteriores y una copia del video con el mismo SHA-256.
+  Se conservaron Colecciones, Cola, progreso y preferencias. Ambas bases
+  pasaron integridad y claves foráneas, con cero intentos y archivos
+  temporales pendientes. La instrumentación de build 22 queda fuera de
+  `main`. La reproducción completa del archivo recuperado sigue
+  **NOT TESTED**.
+- **Cobertura automatizada.** B.1 acreditó 207 pruebas en siete suites,
+  incluidas 29 de publicación y descarte con SQLite y disco reales y un
+  doble del bridge. Los cierres entre `pending` y `ready`, las
+  interrupciones durante el descarte, la corrupción, las colisiones y los
+  fallos de espacio o de escritura SQLite tienen cobertura automatizada
+  y siguen pendientes de prueba física en esos puntos de fallo.
+- Drop original sigue en 1.8.1 build 19 y todavía no contiene A+B. El
+  Bloque C de descargas persistentes, reanudación de bytes parciales,
+  permanece pendiente.
 
-## Descargas persistentes · Bloque B · revisión local
+## Descargas persistentes · compilación y evidencias A+B
 
-- Rama `codex/download-recovery-b`, derivada de
-  `38de0601b39b8d6cfb06fd90aac95186484ba467`. Cambios sin commit.
-  [Contrato de publicación y recuperación](download-recovery-block-b.md).
-- Archivo terminado con prueba SHA-256 en staging de Application Support.
-  Publicación por UUID estable y reconciliación verificada de `pending`
-  y `ready` en Biblioteca SQLite v5. La recuperación pide confirmación
-  explícita y no inicia una transferencia. El descarte se limita al intento.
-- RED reprodujo la confirmación por tamaño de bytes corruptos y la
-  eliminación prematura del job remoto al fallar la reserva. GREEN acreditó
-  190 pruebas en siete suites afectadas, incluidas 13 de publicación con
-  SQLite real y disco. TypeScript, formato, diff check y typecheck Swift
-  estricto ARM64 iOS 16.4 PASS. Lint focal con cero errores y tres avisos
-  preexistentes. Falta validar el cierre y reapertura en iPhone.
+- La compilación A+B Release ARM64 sin firma de build 19 terminó con
+  exit 0. El supervisor conserva su resultado histórico `BLOCKED`
+  porque ExpoModulesJSI regeneró el slice registrado como entrada fija.
+  La evidencia complementaria acredita esa fase y la coincidencia del
+  SHA-256 con el binario archivado.
+- `e093de95` actualizó el [workflow](engineering-workflow.md) para
+  verificar el slice generado por separado de las entradas fijas.
+  Reprotest build 21 se derivó de la compilación A+B build 19. La
+  build 22 diagnóstica reutilizó la misma base nativa ARM64 con un bundle
+  Expo/Hermes regenerado.
+- Evidencias operativas fuera de Git:
+  - Build 21, interrupción: `v1.8.1-reprotest-build21-physical-test1-pmsujlzi/RESULT.json`.
+  - Build 21, descarte: `v1.8.1-reprotest-build21-discard-validation-94vms56c/RESULT.json`.
+  - Build 22, reapertura: `Drop-reprotest-build22-block-b-reopened.14xXf3dl/RESULT.json`.
+  - B.1, pruebas: `Drop-block-b1-evidence.Xc7GyMSy/GREEN-final.log`.
 
-## Descargas persistentes · Bloque B.1 · corrección local
+## Descargas persistentes · historial de implementación
 
-- B.1 corrige la ventana entre SHA-256 y `ready`, el descarte previo a
-  confirmar su intención y la atribución por nombre del temporal.
-  El destino validado queda bajo reserva nativa hasta el cierre de la
-  transacción de Biblioteca. El sello liga el archivo al intento, a su
-  generación y a la identidad del objeto de disco.
-- Una intención SQLite confirmada permite finalizar el descarte tras un
-  cierre. La limpieza verifica la identidad antes y después del renombrado
-  exclusivo a cuarentena. La reapertura ofrece «Finalizar descarte» sin
-  transferir ni publicar. SQLite de Biblioteca permanece en v5.
-- RED reprodujo los tres defectos. GREEN acreditó 207 pruebas en siete
-  suites, incluidas 29 de publicación y descarte con SQLite y disco reales
-  y un doble del bridge. TypeScript y formato PASS. Typecheck ARM64
-  iOS 16.4 en Swift 5 con concurrencia estricta y Swift 6 para almacenamiento.
-  Lint focal sin errores, con un aviso preexistente en el alcance revisado.
-- Pendiente de comprobación física en iPhone: sello y bridge reales,
-  recuperación tras cerrar el proceso, descarte interrumpido y reproducción
-  completa. B.1 sigue sin commit.
-
-## Descargas persistentes · Bloques A, A.1 y A.2 · consolidación local
-
-- Consolidación de A, A.1 y A.2 en `codex/download-recovery-a`, desde la base
-  `0e2d1ccbfc604263cc74f17e583d955c101b3d2f`.
-- A.1 sustituye AsyncStorage por `drop-downloads.sqlite` v1, separado de
-  Biblioteca. Una fila, transiciones transaccionales por ID y generación,
-  cancelación confirmada antes de abortar y reserva común entre motores.
-  Pegados tardíos invalidados. Mensajes y códigos de limpieza sanitizados.
-- RED A.1: seis casos reprodujeron los defectos. GREEN A.1: 120 pruebas en
-  seis suites focales, incluido fallo real de COMMIT, rollback y reapertura.
-  TypeScript, formato y diff check PASS. Lint focal sin errores y con tres
-  advertencias preexistentes en los mocks de pruebas. Los 153 resultados
-  históricos de A son una ejecución distinta.
-- A.2 cierra el inicio tardío de YouTube y el POST directo reproducido en la
-  misma ventana. Comprueba la generación de primer plano y la propiedad de
-  la fila tras la reserva. El bridge YouTube comprueba su generación y el
-  estado de UIKit en la cola principal antes de iniciar. Solo se presenta
-  la interrupción confirmada por SQLite. Volver a la app exige reintento
-  explícito.
-- A.2: seis RED, siete casos focales GREEN y 144 pruebas acreditadas en
-  siete suites afectadas. TypeScript, formato, diff check y typecheck Swift
-  estricto ARM64 iOS 16.4 PASS. Lint focal sin errores y con las tres
-  advertencias anteriores. Pendiente de validación física.
-- Reapertura sin POST automático. Consultar un job directo requiere acción
-  explícita. Reintentar YouTube vuelve al análisis del enlace canónico.
-  Sigue pendiente la validación física. La recuperación de archivos y la
-  reanudación de bytes quedan fuera del bloque.
-- Continuidad de la original: Biblioteca abrió tras renovar la firma y se
-  verificó la conservación de datos. El perfil vigente vence el
-  18/11/2026 a las 18:54:48 CDMX. Priorizar la renovación preventiva antes
-  de nuevas instalaciones o publicaciones si se aproxima el vencimiento.
+- [Contrato A](download-recovery-block-a.md). A.1 sustituyó AsyncStorage
+  por SQLite v1 con transiciones por ID y generación y cancelación
+  confirmada antes de abortar. A.2 cerró el arranque tardío de YouTube y
+  del POST directo al comprobar el primer plano y la propiedad de la
+  reserva. La reapertura tampoco inicia un POST automáticamente.
+- A.1 reprodujo seis defectos y acreditó 120 pruebas focales. Las 153
+  pruebas registradas en A corresponden a una ejecución distinta.
+  A.2 reprodujo seis casos RED y acreditó siete casos focales GREEN. La
+  regresión de A.2 abarcó 144 pruebas en siete suites. Un ajuste de la
+  expectativa de Home se verificó en la ejecución focal posterior.
+- [Contrato B](download-recovery-block-b.md). El RED inicial reprodujo
+  la confirmación por tamaño de bytes corruptos y la eliminación
+  prematura del job remoto al fallar la reserva. El GREEN de B acreditó
+  190 pruebas, incluidas 13 de publicación. La verificación de B.1
+  añadió cobertura de integridad, propiedad y descarte. TypeScript,
+  formato y typecheck Swift ARM64 para iOS 16.4 pasaron. El lint focal
+  conservó un aviso preexistente.
+- Continuidad de la original: Biblioteca abrió tras renovar la firma y
+  se verificó la conservación de datos. El perfil vigente vence el
+  18/11/2026 a las 18:54:48 CDMX. Priorizar la renovación preventiva
+  antes de nuevas instalaciones o publicaciones si se aproxima el
+  vencimiento.
 
 ## Drop 1.8.1 · cierre de la original del 11/11/2026
 
