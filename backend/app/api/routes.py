@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse
 
 from app.api.auth import require_api_access
+from app.api.job_files import JobFileResponse
 from app.core.config import Settings
 from app.models.media import (
     AnalyzeRequest,
@@ -85,13 +86,7 @@ async def get_job(
 async def get_job_file(
     job_id: str, manager: Annotated[JobManager, Depends(get_job_manager)]
 ) -> Response:
-    path, content_type, filename = manager.get_file(job_id)
-    return FileResponse(
-        path,
-        media_type=content_type,
-        filename=filename,
-        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
-    )
+    return JobFileResponse(manager, job_id)
 
 
 @router.delete(

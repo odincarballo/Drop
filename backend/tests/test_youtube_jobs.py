@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -175,11 +176,13 @@ async def test_youtube_job_reports_processing_and_keeps_only_final_file(
     assert completed.progress == 1
     assert completed.bytes_downloaded == 8
     assert completed.file_size == 5
-    path, content_type, filename = manager.get_file(created.id)
-    assert content_type == "video/mp4"
-    assert filename == "Video final.mp4"
-    assert await asyncio.to_thread(path.read_bytes) == b"final"
-    assert [item.name for item in path.parent.iterdir()] == ["Video final.mp4"]
+    assert completed.file_sha256 == hashlib.sha256(b"final").hexdigest()
+    with manager.read_file(created.id) as reader:
+        file = reader.file
+        assert file.content_type == "video/mp4"
+        assert file.filename == "Video final.mp4"
+        assert await reader.read_block(0) == b"final"
+        assert [item.name for item in file.path.parent.iterdir()] == ["Video final.mp4"]
 
 
 async def test_youtube_download_phase_and_cancellation_remove_workspace(

@@ -22,7 +22,7 @@ from tests.fakes import BlockingResponse, MemoryResponse, QueueTransport
 
 
 def make_job_app(
-    settings: Settings, response: RemoteResponse
+    settings: Settings, response: RemoteResponse, *, content_length: int = 12
 ) -> tuple[FastAPI, DirectMediaResource]:
     async def resolver(host: str, port: int) -> tuple[str, ...]:
         return ("93.184.216.34",)
@@ -43,7 +43,7 @@ def make_job_app(
         download_type=DownloadType.VIDEO_AUDIO,
         content_type="video/mp4",
         file_name="clip.mp4",
-        content_length=12,
+        content_length=content_length,
         created_at=time.time(),
     )
     catalog.put(resource)

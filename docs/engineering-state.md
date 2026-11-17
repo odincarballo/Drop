@@ -1,7 +1,29 @@
 # Estado operativo de Drop
 
-Actualizado: 13 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 17 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
+
+## Descargas persistentes · C.1 · contrato del backend
+
+- C.1 implementado en el worktree aislado de `codex/download-recovery-c1`
+  sobre `16de8d26`, con revisión final completada.
+  [Contrato del archivo final](download-recovery-block-c1.md).
+- RED reprodujo siete fallos y confirmó dos casos ya cubiertos por Starlette.
+  GREEN con Starlette 1.6.0 y Uvicorn en localhost: 151 pruebas del backend
+  aprobadas y una omitida, que requiere YouTube real. Ruff y formato PASS.
+  La revisión posterior reprodujo la sustitución de ruta, la sobrescritura
+  del archivo abierto y dos rangos malformados aceptados como `206`.
+- Corrección C.1 verificada en localhost. La respuesta transmite desde
+  el descriptor validado y comprueba SHA-256 por bloque antes de enviar
+  bytes. Valida la sintaxis completa de Range y conserva las respuestas
+  completas y parciales válidas. GREEN: tres regresiones originales
+  aprobadas por separado, 159 pruebas del backend aprobadas y una omitida.
+  Ruff y formato PASS. Mypy conserva los dos errores de la base.
+- La revisión final verificó cuatro rangos con extremos dentro de
+  bloques o en sus límites, incluido el bloque final corto.
+- Quedan pendientes la validación en Render y sus intermediarios, la
+  medición del rendimiento bajo carga y C.2 (persistencia de parciales
+  en el cliente).
 
 ## Descargas persistentes · A+B integrados y verificados en reprotest
 
@@ -37,9 +59,8 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   interrupciones durante el descarte, la corrupción, las colisiones y los
   fallos de espacio o de escritura SQLite tienen cobertura automatizada
   y siguen pendientes de prueba física en esos puntos de fallo.
-- Drop original sigue en 1.8.1 build 19 y todavía no contiene A+B. El
-  Bloque C de descargas persistentes, reanudación de bytes parciales,
-  permanece pendiente.
+- Drop original sigue en 1.8.1 build 19 y todavía no contiene A+B.
+  La reanudación de bytes parciales aún no está integrada en `main`.
 
 ## Descargas persistentes · compilación y evidencias A+B
 

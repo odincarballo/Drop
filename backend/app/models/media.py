@@ -150,6 +150,8 @@ class JobResponse(APIModel):
     total_bytes: int | None = Field(default=None, ge=0)
     file_name: str | None = None
     file_size: int | None = Field(default=None, ge=0)
+    file_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    file_content_type: str | None = None
     error: ErrorDetail | None = None
     download_url: str | None = None
     message: str | None = None
