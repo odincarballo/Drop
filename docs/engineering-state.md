@@ -3,6 +3,29 @@
 Actualizado: 17 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
+## Descargas persistentes · C.2 · almacenamiento local
+
+- Rama aislada `codex/download-recovery-c2` sobre `b6003e7`. Implementados
+  el parcial nativo excluido de respaldo, el checkpoint de offset y SHA-256,
+  y la migración aditiva de `drop-downloads.sqlite` a v2. El payload de A+B
+  y Biblioteca SQLite v5 se conservan. Revisión final completada.
+  [Contrato C.2 y reversión](download-recovery-block-c2.md).
+- SQLite real pasó migración y reversión aisladas, COMMIT rechazado,
+  UPDATE sin cambios y SIGKILL entre fsync y COMMIT. La regresión móvil
+  pasó 166 pruebas en siete suites. La ejecución focal final pasó las
+  14 pruebas del diario, incluida la conservación del comprobante A+B.
+- Pasaron 16 casos Swift con disco real en macOS, typecheck del almacén
+  para iOS 16.4 ARM64 en Swift 5 y 6 y typecheck del bridge en Swift 5.
+  Pendientes la validación física en iOS, la medición de rendimiento y
+  la integración de transferencia e interfaz en C.3.
+- Corregido el bloqueo del huérfano anterior al sello. La preparación se
+  sella y sincroniza antes del renombrado exclusivo. La reapertura y el
+  descarte preservan archivos de propiedad incierta fuera de las rutas
+  activas y permiten volver a usar el almacén. La comprobación final
+  conservó la asignación en disco de un objeto apartado y verificó el
+  umbral de escritura con disponibilidad simulada. C.3 deberá mantener la
+  descarga convencional bajo sus propias políticas de tamaño y espacio.
+
 ## Descargas persistentes · C.1 · contrato del backend
 
 - C.1 implementado en el worktree aislado de `codex/download-recovery-c1`
@@ -21,9 +44,8 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   Ruff y formato PASS. Mypy conserva los dos errores de la base.
 - La revisión final verificó cuatro rangos con extremos dentro de
   bloques o en sus límites, incluido el bloque final corto.
-- Quedan pendientes la validación en Render y sus intermediarios, la
-  medición del rendimiento bajo carga y C.2 (persistencia de parciales
-  en el cliente).
+- Quedan pendientes la validación en Render y sus intermediarios y la
+  medición del rendimiento bajo carga.
 
 ## Descargas persistentes · A+B integrados y verificados en reprotest
 

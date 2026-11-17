@@ -1,8 +1,14 @@
 import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 import { z } from 'zod';
 
+import {
+  appendPartialBytes,
+  removePartialBytes,
+  verifyPartialBytes,
+} from './downloadPartialStorage';
+
 const databaseName = 'drop-downloads.sqlite';
-const schemaVersion = 1;
+const schemaVersion = 2;
 const mode = z.enum(['VIDEO_AUDIO', 'VIDEO_ONLY', 'AUDIO_ONLY']);
 const format = z.string().regex(/^[a-zA-Z0-9_-]{1,55}(?:@[a-f0-9]{24})?$/);
 const videoId = z.string().regex(/^[a-zA-Z0-9_-]{11}$/);
@@ -84,6 +90,67 @@ type Update = Partial<
   >
 >;
 type Identity = Pick<DownloadRecord, 'id' | 'generation'>;
+const maxPartialBytes = 100 * 1024 * 1024;
+const maxPartialChunkBytes = 1024 * 1024;
+const emptyPrefixSha256 =
+  'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+const partialResource = z.strictObject({
+  remoteJobId: jobId,
+  totalBytes: z.number().int().positive().max(maxPartialBytes),
+  sha256,
+  etag: z.string().regex(/^"sha256-[a-f0-9]{64}"$/),
+});
+const partialProgress = z.strictObject({
+  confirmedBytes: z.number().int().nonnegative().max(maxPartialBytes),
+  prefixSha256: sha256,
+});
+const partialCheckpoint = partialResource
+  .extend({
+    id: fields.id,
+    generation: fields.generation,
+    ...partialProgress.shape,
+  })
+  .refine(
+    (value) =>
+      value.etag === `"sha256-${value.sha256}"` &&
+      value.confirmedBytes <= value.totalBytes &&
+      (value.confirmedBytes !== 0 ||
+        value.prefixSha256 === emptyPrefixSha256) &&
+      (value.confirmedBytes !== value.totalBytes ||
+        value.prefixSha256 === value.sha256),
+  );
+const partialState = z.enum(['active', 'discarding', 'discarded']);
+export type DownloadPartialResource = z.infer<typeof partialResource>;
+export type DownloadPartialCheckpoint = z.infer<typeof partialCheckpoint>;
+
+const partialSchema = `
+  CREATE TABLE download_partial (
+    slot INTEGER PRIMARY KEY CHECK (slot = 1),
+    id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    remoteJobId TEXT NOT NULL,
+    totalBytes INTEGER NOT NULL CHECK (totalBytes BETWEEN 1 AND ${maxPartialBytes}),
+    sha256 TEXT NOT NULL,
+    etag TEXT NOT NULL,
+    confirmedBytes INTEGER NOT NULL CHECK (confirmedBytes BETWEEN 0 AND totalBytes),
+    prefixSha256 TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('active', 'discarding', 'discarded'))
+  );
+  CREATE TRIGGER discard_partial_on_attempt_update
+  AFTER UPDATE OF id, generation ON download_attempt
+  WHEN OLD.id <> NEW.id OR OLD.generation <> NEW.generation
+  BEGIN
+    UPDATE download_partial SET state = 'discarding'
+    WHERE slot = 1 AND id = OLD.id AND generation = OLD.generation AND state = 'active';
+  END;
+  CREATE TRIGGER discard_partial_on_attempt_delete
+  AFTER DELETE ON download_attempt
+  BEGIN
+    UPDATE download_partial SET state = 'discarding'
+    WHERE slot = 1 AND id = OLD.id AND generation = OLD.generation AND state = 'active';
+  END;
+`;
 
 let writes: Promise<unknown> = Promise.resolve();
 function serialized<T>(operation: () => Promise<T>): Promise<T> {
@@ -138,22 +205,26 @@ async function open() {
   const db = await openDatabaseAsync(databaseName, { useNewConnection: true });
   try {
     await db.execAsync('PRAGMA busy_timeout = 1000');
+    await db.execAsync('PRAGMA synchronous = FULL');
     await transaction(db, async () => {
       const version = await db.getFirstAsync<{ user_version: number }>(
         'PRAGMA user_version',
       );
       if (version?.user_version === schemaVersion) return;
-      if (version?.user_version !== 0)
+      if (version?.user_version !== 0 && version?.user_version !== 1)
         throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
-      await db.execAsync(`
+      if (version.user_version === 0)
+        await db.execAsync(`
         CREATE TABLE download_attempt (
           slot INTEGER PRIMARY KEY CHECK (slot = 1),
           id TEXT NOT NULL,
           generation INTEGER NOT NULL CHECK (generation > 0),
           payload TEXT NOT NULL
         );
-        PRAGMA user_version = ${schemaVersion};
       `);
+      await db.execAsync(
+        `${partialSchema} PRAGMA user_version = ${schemaVersion};`,
+      );
     });
     return db;
   } catch (error) {
@@ -198,6 +269,10 @@ function decode(row: StoredAttempt | null): DownloadRecord | null {
   }
 }
 
+function requireWrite(result: { changes: number }) {
+  if (result.changes !== 1) throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
+}
+
 export function readDownloadRecord() {
   return serialized(async () => decode(await readRow(await getDatabase())));
 }
@@ -224,7 +299,14 @@ async function write(
         checked.generation,
         payload,
       );
-  if (result.changes !== 1) throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
+  requireWrite(result);
+  if (checked.phase === 'saving') {
+    await db.runAsync(
+      "UPDATE download_partial SET state = 'discarding' WHERE slot = 1 AND id = ? AND generation = ? AND state = 'active'",
+      checked.id,
+      checked.generation,
+    );
+  }
   return checked;
 }
 
@@ -234,7 +316,7 @@ async function remove(db: SQLiteDatabase, record: Identity) {
     record.id,
     record.generation,
   );
-  if (result.changes !== 1) throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
+  requireWrite(result);
 }
 
 function change(
@@ -327,6 +409,220 @@ export function finishDownloadPublication(record: DownloadRecord) {
     await remove(db, current);
     return current;
   });
+}
+
+function partialTransaction<T>(action: (db: SQLiteDatabase) => Promise<T>) {
+  return serialized(async () => {
+    const db = await getDatabase();
+    return transaction(db, () => action(db));
+  });
+}
+
+async function readPartial(db: SQLiteDatabase) {
+  const row = await db.getFirstAsync<Record<string, unknown>>(
+    `SELECT id, generation, remoteJobId, totalBytes, sha256, etag, confirmedBytes,
+            prefixSha256, state FROM download_partial WHERE slot = 1`,
+  );
+  if (!row) return null;
+  const { state, ...values } = row;
+  const checkpoint = partialCheckpoint.safeParse(values);
+  const lifecycle = partialState.safeParse(state);
+  if (!checkpoint.success || !lifecycle.success)
+    throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
+  return { state: lifecycle.data, checkpoint: checkpoint.data };
+}
+
+function sameOwner(a: Identity, b: Identity) {
+  return a.id === b.id && a.generation === b.generation;
+}
+
+function sameResource(a: DownloadPartialResource, b: DownloadPartialResource) {
+  return (
+    a.remoteJobId === b.remoteJobId &&
+    a.totalBytes === b.totalBytes &&
+    a.etag === b.etag &&
+    a.sha256 === b.sha256
+  );
+}
+
+function storageKey(owner: Identity) {
+  return `${owner.id}.${owner.generation}`;
+}
+
+async function ownsPartial(
+  db: SQLiteDatabase,
+  checkpoint: DownloadPartialCheckpoint,
+) {
+  const attempt = decode(await readRow(db));
+  return (
+    attempt?.source === 'direct' &&
+    sameOwner(attempt, checkpoint) &&
+    attempt.remoteJobId === checkpoint.remoteJobId &&
+    attempt.status !== 'cancelled' &&
+    attempt.phase !== 'saving' &&
+    !attempt.publication
+  );
+}
+
+export function reserveDownloadPartial(
+  owner: Identity,
+  resource: DownloadPartialResource,
+) {
+  return partialTransaction(async (db) => {
+    const checked = partialCheckpoint.parse({
+      ...resource,
+      id: owner.id,
+      generation: owner.generation,
+      confirmedBytes: 0,
+      prefixSha256: emptyPrefixSha256,
+    });
+    if (!(await ownsPartial(db, checked))) return null;
+    const previous = await readPartial(db);
+    if (previous && sameOwner(previous.checkpoint, checked)) {
+      return previous.state === 'active' &&
+        sameResource(previous.checkpoint, checked)
+        ? previous.checkpoint
+        : null;
+    }
+    if (previous?.state === 'active') return null;
+    if (previous?.state === 'discarding')
+      await cleanPartial(db, previous.checkpoint);
+    requireWrite(
+      await db.runAsync(
+        `INSERT INTO download_partial
+        (slot, id, generation, remoteJobId, totalBytes, sha256, etag, confirmedBytes, prefixSha256, state)
+        VALUES (1, ?, ?, ?, ?, ?, ?, 0, ?, 'active')
+        ON CONFLICT(slot) DO UPDATE SET id=excluded.id, generation=excluded.generation,
+          remoteJobId=excluded.remoteJobId, totalBytes=excluded.totalBytes, sha256=excluded.sha256,
+          etag=excluded.etag, confirmedBytes=0, prefixSha256=excluded.prefixSha256, state='active'`,
+        checked.id,
+        checked.generation,
+        checked.remoteJobId,
+        checked.totalBytes,
+        checked.sha256,
+        checked.etag,
+        checked.prefixSha256,
+      ),
+    );
+    return checked;
+  });
+}
+
+export function appendDownloadPartial(
+  expected: DownloadPartialCheckpoint,
+  bytes: Uint8Array,
+) {
+  return partialTransaction(async (db) => {
+    const previous = await readPartial(db);
+    if (previous?.state !== 'active') return null;
+    const current = previous.checkpoint;
+    if (
+      !sameOwner(current, expected) ||
+      !sameResource(current, expected) ||
+      current.confirmedBytes !== expected.confirmedBytes ||
+      current.prefixSha256 !== expected.prefixSha256 ||
+      !(await ownsPartial(db, current))
+    )
+      return null;
+    const count = bytes.byteLength;
+    if (
+      count === 0 ||
+      count > maxPartialChunkBytes ||
+      current.confirmedBytes + count > current.totalBytes
+    )
+      throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
+    const result = partialProgress.parse(
+      await appendPartialBytes(
+        storageKey(current),
+        current.confirmedBytes,
+        current.prefixSha256,
+        current.totalBytes,
+        bytes,
+      ),
+    );
+    const next = partialCheckpoint.safeParse({ ...current, ...result });
+    if (
+      !next.success ||
+      result.confirmedBytes !== current.confirmedBytes + count
+    )
+      throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
+    requireWrite(
+      await db.runAsync(
+        `UPDATE download_partial SET confirmedBytes = ?, prefixSha256 = ?
+       WHERE slot = 1 AND id = ? AND generation = ? AND state = 'active' AND confirmedBytes = ?`,
+        next.data.confirmedBytes,
+        next.data.prefixSha256,
+        current.id,
+        current.generation,
+        current.confirmedBytes,
+      ),
+    );
+    return next.data;
+  });
+}
+
+export function recoverDownloadPartial(owner: Identity) {
+  return partialTransaction(async (db) => {
+    const row = await readPartial(db);
+    if (
+      row?.state !== 'active' ||
+      !sameOwner(row.checkpoint, owner) ||
+      !(await ownsPartial(db, row.checkpoint))
+    )
+      return null;
+    const checkpoint = row.checkpoint;
+    await verifyPartialBytes(
+      storageKey(checkpoint),
+      checkpoint.confirmedBytes,
+      checkpoint.prefixSha256,
+    );
+    return checkpoint;
+  });
+}
+
+async function cleanPartial(
+  db: SQLiteDatabase,
+  checkpoint: DownloadPartialCheckpoint,
+) {
+  await removePartialBytes(storageKey(checkpoint));
+  requireWrite(
+    await db.runAsync(
+      "UPDATE download_partial SET state = 'discarded' WHERE slot = 1 AND id = ? AND generation = ? AND state = 'discarding'",
+      checkpoint.id,
+      checkpoint.generation,
+    ),
+  );
+}
+
+export function finishDownloadPartialCleanup(owner?: Identity) {
+  return partialTransaction(async (db) => {
+    const row = await readPartial(db);
+    if (
+      row?.state !== 'discarding' ||
+      (owner && !sameOwner(row.checkpoint, owner))
+    )
+      return false;
+    await cleanPartial(db, row.checkpoint);
+    return true;
+  });
+}
+
+export async function discardDownloadPartial(owner: Identity) {
+  const marked = await partialTransaction(async (db) => {
+    const row = await readPartial(db);
+    if (!row || row.state === 'discarded' || !sameOwner(row.checkpoint, owner))
+      return false;
+    if (row.state === 'active')
+      requireWrite(
+        await db.runAsync(
+          "UPDATE download_partial SET state = 'discarding' WHERE slot = 1 AND id = ? AND generation = ? AND state = 'active'",
+          owner.id,
+          owner.generation,
+        ),
+      );
+    return true;
+  });
+  return marked && finishDownloadPartialCleanup(owner);
 }
 
 export function rememberDownload(input: Selection): Promise<DownloadAttempt> {

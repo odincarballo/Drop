@@ -217,6 +217,23 @@ public final class DropLibraryModule: Module {
       try DropLibraryStorage().discardCompletedDownload(key: key, asset: asset)
     }
 
+    AsyncFunction("appendPartialDownload") {
+      (key: String, offset: Int, digest: String, total: Int, chunk: Data) throws -> [String: Any] in
+      guard let storage = DropPartialDownloadStorage.standard else { throw DropPartialDownloadError.unavailable }
+      let receipt = try storage.append(key: key, offset: Int64(offset), digest: digest, total: Int64(total), bytes: chunk)
+      return ["confirmedBytes": Int(receipt.confirmedBytes), "prefixSha256": receipt.prefixSha256]
+    }
+
+    AsyncFunction("verifyPartialDownload") { (key: String, offset: Int, digest: String) throws in
+      guard let storage = DropPartialDownloadStorage.standard else { throw DropPartialDownloadError.unavailable }
+      try storage.verify(key: key, offset: Int64(offset), digest: digest)
+    }
+
+    AsyncFunction("discardPartialDownload") { (key: String) throws in
+      guard let storage = DropPartialDownloadStorage.standard else { throw DropPartialDownloadError.unavailable }
+      try storage.discard(key: key)
+    }
+
     AsyncFunction("movePrepared") {
       (relative: String, id: String, ext: String, origin: String, size: Int, path: String) throws -> [String: Any] in
       let (destination, url, actualSize) = try DropLibraryStorage().moveFromCache(
