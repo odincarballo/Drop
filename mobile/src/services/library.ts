@@ -45,6 +45,14 @@ type NativeLibrary = {
     mediaType: string,
   ): Promise<unknown>;
   findCompletedDownload(key: string, sizeBytes: number): Promise<unknown>;
+  stageCompletedPartial(
+    key: string,
+    id: string,
+    ext: string,
+    sha256: string,
+    sizeBytes: number,
+    mediaType: string,
+  ): Promise<void>;
   placeCompletedDownload(
     key: string,
     id: string,
@@ -848,6 +856,21 @@ export function stageDownloadAsset(
 
 export function findDownloadAsset(key: string, sizeBytes: number) {
   return native().findCompletedDownload(key, sizeBytes);
+}
+
+export function stagePartialDownloadAsset(
+  key: string,
+  asset: CompletedDownloadAsset,
+  mediaType: LibraryMetadata['mediaType'],
+) {
+  return native().stageCompletedPartial(
+    key,
+    asset.id,
+    asset.ext,
+    asset.sha256,
+    asset.sizeBytes,
+    mediaType,
+  );
 }
 
 export async function publishDownloadAsset(

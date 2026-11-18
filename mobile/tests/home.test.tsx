@@ -7,6 +7,8 @@ import {
 } from '@testing-library/react-native';
 import { requireOptionalNativeModule } from 'expo';
 import * as Clipboard from 'expo-clipboard';
+import { fetch as partialFetch } from 'expo/fetch';
+import { createHash } from 'node:crypto';
 
 import HomeScreenView from '@/app/download';
 import { MainNavigation } from '@/components/MainNavigation';
@@ -18,7 +20,14 @@ import { useEffect, useState } from 'react';
 import { AppState, Pressable, Text, type AppStateStatus } from 'react-native';
 import type { MediaAnalysis } from '@/models/media';
 import { ApiError } from '@/services/errors';
-import { publishDownloadAsset } from '@/services/library';
+import {
+  appendDownloadPartial,
+  reserveDownloadPartial,
+} from '@/services/downloadRecovery';
+import {
+  publishDownloadAsset,
+  stagePartialDownloadAsset,
+} from '@/services/library';
 import { analyzeMedia } from '@/services/media';
 import {
   createDownloadJob,
@@ -56,6 +65,7 @@ jest.mock('@/services/fileExport', () => ({
 }));
 jest.mock('@/services/library', () => ({
   publishDownloadAsset: jest.fn(),
+  stagePartialDownloadAsset: jest.fn(),
   stageDownloadAsset: jest.fn(
     async (_key: string, file: { sizeBytes: number }) => ({
       id: '00000000-0000-0000-0000-000000000001',
@@ -75,6 +85,7 @@ jest.mock('expo-router', () => ({
 }));
 jest.mock('@/components/MiniPlayer', () => ({ MiniPlayer: () => null }));
 jest.mock('expo', () => ({ requireOptionalNativeModule: jest.fn() }));
+jest.mock('expo/fetch', () => ({ fetch: jest.fn() }));
 jest.mock('@/services/jobs', () => ({
   createDownloadJob: jest.fn(),
   getDownloadJob: jest.fn(),
@@ -1485,6 +1496,151 @@ const persistedDownload = {
   errorCode: null,
   remoteJobId: recoverableJobId,
 };
+
+async function prepareResumableFixture() {
+  const first = new Uint8Array([1, 2, 3]);
+  const last = new Uint8Array([4, 5, 6]);
+  const hash = (bytes: Uint8Array) =>
+    createHash('sha256').update(bytes).digest('hex');
+  const fullHash = hash(new Uint8Array([...first, ...last]));
+  const etag = `"sha256-${fullHash}"`;
+  const verify = jest.fn().mockResolvedValue(undefined);
+  const partial = {
+    appendPartialDownload: jest
+      .fn()
+      .mockResolvedValueOnce({ confirmedBytes: 3, prefixSha256: hash(first) })
+      .mockResolvedValueOnce({ confirmedBytes: 6, prefixSha256: fullHash }),
+    verifyPartialDownload: verify,
+    discardPartialDownload: jest.fn().mockResolvedValue(undefined),
+  };
+  jest
+    .mocked(requireOptionalNativeModule)
+    .mockImplementation((name) =>
+      name === 'DropLibrary' ? (partial as never) : null,
+    );
+  await seedDownloadRecovery(JSON.stringify(persistedDownload));
+  const reserved = (await reserveDownloadPartial(persistedDownload, {
+    remoteJobId: recoverableJobId,
+    totalBytes: 6,
+    sha256: fullHash,
+    etag,
+  }))!;
+  await appendDownloadPartial(reserved, first);
+  jest.mocked(getDownloadJob).mockResolvedValue({
+    ...completedDirectJob,
+    id: recoverableJobId,
+    fileSize: 6,
+    fileSha256: fullHash,
+    fileContentType: 'video/mp4',
+    downloadUrl: `/jobs/${recoverableJobId}/file`,
+  });
+  const reader = {
+    read: jest
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: last })
+      .mockResolvedValueOnce({ done: true }),
+    releaseLock: jest.fn(),
+  };
+  jest.mocked(partialFetch).mockResolvedValueOnce({
+    status: 206,
+    headers: new Map([
+      ['etag', etag],
+      ['content-range', 'bytes 3-5/6'],
+      ['content-length', '3'],
+      ['content-type', 'video/mp4'],
+    ]),
+    body: { getReader: () => reader },
+  } as never);
+  return { partial, hash, first, last, fullHash, etag, verify };
+}
+
+test('a verified checkpoint offers explicit resumption and commits the B handoff once', async () => {
+  const { verify, hash, first, etag } = await prepareResumableFixture();
+  await render(<HomeScreen />);
+  const resume = await screen.findByRole('button', {
+    name: 'Reanudar descarga',
+  });
+  expect(verify).toHaveBeenCalledWith('local-1.1', 3, hash(first));
+  expect(getDownloadJob).not.toHaveBeenCalled();
+  expect(partialFetch).not.toHaveBeenCalled();
+  await fireEvent.press(resume);
+  expect(
+    await screen.findByText('Archivo guardado en Biblioteca.'),
+  ).toBeTruthy();
+  expect(partialFetch).toHaveBeenCalledTimes(1);
+  expect(jest.mocked(partialFetch).mock.calls[0]?.[1]?.headers).toMatchObject({
+    Range: 'bytes=3-5',
+    'If-Range': etag,
+  });
+  expect(createDownloadJob).not.toHaveBeenCalled();
+  expect(downloadJobFile).not.toHaveBeenCalled();
+  expect(stagePartialDownloadAsset).toHaveBeenCalledTimes(1);
+  expect(publishDownloadAsset).toHaveBeenCalledTimes(1);
+});
+
+test.each(['background', 'interrupt'] as const)(
+  '%s during a resumed range retains its checkpoint and requires another explicit action',
+  async (stop) => {
+    const { partial } = await prepareResumableFixture();
+    const started = deferred<void>();
+    jest
+      .mocked(partialFetch)
+      .mockReset()
+      .mockImplementationOnce(async (_url, options) => {
+        started.resolve();
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => reject(new Error('fixture aborted')),
+            { once: true },
+          );
+        });
+      });
+    await render(<HomeScreen />);
+    const button = await screen.findByRole('button', {
+      name: 'Reanudar descarga',
+    });
+    await act(async () => {
+      fireEvent.press(button);
+      await started.promise;
+    });
+    if (stop === 'background') await act(() => changeAppState('background'));
+    else
+      await fireEvent.press(
+        await screen.findByRole('button', { name: 'Interrumpir reanudación' }),
+      );
+    await screen.findByRole('button', { name: 'Reanudar descarga' });
+    await act(() => changeAppState('active'));
+    expect(partialFetch).toHaveBeenCalledTimes(1);
+    expect(partial.appendPartialDownload).toHaveBeenCalledTimes(1);
+    expect(publishDownloadAsset).not.toHaveBeenCalled();
+    expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+      id: 'local-1',
+      generation: 1,
+    });
+  },
+);
+
+test('expiration disables resume and keeps explicit retry and discard available', async () => {
+  await prepareResumableFixture();
+  jest
+    .mocked(getDownloadJob)
+    .mockRejectedValueOnce(new ApiError('JOB_NOT_FOUND', 'fixture expired'));
+  await render(<HomeScreen />);
+  await fireEvent.press(
+    await screen.findByRole('button', { name: 'Reanudar descarga' }),
+  );
+  await screen.findAllByText('El servidor ya no conserva esta descarga.');
+  expect(
+    screen.queryByRole('button', { name: 'Reanudar descarga' }),
+  ).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Reintentar desde cero' }),
+  ).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Descartar' })).toBeTruthy();
+  expect(partialFetch).not.toHaveBeenCalled();
+  expect(createDownloadJob).not.toHaveBeenCalled();
+});
 
 test('reopening presents historical progress and queries an existing direct job only on request', async () => {
   await seedDownloadRecovery(JSON.stringify(persistedDownload));

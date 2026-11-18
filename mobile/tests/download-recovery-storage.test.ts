@@ -319,6 +319,61 @@ test('a rejected SQLite COMMIT leaves only the previous checkpoint recoverable o
   expect(readFileSync(file)).toEqual(contents.subarray(0, 3));
 });
 
+test('the final checkpoint and B handoff roll back together when COMMIT fails', async () => {
+  const { db, journal, owner, checkpoint, file } = await withPartial();
+  const first = (await journal.appendDownloadPartial(
+    checkpoint,
+    contents.subarray(0, 3),
+  ))!;
+  const asset = {
+    id: '751a5e25-b8d4-410f-8f2e-58f891a2a3d6',
+    ext: 'mp4',
+    sizeBytes: contents.length,
+    sha256: resource.sha256,
+  } as const;
+  await db.execAsync(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE fixture_parent (id INTEGER PRIMARY KEY);
+    CREATE TABLE fixture_child (parent INTEGER REFERENCES fixture_parent(id) DEFERRABLE INITIALLY DEFERRED);
+    CREATE TRIGGER cut_handoff AFTER UPDATE ON download_attempt
+    BEGIN INSERT INTO fixture_child VALUES (99); END;
+  `);
+  await expect(
+    journal.appendDownloadPartial(first, contents.subarray(3), asset),
+  ).rejects.toThrow(/FOREIGN KEY/);
+  expect(await journal.readPartialPublication(owner)).toBeNull();
+  expect(await journal.readDownloadRecord()).toMatchObject({
+    phase: 'transferring',
+  });
+  expect(readFileSync(file)).toEqual(contents);
+  const { journal: restarted, db: reopened } = reopen();
+  const bridge = jest.requireMock<
+    typeof import('@/services/downloadPartialStorage')
+  >('@/services/downloadPartialStorage');
+  jest
+    .mocked(bridge.verifyPartialBytes)
+    .mockImplementation(async (_, offset, sha) => {
+      expect(hash(readFileSync(file).subarray(0, offset))).toBe(sha);
+      truncateSync(file, offset);
+    });
+  expect(await restarted.recoverDownloadPartial(owner)).toEqual(first);
+  expect(readFileSync(file)).toEqual(contents.subarray(0, 3));
+  await reopened.execAsync('DROP TRIGGER cut_handoff');
+  jest
+    .mocked(bridge.appendPartialBytes)
+    .mockImplementation(async (_, offset, _prefix, _total, data) => {
+      expect(offset).toBe(3);
+      appendFileSync(file, data);
+      return { confirmedBytes: contents.length, prefixSha256: resource.sha256 };
+    });
+  await restarted.appendDownloadPartial(first, contents.subarray(3), asset);
+  expect(await restarted.readPartialPublication(owner)).toEqual(asset);
+  expect(await reopened.getFirstAsync('PRAGMA integrity_check')).toEqual({
+    integrity_check: 'ok',
+  });
+  expect(await reopened.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
+});
+
 test('a checkpoint is compare-and-swap and cancellation invalidates outstanding bytes', async () => {
   const { db, journal, owner, attempt, checkpoint, bridge, file } =
     await withPartial();

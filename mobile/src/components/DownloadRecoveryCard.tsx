@@ -47,6 +47,10 @@ export function DownloadRecoveryCard({
     query,
     saveCompleted,
     dismiss,
+    checkpoint,
+    resuming,
+    resume,
+    interruptResume,
   } = recovery;
   if (!record && loaded && message)
     return (
@@ -95,17 +99,34 @@ export function DownloadRecoveryCard({
           descargarlo de nuevo.
         </Text>
       )}
-      {!cancelled && record.bytes > 0 && (
+      {!cancelled && (checkpoint?.confirmedBytes ?? record.bytes) > 0 && (
         <Text style={{ color: colors.secondary }}>
-          Progreso anterior · {formatSize(record.bytes)}
+          {resuming ? 'Guardado' : 'Progreso anterior'} ·{' '}
+          {formatSize(checkpoint?.confirmedBytes ?? record.bytes)}
         </Text>
       )}
-      {record.status === 'remote-ready' && record.phase !== 'saving' && (
-        <Text style={{ color: colors.secondary }}>
-          Desde aquí puedes consultar el resultado. Para obtener el archivo,
-          inicia una descarga nueva.
-        </Text>
-      )}
+      {record.status === 'remote-ready' &&
+        record.phase !== 'saving' &&
+        !checkpoint && (
+          <Text style={{ color: colors.secondary }}>
+            Desde aquí puedes consultar el resultado. Para obtener el archivo,
+            inicia una descarga nueva.
+          </Text>
+        )}
+      {checkpoint &&
+        !record.publication &&
+        (resuming ? (
+          <ActionButton
+            label="Interrumpir reanudación"
+            onPress={interruptResume}
+          />
+        ) : (
+          <ActionButton
+            label="Reanudar descarga"
+            onPress={() => void resume()}
+            disabled={working}
+          />
+        ))}
       {message && (
         <Text
           accessibilityLiveRegion="polite"

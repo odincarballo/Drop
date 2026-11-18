@@ -14,7 +14,7 @@ export async function resetDownloadRecoveryFixture() {
     .mockResolvedValue(db as unknown as SQLiteDatabase);
   await readDownloadRecord();
   await db.execAsync(
-    'DROP TRIGGER IF EXISTS reject_download_write; DELETE FROM download_attempt;',
+    'DROP TRIGGER IF EXISTS reject_download_write; DELETE FROM download_partial; DELETE FROM download_attempt;',
   );
 }
 

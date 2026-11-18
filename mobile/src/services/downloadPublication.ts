@@ -3,7 +3,9 @@ import {
   beginDownloadDiscard,
   completedDownloadAssetSchema,
   finishDownloadPublication,
+  finishDownloadPartialCleanup,
   readDownloadRecord,
+  readPartialPublication,
   recordCompletedAsset,
   type DownloadAttempt,
   type DownloadRecord,
@@ -13,6 +15,7 @@ import {
   findDownloadAsset,
   publishDownloadAsset,
   stageDownloadAsset,
+  stagePartialDownloadAsset,
 } from '@/services/library';
 
 type TransferredFile = { uri: string; owner: string; sizeBytes: number };
@@ -28,7 +31,9 @@ function stagingKey(record: DownloadRecord) {
   return record.id + '.' + record.generation;
 }
 
-async function currentPublication(record: DownloadRecord) {
+async function currentPublication(
+  record: Pick<DownloadRecord, 'id' | 'generation'>,
+) {
   const current = await readDownloadRecord();
   return current?.publication &&
     current.id === record.id &&
@@ -39,6 +44,10 @@ async function currentPublication(record: DownloadRecord) {
 
 async function publish(record: DownloadRecord, metadata: LibraryMetadata) {
   const key = stagingKey(record);
+  const partial =
+    record.source === 'direct' ? await readPartialPublication(record) : null;
+  if (partial)
+    await stagePartialDownloadAsset(key, partial, metadata.mediaType);
   const asset =
     record.publication?.asset ??
     completedDownloadAssetSchema.parse(
@@ -48,7 +57,26 @@ async function publish(record: DownloadRecord, metadata: LibraryMetadata) {
   if (!sealed) return null;
   const item = await publishDownloadAsset(key, asset, metadata);
   await finishDownloadPublication(sealed);
+  if (partial)
+    await finishDownloadPartialCleanup(record).catch(() => undefined);
   return item;
+}
+
+export function saveCompletedPartial(
+  owner: Pick<DownloadRecord, 'id' | 'generation'>,
+  metadata: LibraryMetadata,
+) {
+  return serialized(async () => {
+    const record = await currentPublication(owner);
+    if (!record || record.publication?.discarding) return null;
+    try {
+      const item = await publish(record, metadata);
+      return item ? { item } : null;
+    } catch {
+      const current = await currentPublication(owner);
+      return current ? { record: current } : null;
+    }
+  });
 }
 
 export function saveTransferredDownload(
@@ -110,6 +138,9 @@ export function discardTransferredDownload(record: DownloadRecord) {
     if (!intent) return null;
     if (intent.publication?.asset)
       await discardDownloadAsset(key, intent.publication.asset);
-    return finishDownloadPublication(intent);
+    const finished = await finishDownloadPublication(intent);
+    if (finished)
+      await finishDownloadPartialCleanup(intent).catch(() => undefined);
+    return finished;
   });
 }

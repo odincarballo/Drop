@@ -297,6 +297,75 @@ async function recover() {
   return publication().recoverTransferredDownload(record);
 }
 
+test.each(['before-stage', 'after-stage'] as const)(
+  'C checkpoint and B asset survive a closure %s and publish exactly once',
+  async (cut) => {
+    const active = await attempt();
+    const owner = (await journal.readDownloadRecord())!;
+    const sha256 = digest(bytes);
+    const asset = { id, ext: 'mp4', sizeBytes: bytes.length, sha256 } as const;
+    const checkpoint = (await journal.reserveDownloadPartial(owner, {
+      remoteJobId: remoteId,
+      sha256,
+      etag: `"sha256-${sha256}"`,
+      totalBytes: bytes.length,
+    }))!;
+    const partialFile = join(root, 'partial-file');
+    const stagePartial = jest.fn(async (key: string) => {
+      if (cut === 'before-stage' && stagePartial.mock.calls.length === 1)
+        throw new Error('cut before stage');
+      if (await native.findCompletedDownload(key, bytes.length)) return;
+      await rename(partialFile, cache());
+      await native.stageCompletedDownload(
+        key,
+        pathToFileURL(cache()).href,
+        'direct',
+        remoteId,
+        bytes.length,
+      );
+      if (cut === 'after-stage' && stagePartial.mock.calls.length === 1)
+        throw new Error('cut after stage');
+    });
+    Object.assign(native, {
+      appendPartialDownload: async () => {
+        await writeFile(partialFile, bytes);
+        return { confirmedBytes: bytes.length, prefixSha256: sha256 };
+      },
+      discardPartialDownload: async () => {
+        if (await exists(partialFile)) await rm(partialFile);
+      },
+      stageCompletedPartial: stagePartial,
+    });
+    const complete = (await journal.appendDownloadPartial(
+      checkpoint,
+      bytes,
+      asset,
+    ))!;
+    expect(complete.confirmedBytes).toBe(bytes.length);
+    expect(await active.cancel()).toBeNull();
+    expect(await journal.readPartialPublication(owner)).toEqual(asset);
+    const failed = await publication().saveCompletedPartial(complete, metadata);
+    expect(failed).toMatchObject({ record: { publication: { asset } } });
+    expect(await getRows()).toEqual([]);
+    await reopen();
+    const recovered = await recover();
+    expect(recovered?.id).toBe(id);
+    expect(await exists(partialFile)).toBe(false);
+    expect(await journal.readDownloadRecord()).toBeNull();
+    expect(
+      await downloadDb.getFirstAsync('SELECT state FROM download_partial'),
+    ).toEqual({ state: 'discarded' });
+    const rows = await getRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id, lifecycle: 'ready' });
+    expect(await readFile(media())).toEqual(bytes);
+    await expect(
+      publication().recoverTransferredDownload(failed!.record!),
+    ).resolves.toBeNull();
+    expect(await getRows()).toHaveLength(1);
+  },
+);
+
 test.each(['proof', 'pending', 'move', 'ready'] as const)(
   'recovers a single item after interruption at %s',
   async (cut) => {
@@ -652,6 +721,99 @@ test('a failure acknowledging discard leaves a tombstone, not a resumable downlo
     publication().discardTransferredDownload(record),
   ).resolves.toBeTruthy();
 });
+
+test.each(['after-rename', 'before-journal-delete'] as const)(
+  'a damaged C handoff discarded across a restart at %s unblocks the next download',
+  async (cut) => {
+    expect(await save()).toMatchObject({ item: { id } });
+    const history = await getRows();
+    await attempt();
+    const owner = (await journal.readDownloadRecord())!;
+    const sha256 = digest(bytes);
+    const asset = {
+      id: 'a26d231a-8a0d-4cf6-b4d8-0d10cc404745',
+      ext: 'mp4',
+      sizeBytes: bytes.length,
+      sha256,
+    } as const;
+    const key = owner.id + '.' + owner.generation;
+    const fileName = asset.id + '-' + sha256 + '.mp4';
+    const stage = join(staging(key), fileName);
+    const preserved = join(
+      root,
+      'DownloadStaging',
+      '.preserved',
+      key,
+      fileName,
+    );
+    const damaged = Buffer.alloc(bytes.length, 0x45);
+    Object.assign(native, {
+      appendPartialDownload: async () => ({
+        confirmedBytes: bytes.length,
+        prefixSha256: sha256,
+      }),
+      discardPartialDownload: jest.fn().mockResolvedValue(undefined),
+    });
+    const checkpoint = (await journal.reserveDownloadPartial(owner, {
+      remoteJobId: remoteId,
+      sha256,
+      etag: `"sha256-${sha256}"`,
+      totalBytes: bytes.length,
+    }))!;
+    await journal.appendDownloadPartial(checkpoint, bytes, asset);
+    const receipt = (await journal.readDownloadRecord())!;
+    expect(receipt.publication).toEqual({ asset });
+    await mkdir(staging(key), { recursive: true });
+    await writeFile(stage, damaged);
+    native.discardCompletedDownload.mockImplementation(
+      async (actualKey, actualId) => {
+        expect(actualKey).toBe(key);
+        expect(actualId).toBe(asset.id);
+        expect(await journal.readDownloadRecord()).toMatchObject({
+          publication: { discarding: true },
+        });
+        if (await exists(stage)) {
+          await mkdir(join(preserved, '..'), { recursive: true });
+          await rename(stage, preserved);
+          if (cut === 'after-rename')
+            throw new Error('closed after preservation');
+        }
+        expect(await readFile(preserved)).toEqual(damaged);
+      },
+    );
+    if (cut === 'before-journal-delete')
+      await downloadDb.execAsync(
+        "CREATE TRIGGER cut BEFORE DELETE ON download_attempt BEGIN SELECT RAISE(ABORT, 'closed before acknowledgement'); END",
+      );
+    await expect(
+      publication().discardTransferredDownload(receipt),
+    ).rejects.toThrow(/closed/);
+    expect(await exists(stage)).toBe(false);
+    await reopen();
+    await expect(recover()).resolves.toBeNull();
+    if (cut === 'before-journal-delete')
+      await downloadDb.execAsync('DROP TRIGGER cut');
+    await expect(
+      publication().discardTransferredDownload(receipt),
+    ).resolves.toBeTruthy();
+    await reopen();
+    await expect(
+      publication().discardTransferredDownload(receipt),
+    ).resolves.toBeNull();
+    expect(await journal.readDownloadRecord()).toBeNull();
+    await expect(attempt()).resolves.toBeTruthy();
+    await expect(
+      publication().discardTransferredDownload(receipt),
+    ).resolves.toBeNull();
+    expect(await getRows()).toEqual(history);
+    expect(await readFile(media())).toEqual(bytes);
+    expect(await readFile(preserved)).toEqual(damaged);
+    expect(await libraryDb.getFirstAsync('PRAGMA integrity_check')).toEqual({
+      integrity_check: 'ok',
+    });
+    expect(await libraryDb.getAllAsync('PRAGMA foreign_key_check')).toEqual([]);
+  },
+);
 
 test.each(['same-name inode', 'symlink', 'during quarantine'] as const)(
   'preserves an unowned replacement: %s',

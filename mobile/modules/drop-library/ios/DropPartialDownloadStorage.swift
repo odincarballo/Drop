@@ -100,6 +100,30 @@ final class DropPartialDownloadStorage: @unchecked Sendable {
     }
   }
 
+  // Called only for a durable C-to-B handoff. Hold the inode and the C.2
+  // lock until the caller finishes validating or moving the completed file.
+  func withCompletedPartial<T>(
+    key: String, size: Int64, digest: String, _ action: (URL, Int32, Int32) throws -> T
+  ) throws -> T {
+    try Self.validate(key: key, offset: size, digest: digest)
+    guard size > 0 else { throw DropPartialDownloadError.invalidCheckpoint }
+    return try Self.lock.withLock {
+      let value = try withDirectory(create: false) { dir in
+        try Self.requireNoDiscard(dir, key: key, reconcile: false)
+        guard let fd = try Self.openExisting(dir, Self.payload, key: key) else {
+          throw DropPartialDownloadError.invalidFile
+        }
+        defer { _ = close(fd) }
+        guard try Self.attest(fd, dir, name: Self.payload, key: key).size == size else {
+          throw DropPartialDownloadError.invalidFile
+        }
+        return try action(directory.appendingPathComponent(Self.payload), fd, dir)
+      }
+      guard let value else { throw DropPartialDownloadError.invalidFile }
+      return value
+    }
+  }
+
   func discard(key: String) throws {
     try Self.validate(key: key, offset: 0, digest: Self.emptyDigest)
     try Self.lock.withLock {
@@ -300,6 +324,10 @@ final class DropPartialDownloadStorage: @unchecked Sendable {
     return key
   }
 
+  static func ownsDescriptor(_ fd: Int32, key: String) throws -> Bool {
+    try recognizedOwner(fd, stamp: descriptorStamp(fd)) == key
+  }
+
   private static func preserve(_ dir: Int32, _ name: String) throws {
     let retained = ".preserved-\(UUID().uuidString.lowercased())"
     try renameExclusive(dir, from: name, to: retained)
@@ -418,13 +446,13 @@ final class DropPartialDownloadStorage: @unchecked Sendable {
     hash.finalize().map { String(format: "%02x", $0) }.joined()
   }
 
-  private static func sync(_ fd: Int32) throws {
+  static func sync(_ fd: Int32) throws {
     while fsync(fd) != 0 {
       if errno != EINTR { throw posixError() }
     }
   }
 
-  private static func syncDirectory(_ url: URL) throws {
+  static func syncDirectory(_ url: URL) throws {
     let fd = open(url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     guard fd >= 0 else { throw posixError() }
     defer { _ = close(fd) }

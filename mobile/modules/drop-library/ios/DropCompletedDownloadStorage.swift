@@ -30,8 +30,9 @@ private struct DownloadFileSnapshot: Equatable {
   let modified: timespec
   let changed: timespec
 
-  init(_ info: stat) throws {
-    guard (info.st_mode & S_IFMT) == S_IFREG, info.st_nlink == 1, info.st_size > 0 else {
+  init(_ info: stat, allowEmpty: Bool = false) throws {
+    guard (info.st_mode & S_IFMT) == S_IFREG, info.st_nlink == 1,
+          (info.st_size > 0 || (allowEmpty && info.st_size == 0)) else {
       throw DropLibraryStorageError.invalidSource
     }
     identity = "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)"
@@ -125,6 +126,78 @@ extension DropLibraryStorage {
     }
   }
 
+  func stageCompletedPartial(
+    key: String, asset: DropCompletedDownloadAsset, mediaType: String,
+    partials: DropPartialDownloadStorage? = .standard
+  ) async throws {
+    guard asset.valid, mediaType == (asset.ext == "mp4" ? "video" : "audio"), let partials else {
+      throw DropLibraryStorageError.invalidSource
+    }
+    let existing = try downloadFiles.lock.withLock { try stagedOrPlacedPartial(key: key, asset: asset) }
+    let staged = try existing ?? partials.withCompletedPartial(
+      key: key, size: asset.sizeBytes, digest: asset.sha256
+    ) { source, fd, dir in
+      try downloadFiles.lock.withLock {
+        if let found = try stagedOrPlacedPartial(key: key, asset: asset) { return found }
+        return try movePartialIntoStaging(source, fd: fd, directory: dir, key: key, asset: asset)
+      }
+    }
+    // The staging name carries the extension needed by AVFoundation on iOS 16.
+    // Only this check followed by B's verification can publish the staged file.
+    try await DropLocalMediaInspection.inspectCompletedDownload(staged.0, mediaType: mediaType)
+    try Task.checkCancellation()
+    guard try sealedDownloadSnapshot(staged.0, key: key, asset: asset) == staged.1 else {
+      throw DropLibraryStorageError.invalidSource
+    }
+  }
+
+  private func movePartialIntoStaging(
+    _ source: URL, fd: Int32, directory: Int32, key: String, asset: DropCompletedDownloadAsset
+  ) throws -> (URL, DownloadFileSnapshot) {
+    let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+    let before = try completedDownloadSnapshot(source)
+    guard try completedDownloadDigest(handle, size: asset.sizeBytes) == asset.sha256,
+          try completedDownloadSnapshot(source) == before else {
+      throw DropLibraryStorageError.invalidSource
+    }
+    let stamp = downloadSeal(key, asset, before)
+    let result = stamp.withUnsafeBytes {
+      fsetxattr(fd, downloadSealAttribute, $0.baseAddress, $0.count, 0, XATTR_CREATE)
+    }
+    if result != 0 {
+      guard errno == EEXIST else { throw downloadFileError() }
+      // A process may have stopped after setting B's seal and before rename.
+      try verifyDownloadSeal(handle, key: key, asset: asset, snapshot: before)
+    }
+    let workspace = try downloadWorkspace(key)
+    try ensureDirectory(workspace)
+    var staging = workspace.deletingLastPathComponent()
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try staging.setResourceValues(values)
+    try DropPartialDownloadStorage.sync(fd)
+    try DropPartialDownloadStorage.syncDirectory(root)
+    try DropPartialDownloadStorage.syncDirectory(staging)
+    let destination = workspace.appendingPathComponent(asset.filename)
+    try renameCompletedDownload(source, to: destination)
+    let moved = try sealedDownloadSnapshot(destination, key: key, asset: asset)
+    guard moved.sealedIdentity == before.sealedIdentity else { throw DropLibraryStorageError.invalidSource }
+    try DropPartialDownloadStorage.syncDirectory(workspace)
+    try DropPartialDownloadStorage.sync(directory)
+    return (destination, moved)
+  }
+
+  private func stagedOrPlacedPartial(key: String, asset: DropCompletedDownloadAsset) throws -> (URL, DownloadFileSnapshot)? {
+    if let (existing, file) = try downloadStage(key) {
+      guard existing == asset else { throw DropLibraryStorageError.invalidSource }
+      return (file, try sealedDownloadSnapshot(file, key: key, asset: asset))
+    }
+    if let (file, _) = try managedMedia(relative: asset.relativeMediaPath) {
+      return (file, try verifiedDownloadSnapshot(file, key: key, asset: asset))
+    }
+    return nil
+  }
+
   func placeCompletedDownload(key: String, asset: DropCompletedDownloadAsset, move: Bool) throws -> String {
     guard asset.valid else { throw DropLibraryStorageError.invalidSource }
     let destination = root.appendingPathComponent(asset.relativeMediaPath)
@@ -178,28 +251,104 @@ extension DropLibraryStorage {
     try downloadFiles.lock.withLock {
       let workspace = try downloadWorkspace(key)
       let quarantined = workspace.appendingPathComponent(".discard")
-      let staged = try downloadStage(key)
-      if try downloadFileExists(quarantined) {
-        // Reopen after an interruption between quarantine and unlink.
-        guard staged == nil else { throw DropLibraryStorageError.invalidSource }
-        _ = try verifiedDownloadSnapshot(quarantined, key: key, asset: asset)
-      } else {
-        guard let (candidate, file) = staged else { return }
-        guard candidate == asset else { throw DropLibraryStorageError.invalidSource }
-        _ = try sealedDownloadSnapshot(file, key: key, asset: asset)
-        try renameCompletedDownload(file, to: quarantined)
-        do {
-          _ = try verifiedDownloadSnapshot(quarantined, key: key, asset: asset)
-        } catch {
-          // An unexpected object must survive. Restore its name only if free.
-          try? renameCompletedDownload(quarantined, to: file)
+      let file = workspace.appendingPathComponent(asset.filename)
+      let stagingRoot = workspace.deletingLastPathComponent()
+      let retention = stagingRoot.appendingPathComponent(".preserved", isDirectory: true)
+        .appendingPathComponent(key, isDirectory: true)
+      let retained = retention.appendingPathComponent(asset.filename)
+      guard DropLibraryPaths.isUnredirected(retention) else {
+        throw DropLibraryStorageError.invalidManagedPath
+      }
+      if try downloadFileExists(retained) {
+        guard try !downloadFileExists(file), try !downloadFileExists(quarantined) else {
+          throw DropLibraryStorageError.invalidSource
+        }
+        try withDownloadFile(retained, allowEmpty: true) { handle, snapshot in
+          guard try ownsCompletedPartial(handle, key: key, asset: asset, snapshot: snapshot) else {
+            throw DropLibraryStorageError.invalidSource
+          }
+        }
+        try syncPreservedPartial(retention: retention, workspace: workspace)
+        return
+      }
+
+      do {
+        try discardStagedDownload(key: key, asset: asset, quarantined: quarantined)
+      } catch let error as DropLibraryStorageError {
+        switch error {
+        case .invalidSource, .invalidManagedPath:
+          let hasStage = try downloadFileExists(file)
+          let hasQuarantine = try downloadFileExists(quarantined)
+          guard hasStage != hasQuarantine,
+                try preserveDamagedPartial(hasStage ? file : quarantined, at: retained,
+                                           key: key, asset: asset, workspace: workspace) else {
+            throw error
+          }
+        default:
           throw error
         }
       }
-      // Only this locked protocol can mutate quarantine. unlink is never recursive.
-      guard unlink(quarantined.path) == 0 else { throw downloadFileError() }
+    }
+  }
+
+  private func discardStagedDownload(key: String, asset: DropCompletedDownloadAsset, quarantined: URL) throws {
+    let staged = try downloadStage(key)
+    if try downloadFileExists(quarantined) {
+      // Reopen after an interruption between quarantine and unlink.
+      guard staged == nil else { throw DropLibraryStorageError.invalidSource }
+      _ = try verifiedDownloadSnapshot(quarantined, key: key, asset: asset)
+    } else {
+      guard let (candidate, file) = staged else { return }
+      guard candidate == asset else { throw DropLibraryStorageError.invalidSource }
+      _ = try sealedDownloadSnapshot(file, key: key, asset: asset)
+      try renameCompletedDownload(file, to: quarantined)
+      do {
+        _ = try verifiedDownloadSnapshot(quarantined, key: key, asset: asset)
+      } catch {
+        // An unexpected object must survive. Restore its name only if free.
+        try? renameCompletedDownload(quarantined, to: file)
+        throw error
+      }
+    }
+    // Only this locked protocol can mutate quarantine. unlink is never recursive.
+    guard unlink(quarantined.path) == 0 else { throw downloadFileError() }
+    _ = rmdir(quarantined.deletingLastPathComponent().path)
+  }
+
+  private func preserveDamagedPartial(_ source: URL, at retained: URL, key: String,
+                                      asset: DropCompletedDownloadAsset, workspace: URL) throws -> Bool {
+    try withDownloadFile(source, allowEmpty: true) { handle, snapshot in
+      guard try ownsCompletedPartial(handle, key: key, asset: asset, snapshot: snapshot) else {
+        return false
+      }
+      do {
+        _ = try verifiedDownloadSnapshot(source, key: key, asset: asset)
+        return false
+      } catch DropLibraryStorageError.invalidSource {
+        let retention = retained.deletingLastPathComponent()
+        try ensureDirectory(retention)
+        try DropPartialDownloadStorage.sync(handle.fileDescriptor)
+        guard try completedDownloadSnapshot(source, allowEmpty: true) == snapshot else {
+          throw DropLibraryStorageError.invalidSource
+        }
+        try renameCompletedDownload(source, to: retained)
+        guard try completedDownloadSnapshot(retained, allowEmpty: true).sealedIdentity == snapshot.sealedIdentity else {
+          throw DropLibraryStorageError.invalidSource
+        }
+        try syncPreservedPartial(retention: retention, workspace: workspace)
+        return true
+      }
+    }
+  }
+
+  private func syncPreservedPartial(retention: URL, workspace: URL) throws {
+    try DropPartialDownloadStorage.syncDirectory(retention)
+    try DropPartialDownloadStorage.syncDirectory(retention.deletingLastPathComponent())
+    if try downloadFileExists(workspace) {
+      try DropPartialDownloadStorage.syncDirectory(workspace)
       _ = rmdir(workspace.path)
     }
+    try DropPartialDownloadStorage.syncDirectory(workspace.deletingLastPathComponent())
   }
 
   private func downloadWorkspace(_ key: String) throws -> URL {
@@ -266,25 +415,43 @@ private func downloadFileExists(_ url: URL) throws -> Bool {
   throw downloadFileError()
 }
 
-private func completedDownloadSnapshot(_ url: URL) throws -> DownloadFileSnapshot {
+private func completedDownloadSnapshot(_ url: URL, allowEmpty: Bool = false) throws -> DownloadFileSnapshot {
   var info = stat()
   guard DropLibraryPaths.isUnredirected(url), lstat(url.path, &info) == 0 else {
     throw DropLibraryStorageError.invalidSource
   }
-  return try DownloadFileSnapshot(info)
+  return try DownloadFileSnapshot(info, allowEmpty: allowEmpty)
 }
 
-private func withDownloadFile<T>(_ url: URL, _ action: (FileHandle, DownloadFileSnapshot) throws -> T) throws -> T {
-  let before = try completedDownloadSnapshot(url)
+private func withDownloadFile<T>(_ url: URL, allowEmpty: Bool = false,
+                                 _ action: (FileHandle, DownloadFileSnapshot) throws -> T) throws -> T {
+  let before = try completedDownloadSnapshot(url, allowEmpty: allowEmpty)
   let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
   guard descriptor >= 0 else { throw downloadFileError() }
   let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
   defer { try? handle.close() }
   var info = stat()
-  guard fstat(descriptor, &info) == 0, try DownloadFileSnapshot(info) == before else {
+  guard fstat(descriptor, &info) == 0, try DownloadFileSnapshot(info, allowEmpty: allowEmpty) == before else {
     throw DropLibraryStorageError.invalidSource
   }
   return try action(handle, before)
+}
+
+private func ownsCompletedPartial(_ handle: FileHandle, key: String, asset: DropCompletedDownloadAsset,
+                                  snapshot: DownloadFileSnapshot) throws -> Bool {
+  guard try DropPartialDownloadStorage.ownsDescriptor(handle.fileDescriptor, key: key) else { return false }
+  // The B seal binds the same inode to the receipt. Its size and times need
+  // not describe the damaged bytes still on disk.
+  let prefix = Data("\(key):\(asset.filename):\(snapshot.identity):\(asset.sizeBytes):".utf8)
+  var actual = Data(count: prefix.count + 64)
+  let count = actual.withUnsafeMutableBytes {
+    fgetxattr(handle.fileDescriptor, downloadSealAttribute, $0.baseAddress, $0.count, 0, 0)
+  }
+  if count < 0 {
+    if errno == ENOATTR || errno == ERANGE { return false }
+    throw downloadFileError()
+  }
+  return actual.prefix(count).starts(with: prefix)
 }
 
 private func downloadSeal(_ key: String, _ asset: DropCompletedDownloadAsset, _ snapshot: DownloadFileSnapshot) -> Data {

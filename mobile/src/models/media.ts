@@ -93,6 +93,8 @@ export const jobSchema = z.object({
   totalBytes: optionalSize,
   fileName: z.string().nullable(),
   fileSize: optionalSize,
+  fileSha256: z.string().nullable().optional(),
+  fileContentType: z.string().nullable().optional(),
   error: z.object({ code: z.string(), message: z.string() }).nullable(),
   downloadUrl: z
     .string()

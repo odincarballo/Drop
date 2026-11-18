@@ -90,8 +90,8 @@ type Update = Partial<
   >
 >;
 type Identity = Pick<DownloadRecord, 'id' | 'generation'>;
-const maxPartialBytes = 100 * 1024 * 1024;
-const maxPartialChunkBytes = 1024 * 1024;
+export const maxPartialBytes = 100 * 1024 * 1024;
+export const maxPartialChunkBytes = 1024 * 1024;
 const emptyPrefixSha256 =
   'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -281,6 +281,7 @@ async function write(
   db: SQLiteDatabase,
   value: DownloadRecord,
   expected: Identity | null,
+  preservePartial = false,
 ) {
   const checked = schema.parse(value);
   const payload = JSON.stringify(checked);
@@ -300,7 +301,7 @@ async function write(
         payload,
       );
   requireWrite(result);
-  if (checked.phase === 'saving') {
+  if (checked.phase === 'saving' && !preservePartial) {
     await db.runAsync(
       "UPDATE download_partial SET state = 'discarding' WHERE slot = 1 AND id = ? AND generation = ? AND state = 'active'",
       checked.id,
@@ -418,10 +419,16 @@ function partialTransaction<T>(action: (db: SQLiteDatabase) => Promise<T>) {
   });
 }
 
-async function readPartial(db: SQLiteDatabase) {
+async function readPartial(db: SQLiteDatabase, publicationOwner?: Identity) {
   const row = await db.getFirstAsync<Record<string, unknown>>(
     `SELECT id, generation, remoteJobId, totalBytes, sha256, etag, confirmedBytes,
-            prefixSha256, state FROM download_partial WHERE slot = 1`,
+            prefixSha256, state FROM download_partial WHERE slot = 1` +
+      (publicationOwner
+        ? " AND id = ? AND generation = ? AND state = 'active'"
+        : ''),
+    ...(publicationOwner
+      ? [publicationOwner.id, publicationOwner.generation]
+      : []),
   );
   if (!row) return null;
   const { state, ...values } = row;
@@ -449,19 +456,19 @@ function storageKey(owner: Identity) {
   return `${owner.id}.${owner.generation}`;
 }
 
-async function ownsPartial(
+async function owningPartialAttempt(
   db: SQLiteDatabase,
   checkpoint: DownloadPartialCheckpoint,
 ) {
   const attempt = decode(await readRow(db));
-  return (
-    attempt?.source === 'direct' &&
+  return attempt?.source === 'direct' &&
     sameOwner(attempt, checkpoint) &&
     attempt.remoteJobId === checkpoint.remoteJobId &&
     attempt.status !== 'cancelled' &&
     attempt.phase !== 'saving' &&
     !attempt.publication
-  );
+    ? attempt
+    : null;
 }
 
 export function reserveDownloadPartial(
@@ -476,7 +483,7 @@ export function reserveDownloadPartial(
       confirmedBytes: 0,
       prefixSha256: emptyPrefixSha256,
     });
-    if (!(await ownsPartial(db, checked))) return null;
+    if (!(await owningPartialAttempt(db, checked))) return null;
     const previous = await readPartial(db);
     if (previous && sameOwner(previous.checkpoint, checked)) {
       return previous.state === 'active' &&
@@ -511,6 +518,7 @@ export function reserveDownloadPartial(
 export function appendDownloadPartial(
   expected: DownloadPartialCheckpoint,
   bytes: Uint8Array,
+  publication?: CompletedDownloadAsset,
 ) {
   return partialTransaction(async (db) => {
     const previous = await readPartial(db);
@@ -520,15 +528,23 @@ export function appendDownloadPartial(
       !sameOwner(current, expected) ||
       !sameResource(current, expected) ||
       current.confirmedBytes !== expected.confirmedBytes ||
-      current.prefixSha256 !== expected.prefixSha256 ||
-      !(await ownsPartial(db, current))
+      current.prefixSha256 !== expected.prefixSha256
     )
       return null;
+    const owner = await owningPartialAttempt(db, current);
+    if (!owner) return null;
     const count = bytes.byteLength;
     if (
       count === 0 ||
       count > maxPartialChunkBytes ||
       current.confirmedBytes + count > current.totalBytes
+    )
+      throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
+    if (
+      publication &&
+      (current.confirmedBytes + count !== current.totalBytes ||
+        publication.sizeBytes !== current.totalBytes ||
+        publication.sha256 !== current.sha256)
     )
       throw new DownloadRecoveryError('DOWNLOAD_STORAGE');
     const result = partialProgress.parse(
@@ -557,6 +573,22 @@ export function appendDownloadPartial(
         current.confirmedBytes,
       ),
     );
+    // Commit the final offset and the resumable B intent together. C remains
+    // the owner of the inode until the staged asset or Library can take over.
+    if (publication)
+      await write(
+        db,
+        {
+          ...owner,
+          status: 'pending',
+          phase: 'saving',
+          bytes: current.totalBytes,
+          errorCode: null,
+          publication: { asset: publication },
+        },
+        owner,
+        true,
+      );
     return next.data;
   });
 }
@@ -567,7 +599,7 @@ export function recoverDownloadPartial(owner: Identity) {
     if (
       row?.state !== 'active' ||
       !sameOwner(row.checkpoint, owner) ||
-      !(await ownsPartial(db, row.checkpoint))
+      !(await owningPartialAttempt(db, row.checkpoint))
     )
       return null;
     const checkpoint = row.checkpoint;
@@ -577,6 +609,65 @@ export function recoverDownloadPartial(owner: Identity) {
       checkpoint.prefixSha256,
     );
     return checkpoint;
+  });
+}
+
+export function readPartialPublication(owner: Identity) {
+  return partialTransaction(async (db) => {
+    const attempt = decode(await readRow(db));
+    const asset = attempt?.publication?.asset;
+    if (
+      !attempt ||
+      !sameOwner(attempt, owner) ||
+      !asset ||
+      attempt.publication?.discarding ||
+      attempt.source !== 'direct'
+    )
+      return null;
+    const row = await readPartial(db, owner);
+    if (
+      row?.state !== 'active' ||
+      !sameOwner(row.checkpoint, owner) ||
+      row.checkpoint.remoteJobId !== attempt.remoteJobId ||
+      row.checkpoint.confirmedBytes !== asset.sizeBytes ||
+      row.checkpoint.sha256 !== asset.sha256
+    )
+      return null;
+    return asset;
+  });
+}
+
+export function prepareCompletedPartial(
+  expected: DownloadPartialCheckpoint,
+  asset: CompletedDownloadAsset,
+) {
+  return partialTransaction(async (db) => {
+    const row = await readPartial(db);
+    if (
+      row?.state !== 'active' ||
+      !sameOwner(row.checkpoint, expected) ||
+      !sameResource(row.checkpoint, expected) ||
+      row.checkpoint.confirmedBytes !== expected.totalBytes ||
+      asset.sizeBytes !== expected.totalBytes ||
+      asset.sha256 !== expected.sha256
+    )
+      return null;
+    const owner = await owningPartialAttempt(db, row.checkpoint);
+    if (!owner) return null;
+    await write(
+      db,
+      {
+        ...owner,
+        status: 'pending',
+        phase: 'saving',
+        bytes: asset.sizeBytes,
+        errorCode: null,
+        publication: { asset },
+      },
+      owner,
+      true,
+    );
+    return row.checkpoint;
   });
 }
 

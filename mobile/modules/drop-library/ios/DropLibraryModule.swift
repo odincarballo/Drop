@@ -197,6 +197,12 @@ public final class DropLibraryModule: Module {
       try DropLibraryStorage().findCompletedDownload(key: key, size: Int64(size))?.payload
     }
 
+    AsyncFunction("stageCompletedPartial") {
+      (key: String, id: String, ext: String, sha256: String, size: Int, mediaType: String) async throws in
+      let asset = DropCompletedDownloadAsset(id: id, ext: ext, sizeBytes: Int64(size), sha256: sha256)
+      try await DropLibraryStorage().stageCompletedPartial(key: key, asset: asset, mediaType: mediaType)
+    }
+
     AsyncFunction("placeCompletedDownload") {
       (key: String, id: String, ext: String, sha256: String, size: Int, move: Bool) throws -> String in
       let asset = DropCompletedDownloadAsset(id: id, ext: ext, sizeBytes: Int64(size), sha256: sha256)

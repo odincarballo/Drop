@@ -1,7 +1,48 @@
 # Estado operativo de Drop
 
-Actualizado: 17 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 18 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
+
+## Descargas persistentes · C.3 · transferencia e interfaz
+
+- Rama aislada `codex/download-recovery-c3` sobre `81df192` de C.2.
+  Revisión final en host completada. [Contrato C.3](download-recovery-block-c3.md).
+  Reanudación explícita de jobs directos C.1 con Range e If-Range,
+  verificación local del checkpoint y validación de cabeceras y SHA-256.
+  La hidratación no inicia transferencias. Los límites de C.2 conservan
+  la vía convencional y YouTube local mantiene su motor.
+- El último checkpoint confirma en la misma transacción el comprobante
+  de publicación B. El traspaso nativo verifica y mueve el mismo inodo
+  mediante renombrado exclusivo. Se reutiliza la publicación idempotente
+  de B y se puede recuperar un cierre entre diario, staging y Biblioteca.
+  Biblioteca permanece en v5 y el diario de descargas en v2.
+- GREEN con 186 pruebas móviles distintas en ocho suites, incluido HTTP
+  local controlado, rollback real del COMMIT final, reapertura de SQLite,
+  cancelación, generaciones obsoletas, paso a segundo plano y publicación
+  única. RED inicial y fallos intermedios conservados, sin recalificarlos.
+  Dos escenarios nativos de handoff pasaron en macOS con M4A sintético,
+  AVFoundation y disco reales, con Swift 5 y 6 estricto. Typecheck del
+  almacén iOS 16.4 ARM64 en Swift 6 estricto y del bridge en Swift 5 PASS.
+- TypeScript, formato móvil y diff sin errores. Lint focal sin errores,
+  con dos avisos previos de imports `require` en pruebas. Se reutilizó
+  la regresión que conservaba entradas equivalentes. Las nuevas pruebas
+  focales de cierre y ciclo de vida se acreditan por separado en evidencia.
+- Evidencia host durable `Drop-block-c3-evidence.afBXTL`, fuera del checkout.
+  Se reanudó tras la interrupción conservando cambios y logs. Se retiró
+  únicamente el enlace temporal de lectura a dependencias existentes.
+  El formateador se ejecuta desde `mobile/`, como indica el workflow.
+- Pendientes la build integrada, la ejecución física, Render y mediciones
+  de memoria y rendimiento. Los sockets Node doblan `expo/fetch` en HTTP
+  local. C.4 no iniciado. Las aplicaciones instaladas no se inspeccionaron
+  ni modificaron durante este bloque.
+- Corregido el bloqueo del descarte cuando se daña un archivo de C.3 en
+  staging. Los sellos del inodo acreditan propiedad y permiten apartarlo
+  mediante renombrado exclusivo. La reapertura reconoce el archivo apartado
+  y SQLite puede completar el descarte y admitir otro intento. Pasaron
+  48 pruebas focales, incluidas dos regresiones con SQLite real, y siete
+  casos Swift con disco real. Se reutilizaron 140 pruebas móviles previas
+  y pasaron TypeScript y typecheck iOS 16.4 ARM64. Evidencia
+  `Drop-block-c3-evidence.afBXTL/discard-correction-idu_j4dv`.
 
 ## Descargas persistentes · C.2 · almacenamiento local
 

@@ -6,13 +6,26 @@ import {
   selectedDownloadRequest,
   type DownloadSelection,
 } from '@/models/selection';
-import { saveTransferredDownload } from '@/services/downloadPublication';
+import type { LibraryMetadata } from '@/models/library';
+import { inDownloadForeground } from '@/hooks/useDownloadForeground';
+import {
+  saveCompletedPartial,
+  saveTransferredDownload,
+} from '@/services/downloadPublication';
 import {
   DownloadRecoveryError,
+  finishDownloadPartialCleanup,
+  readDownloadRecord,
   rememberDownload,
+  reserveDownloadPartial,
   type DownloadAttempt,
+  type DownloadPartialCheckpoint,
   type DownloadRecord,
 } from '@/services/downloadRecovery';
+import {
+  resumableResource,
+  transferDownloadPartial,
+} from '@/services/downloadResumption';
 import {
   ApiError,
   DownloadStartInterrupted,
@@ -66,7 +79,7 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
 export function useMediaDownload(
   foregroundGeneration: () => number | null,
   canStart: () => boolean,
-  onInterrupted: (record: DownloadRecord) => void,
+  onInterrupted: (record: DownloadRecord, message?: string) => void,
 ) {
   const [state, setState] = useState<DownloadState>({ status: 'idle' });
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
@@ -87,7 +100,11 @@ export function useMediaDownload(
     };
   }, []);
 
-  async function start(media: MediaAnalysis, selection: DownloadSelection) {
+  async function start(
+    media: MediaAnalysis,
+    selection: DownloadSelection,
+    conventional = false,
+  ) {
     if (active.current || !canStart()) return;
     const foreground = foregroundGeneration();
     if (foreground === null) return;
@@ -115,6 +132,7 @@ export function useMediaDownload(
     });
     attempt.current = recorded;
     let journal: DownloadAttempt | undefined;
+    let checkpoint: DownloadPartialCheckpoint | null = null;
     const isCurrent = () =>
       mounted.current &&
       operation.current === currentOperation &&
@@ -174,6 +192,7 @@ export function useMediaDownload(
         if (requestController.signal.aborted) return;
         job = await getDownloadJob(job.id, requestController.signal);
         if (!isCurrent()) return;
+        if (job.id !== jobId.current) throw jobError('DOWNLOAD_FAILED');
       }
       if (job.status === 'FAILED') throw jobError(job.error?.code);
       if (job.status === 'CANCELLED') {
@@ -190,27 +209,45 @@ export function useMediaDownload(
         bytesDownloaded: 0,
         totalBytes: job.fileSize,
       });
-      const file = await downloadJobFile(
-        job,
-        requestController.signal,
-        (bytesDownloaded, totalBytes) => {
-          if (isCurrent() && !committing.current) {
-            journal?.observe('transferring', bytesDownloaded);
-            setState({
-              status: 'transferring',
-              job,
-              bytesDownloaded,
-              totalBytes,
-            });
-          }
-        },
-      );
+      function progress(bytesDownloaded: number, totalBytes: number | null) {
+        if (isCurrent() && !committing.current) {
+          journal?.observe('transferring', bytesDownloaded);
+          setState({
+            status: 'transferring',
+            job,
+            bytesDownloaded,
+            totalBytes,
+          });
+        }
+      }
+      const resource = conventional ? null : resumableResource(job);
+      if (resource) {
+        const owner = await readDownloadRecord();
+        if (!isCurrent()) return;
+        if (owner?.source === 'direct' && owner.remoteJobId === job.id)
+          checkpoint = await reserveDownloadPartial(owner, resource).catch(
+            () => null,
+          );
+      }
+      if (!isCurrent()) return;
+      let file: Awaited<ReturnType<typeof downloadJobFile>> | null = null;
+      if (checkpoint) {
+        const reserved = checkpoint;
+        checkpoint = await inDownloadForeground(
+          requestController.signal,
+          isStillForeground,
+          (signal) => transferDownloadPartial(job, reserved, signal, progress),
+        );
+        if (!isStillForeground()) throw new DownloadStartInterrupted();
+      } else {
+        file = await downloadJobFile(job, requestController.signal, progress);
+      }
       if (!isCurrent()) {
-        deleteLocalFile(file.uri);
+        if (file) deleteLocalFile(file.uri);
         return;
       }
-      if (!job.fileSize || file.size !== job.fileSize) {
-        deleteLocalFile(file.uri);
+      if (!job.fileSize || (file && file.size !== job.fileSize)) {
+        if (file) deleteLocalFile(file.uri);
         throw new ApiError(
           'INCOMPLETE_DOWNLOAD',
           'No se pudo verificar el tamaño del archivo terminado.',
@@ -226,25 +263,26 @@ export function useMediaDownload(
         'audioIndex' in selection && selection.audioIndex !== null
           ? media.audioFormats[selection.audioIndex]
           : null;
-      const result = await saveTransferredDownload(
-        journal,
-        { uri: file.uri, owner: job.id, sizeBytes: job.fileSize },
-        {
-          sourceKind: 'direct',
-          title: media.title ?? job.fileName ?? 'Archivo de Drop',
-          mediaType: selection.type === 'AUDIO_ONLY' ? 'audio' : 'video',
-          durationSeconds: media.duration,
-          resolution: video?.resolution,
-          height: video?.height,
-          fps: video?.fps,
-          videoCodec: video?.codec,
-          audioCodec: audio?.codec,
-          container:
-            selection.type === 'AUDIO_ONLY'
-              ? audio?.container
-              : video?.container,
-        },
-      );
+      const metadata: LibraryMetadata = {
+        sourceKind: 'direct',
+        title: media.title ?? job.fileName ?? 'Archivo de Drop',
+        mediaType: selection.type === 'AUDIO_ONLY' ? 'audio' : 'video',
+        durationSeconds: media.duration,
+        resolution: video?.resolution,
+        height: video?.height,
+        fps: video?.fps,
+        videoCodec: video?.codec,
+        audioCodec: audio?.codec,
+        container:
+          selection.type === 'AUDIO_ONLY' ? audio?.container : video?.container,
+      };
+      const result = file
+        ? await saveTransferredDownload(
+            journal,
+            { uri: file.uri, owner: job.id, sizeBytes: job.fileSize },
+            metadata,
+          )
+        : checkpoint && (await saveCompletedPartial(checkpoint, metadata));
       if (!result?.item) {
         if (isCurrent()) {
           setState({ status: 'idle' });
@@ -269,9 +307,31 @@ export function useMediaDownload(
       }
     } catch (error) {
       if (isCurrent()) {
+        if (checkpoint) {
+          const expired =
+            error instanceof ApiError &&
+            ['JOB_NOT_FOUND', 'FILE_EXPIRED'].includes(error.code);
+          await (
+            expired ? journal?.fail('REMOTE_EXPIRED') : journal?.interrupt()
+          )?.catch(() => undefined);
+          const recovered = await readDownloadRecord().catch(() => null);
+          if (
+            isCurrent() &&
+            recovered?.id === checkpoint.id &&
+            recovered.generation === checkpoint.generation
+          ) {
+            jobId.current = null;
+            setState({ status: 'idle' });
+            onInterrupted(
+              recovered,
+              error instanceof ApiError ? error.message : undefined,
+            );
+            return;
+          }
+        }
         const failedJob = jobId.current;
         jobId.current = null;
-        if (failedJob && !committing.current)
+        if (failedJob && !committing.current && !checkpoint)
           void deleteDownloadJob(failedJob).catch(() => undefined);
         if (!(
           error instanceof DownloadRecoveryError &&
@@ -333,6 +393,7 @@ export function useMediaDownload(
     const currentJobId = jobId.current;
     jobId.current = null;
     active.current = false;
+    void finishDownloadPartialCleanup().catch(() => undefined);
     if (currentJobId) {
       await deleteDownloadJob(currentJobId).catch(() => undefined);
     }

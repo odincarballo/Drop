@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useRef,
   useState,
   type PropsWithChildren,
 } from 'react';
@@ -14,8 +15,9 @@ import { isYoutubeUrl } from '@/services/onDeviceYoutube';
 
 function useSession() {
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
-  const recovery = useDownloadRecovery();
   const foregroundGeneration = useDownloadForeground();
+  const recovery = useDownloadRecovery(foregroundGeneration);
+  const conventional = useRef(false);
   const {
     url,
     state,
@@ -64,6 +66,7 @@ function useSession() {
   function retryRecovered() {
     return recovery.dismiss((record) => {
       if (record.source === 'direct') {
+        conventional.current = true;
         setNeedsLink(true);
         replaceInput('');
       } else {
@@ -87,6 +90,7 @@ function useSession() {
   }
 
   function newDownload() {
+    conventional.current = false;
     changeUrl('');
   }
 
@@ -114,7 +118,13 @@ function useSession() {
     pasteUrl,
     select,
     spike,
-    download,
+    download: {
+      ...download,
+      start: (
+        media: Parameters<typeof download.start>[0],
+        selection: Parameters<typeof download.start>[1],
+      ) => download.start(media, selection, conventional.current),
+    },
     localYoutube,
     isBusy,
     recovery,
