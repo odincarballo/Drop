@@ -1,7 +1,43 @@
 # Estado operativo de Drop
 
-Actualizado: 18 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 25 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
+
+## Descargas persistentes · C.4 cerrado funcionalmente · integración preparada
+
+- **GO para integración por fast-forward.** `main` está en `16de8d26` y
+  `codex/download-recovery-c3` contiene, en orden, `b6003e7` (contrato
+  backend), `81df192` (parciales y migración del diario) y `3f4a24d`
+  (reanudación directa y publicación idempotente). El commit `fc7311d` de
+  `codex/render-reprotest`, su adaptador, sus fixtures y su configuración
+  de Render quedan fuera. La integración y el despliegue siguen pendientes.
+- **PASS en build 23.** Primer arranque y migración efectiva de
+  `drop-downloads.sqlite` v1 → v2. Biblioteca permaneció en v5 con el mismo
+  contenido lógico. Ambas bases pasaron integridad y claves foráneas.
+- **PASS en build 24.** Tras interrumpir y reabrir, la reanudación explícita
+  solicitó el mismo job desde el byte 1 048 576 (`206`). SHA-256 y publicación
+  única en Biblioteca verificados. Reproducción completa del audio sintético
+  confirmada en iPhone. El reintento convencional explícito pasó. Otro caso
+  confirmó `404` para el job caducado, seguido de descarte persistente.
+  Una diferencia previa de 1,48 s en un progreso histórico quedó registrada
+  con causa indeterminada y precedía la prueba de caducidad.
+- **PASS en build 25.** El backend aislado de Render omitió los metadatos de
+  reanudación. Drop eligió automáticamente un `GET` completo (`200`, sin
+  `Range` ni `If-Range`). Coincidieron los 2 440 018 bytes y el SHA-256. Se
+  publicó una sola entrada nueva, se conservaron las 23 entradas previas,
+  sus archivos y preferencias, y quedaron ambas bases íntegras, con cero
+  errores de claves foráneas y sin intentos ni parciales pendientes.
+- Evidencias fuera del checkout: `Drop-C4-https-preflight.bvzvnq19`
+  (primer arranque, reanudación, reproducción y caducidad) y
+  `Drop-C4-render-origin.p4Tku4mf/c4-final` (selección convencional).
+  Se conservan las validaciones automatizadas de C.1, C.2 y C.3.
+- **Pendiente.** Medir consumo máximo de memoria, latencia de checkpoints y
+  rendimiento bajo carga. Los rangos de 1 MiB acotan el tamaño normal por
+  solicitud. Los archivos apartados pueden acumularse fuera de la cuota
+  activa de 100 MiB y consumen espacio libre, sin cuota propia ni limpieza
+  automática.
+  Falta validar el despliegue de C.1 y sus intermediarios en producción.
+  Estos puntos quedan abiertos para el despliegue y seguimiento operativo.
 
 ## Descargas persistentes · C.3 · transferencia e interfaz
 
@@ -31,10 +67,9 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   Se reanudó tras la interrupción conservando cambios y logs. Se retiró
   únicamente el enlace temporal de lectura a dependencias existentes.
   El formateador se ejecuta desde `mobile/`, como indica el workflow.
-- Pendientes la build integrada, la ejecución física, Render y mediciones
-  de memoria y rendimiento. Los sockets Node doblan `expo/fetch` en HTTP
-  local. C.4 no iniciado. Las aplicaciones instaladas no se inspeccionaron
-  ni modificaron durante este bloque.
+- La validación de C.3 se hizo en host, con sockets Node que doblan
+  `expo/fetch` en HTTP local. La ejecución física posterior se registra en
+  C.4. El consumo de memoria y el rendimiento siguen pendientes de medición.
 - Corregido el bloqueo del descarte cuando se daña un archivo de C.3 en
   staging. Los sellos del inodo acreditan propiedad y permiten apartarlo
   mediante renombrado exclusivo. La reapertura reconoce el archivo apartado
@@ -57,15 +92,15 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   14 pruebas del diario, incluida la conservación del comprobante A+B.
 - Pasaron 16 casos Swift con disco real en macOS, typecheck del almacén
   para iOS 16.4 ARM64 en Swift 5 y 6 y typecheck del bridge en Swift 5.
-  Pendientes la validación física en iOS, la medición de rendimiento y
-  la integración de transferencia e interfaz en C.3.
+  La integración de transferencia e interfaz se hizo en C.3 y la migración
+  efectiva en iOS se comprobó en C.4. Sigue pendiente medir rendimiento.
 - Corregido el bloqueo del huérfano anterior al sello. La preparación se
   sella y sincroniza antes del renombrado exclusivo. La reapertura y el
   descarte preservan archivos de propiedad incierta fuera de las rutas
   activas y permiten volver a usar el almacén. La comprobación final
   conservó la asignación en disco de un objeto apartado y verificó el
-  umbral de escritura con disponibilidad simulada. C.3 deberá mantener la
-  descarga convencional bajo sus propias políticas de tamaño y espacio.
+  umbral de escritura con disponibilidad simulada. C.3 conserva la descarga
+  convencional bajo sus propias políticas de tamaño y espacio.
 
 ## Descargas persistentes · C.1 · contrato del backend
 
@@ -85,8 +120,9 @@ No contiene autorizaciones nuevas ni resultados inferidos.
   Ruff y formato PASS. Mypy conserva los dos errores de la base.
 - La revisión final verificó cuatro rangos con extremos dentro de
   bloques o en sus límites, incluido el bloque final corto.
-- Quedan pendientes la validación en Render y sus intermediarios y la
-  medición del rendimiento bajo carga.
+- C.4 validó el contrato en el entorno aislado de Render. Quedan pendientes
+  el despliegue definitivo en producción, la validación de sus intermediarios
+  y la medición del rendimiento bajo carga.
 
 ## Descargas persistentes · A+B integrados y verificados en reprotest
 
