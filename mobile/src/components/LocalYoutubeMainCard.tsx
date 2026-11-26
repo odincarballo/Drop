@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { ActionButton } from '@/components/ActionButton';
 import { ChoiceChip } from '@/components/ChoiceChip';
 import { CompletedFileActions } from '@/components/CompletedFileActions';
+import { LocalYoutubeAudioSelector } from '@/components/LocalYoutubeAudioSelector';
 import { Thumbnail } from '@/components/Thumbnail';
 import { useLocalYoutubeSpike } from '@/hooks/useLocalYoutubeSpike';
 import { localYoutubeError } from '@/services/onDeviceYoutube';
@@ -93,30 +94,28 @@ export function LocalYoutubeMainCard({
   const selectedVideo = spike.videoOptions.find(
     (format) => format.id === spike.selectedVideoFormatId,
   );
-  const selectedAudio = metadata?.audioFormats.find(
-    (format) =>
-      format.id === metadata.preferredAudioFormatId &&
-      isDirectAudio(format) &&
-      isAudioWithinLimit(format),
-  );
+  const { audioOptions, selectedAudio } = spike;
   const audioOverLimit = metadata?.audioFormats.some(
     (format) => isDirectAudio(format) && !isAudioWithinLimit(format),
   );
   const hasVideo = Boolean(selectedVideo);
-  const hasAudio = Boolean(selectedAudio);
+  const hasAudioOptions = audioOptions.length > 0;
+  const audioAvailable = hasAudioOptions && Boolean(metadata?.duration);
   const modeAvailable = {
-    VIDEO_AUDIO: hasVideo && hasAudio && Boolean(metadata?.duration),
+    VIDEO_AUDIO: hasVideo && audioAvailable,
     VIDEO_ONLY: hasVideo,
-    AUDIO_ONLY: hasAudio && Boolean(metadata?.duration),
+    AUDIO_ONLY: audioAvailable,
   };
-  const mode: Mode =
+  const mode: Mode | null =
     requestedMode && modeAvailable[requestedMode]
       ? requestedMode
-      : modeAvailable.VIDEO_AUDIO
+      : selectedAudio && modeAvailable.VIDEO_AUDIO
         ? 'VIDEO_AUDIO'
-        : modeAvailable.VIDEO_ONLY
-          ? 'VIDEO_ONLY'
-          : 'AUDIO_ONLY';
+        : selectedAudio && modeAvailable.AUDIO_ONLY
+          ? 'AUDIO_ONLY'
+          : null;
+  const canDownload =
+    mode !== null && (mode === 'VIDEO_ONLY' || !!selectedAudio);
   const estimatedSize =
     mode === 'AUDIO_ONLY'
       ? (selectedAudio?.estimatedSize ?? null)
@@ -147,12 +146,12 @@ export function LocalYoutubeMainCard({
     'downloading-audio',
     'muxing',
   ].includes(activeState.status);
-  const feedback = downloadFeedback(spike, mode);
+  const feedback = mode && downloadFeedback(spike, mode);
   const actionError =
     activeState.status === 'completed' ? activeState.actionError : null;
 
   function startDownload() {
-    if (!modeAvailable[mode]) return;
+    if (!canDownload) return;
     if (mode === 'VIDEO_AUDIO') spike.downloadCombined();
     else if (mode === 'VIDEO_ONLY') spike.downloadVideo();
     else spike.downloadAudio();
@@ -315,7 +314,17 @@ export function LocalYoutubeMainCard({
                     />
                   ))}
               </View>
-              {!hasAudio && (
+              {hasAudioOptions && (
+                <LocalYoutubeAudioSelector
+                  key={metadata.analysisId}
+                  options={audioOptions}
+                  selectedId={selectedAudio?.id}
+                  preferredId={metadata.preferredAudioFormatId}
+                  disabled={disabled}
+                  onSelect={spike.selectAudioFormat}
+                />
+              )}
+              {!hasAudioOptions && (
                 <Text style={{ color: colors.secondary }}>
                   {audioOverLimit
                     ? 'El audio supera el límite actual de Drop (250 MiB).'
@@ -333,7 +342,7 @@ export function LocalYoutubeMainCard({
                     : 'Esta calidad supera el límite actual de Drop.'}
                 </Text>
               )}
-              {hasAudio && !metadata.duration && (
+              {hasAudioOptions && !metadata.duration && (
                 <Text style={{ color: colors.secondary }}>
                   No se puede preparar audio sin una duración válida.
                 </Text>
@@ -353,7 +362,7 @@ export function LocalYoutubeMainCard({
               <ActionButton
                 label="Descargar"
                 onPress={startDownload}
-                disabled={disabled || !modeAvailable[mode]}
+                disabled={disabled || !canDownload}
               />
               {feedback && (
                 <Text

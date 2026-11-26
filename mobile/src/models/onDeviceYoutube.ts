@@ -44,7 +44,18 @@ export const localYoutubeResultSchema = z
             );
           }),
         videoFormats: z.array(formatSchema).max(100),
-        audioFormats: z.array(formatSchema).max(30),
+        audioFormats: z
+          .array(
+            formatSchema.extend({
+              isOriginal: z.boolean().optional(),
+              language: z
+                .string()
+                .regex(/^[A-Za-z0-9-]{1,35}$/)
+                .nullable()
+                .optional(),
+            }),
+          )
+          .max(30),
         resolutions: z.array(z.number().positive()).max(100),
       })
       .optional(),

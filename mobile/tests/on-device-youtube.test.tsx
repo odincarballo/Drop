@@ -186,7 +186,7 @@ beforeEach(async () => {
   audioListener = null;
   videoListener = null;
   combinedListener = null;
-  native.analyze.mockResolvedValue(JSON.stringify(result));
+  native.analyze.mockReset().mockResolvedValue(JSON.stringify(result));
   native.startAudioDownload.mockReturnValue(
     'D2A73B11-8703-4FB1-8612-8AC3C477C42F',
   );
@@ -261,7 +261,7 @@ test('cancel delegates to the native engine', () => {
   expect(native.cancel).toHaveBeenCalledTimes(1);
 });
 
-function TestCard() {
+function TestCard({ url = 'https://youtu.be/AWGPaFraPN4' }: { url?: string }) {
   const spike = useLocalYoutubeSpike(useDownloadForeground());
   return (
     <>
@@ -271,7 +271,7 @@ function TestCard() {
             ? 'Analizando en el iPhone…'
             : 'Analizar'
         }
-        onPress={() => void spike.analyze('https://youtu.be/AWGPaFraPN4')}
+        onPress={() => void spike.analyze(url)}
         disabled={spike.isBusy}
       />
       <LocalYoutubeMainCard
@@ -634,7 +634,7 @@ test('combined download reports both transfers, muxes, completes, and shares', a
   });
   expect(screen.getByText('Combinando… 75 %')).toBeTruthy();
   await act(() => {
-    combinedListener?.({
+    const completed = {
       jobId: '7D628D93-DC67-4729-83AD-B8EF70877A87',
       status: 'COMPLETED',
       fileName: 'Own video.mp4',
@@ -651,9 +651,12 @@ test('combined download reports both transfers, muxes, completes, and shares', a
         contentLength: '262144',
         finalHost: 'rr1.googlevideo.com',
       },
-    });
+    };
+    combinedListener?.(completed);
+    combinedListener?.(completed);
   });
   expect(screen.getByText('✓ Descarga completada')).toBeTruthy();
+  expect(publishDownloadAsset).toHaveBeenCalledTimes(1);
   expect(
     screen.getByText(/Primer Range solicitado: bytes=0-262143/),
   ).toBeTruthy();
@@ -666,6 +669,156 @@ test('combined download reports both transfers, muxes, completes, and shares', a
   await waitFor(() =>
     expect(shareLocalFile).toHaveBeenCalledWith('file:///library/clip.mp4'),
   );
+});
+
+const spanishAudio = {
+  ...metadata.audioFormats[0],
+  id: `140@${'e'.repeat(24)}`,
+  language: 'es-MX',
+  estimatedSize: 3_000_000,
+};
+const englishAudio = {
+  ...metadata.audioFormats[0],
+  id: `140@${'a'.repeat(24)}`,
+  language: 'en-US',
+};
+
+test('ambiguous AAC languages require a choice and forward the selected opaque ID', async () => {
+  native.analyze.mockResolvedValueOnce(
+    JSON.stringify({
+      ...result,
+      metadata: {
+        ...metadata,
+        preferredAudioFormatId: null,
+        audioFormats: [englishAudio, spanishAudio],
+      },
+    }),
+  );
+  await render(<TestCard />);
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await screen.findByText('Elige una pista de audio.');
+  expect(screen.getByRole('button', { name: 'Descargar' })).toBeDisabled();
+  const selector = screen.getByRole('button', { name: 'Pista de audio' });
+  expect(selector.props.accessibilityState.expanded).toBe(false);
+  expect(screen.queryByRole('radio', { name: /español/i })).toBeNull();
+  await fireEvent.press(selector);
+  await fireEvent.press(
+    screen.getByRole('radio', { name: /español.*México/i }),
+  );
+  expect(
+    screen.getByRole('button', { name: 'Pista de audio' }).props
+      .accessibilityState.expanded,
+  ).toBe(false);
+  expect(screen.getByRole('radio', { name: 'Video + audio' })).toBeChecked();
+  expect(
+    screen.getByText(`Audio seleccionado: ID ${spanishAudio.id} · mp4a.40.2`, {
+      exact: false,
+    }),
+  ).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+  expect(native.startCombinedDownload).toHaveBeenCalledWith(
+    metadata.analysisId,
+    '134',
+    spanishAudio.id,
+    754,
+    null,
+    3_000_000,
+    7,
+  );
+  expect(native.startVideoDownload).not.toHaveBeenCalled();
+});
+
+test('the audio selector groups equivalent renditions and keeps distinct tracks', async () => {
+  jest.spyOn(Intl, 'DisplayNames').mockImplementation(() => {
+    throw new Error('Language display names unavailable');
+  });
+  const english = { ...englishAudio, id: '139', bitrateKbps: 48 };
+  native.analyze.mockResolvedValueOnce(
+    JSON.stringify({
+      ...result,
+      metadata: {
+        ...metadata,
+        preferredAudioFormatId: null,
+        audioFormats: [
+          english,
+          { ...english, id: '140', bitrateKbps: 128 },
+          { ...englishAudio, isOriginal: true },
+          { ...spanishAudio, language: 'en-GB' },
+        ],
+      },
+    }),
+  );
+  await render(<TestCard />);
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await fireEvent.press(
+    await screen.findByRole('button', { name: 'Pista de audio' }),
+  );
+  expect(screen.getAllByRole('radio', { name: /inglés/i })).toHaveLength(3);
+  expect(screen.getByRole('radio', { name: /Original/ })).toBeTruthy();
+  await fireEvent.press(
+    screen.getByRole('radio', { name: /Estados Unidos.*128 kbps/i }),
+  );
+  expect(screen.getByText(/Audio seleccionado: ID 140 ·/)).toBeTruthy();
+});
+
+test.each([
+  [[], 'No hay audio M4A/AAC directo compatible.'],
+  [[{ ...spanishAudio, estimatedSize: 250 * 1024 * 1024 + 1 }], /250 MiB/],
+] as const)(
+  'video-only needs consent when the audio is unavailable (%#)',
+  async (audioFormats, reason) => {
+    native.analyze.mockResolvedValueOnce(
+      JSON.stringify({
+        ...result,
+        metadata: { ...metadata, preferredAudioFormatId: null, audioFormats },
+      }),
+    );
+    await render(<TestCard />);
+    await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+    await screen.findByText(reason);
+    expect(screen.getByRole('button', { name: 'Descargar' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Solo video' })).not.toBeChecked();
+    await fireEvent.press(screen.getByRole('radio', { name: 'Solo video' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Descargar' }));
+    expect(native.startVideoDownload).toHaveBeenCalledTimes(1);
+    expect(native.startCombinedDownload).not.toHaveBeenCalled();
+  },
+);
+
+test('analysis of a new link drops audio selection and video-only consent', async () => {
+  const ambiguous = {
+    ...metadata,
+    preferredAudioFormatId: null,
+    audioFormats: [englishAudio, spanishAudio],
+  };
+  native.analyze
+    .mockResolvedValueOnce(JSON.stringify({ ...result, metadata: ambiguous }))
+    .mockResolvedValueOnce(
+      JSON.stringify({
+        ...result,
+        metadata: {
+          ...ambiguous,
+          id: 'u_uUZRU6kkQ',
+          analysisId: 'b'.repeat(32),
+          title: 'Otro video',
+        },
+      }),
+    );
+  const view = await render(<TestCard />);
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await fireEvent.press(
+    await screen.findByRole('button', { name: 'Pista de audio' }),
+  );
+  await fireEvent.press(
+    screen.getByRole('radio', { name: /español.*México/i }),
+  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo video' }));
+  await view.rerender(<TestCard url="https://youtu.be/u_uUZRU6kkQ" />);
+  await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
+  await screen.findByText('Otro video');
+  expect(screen.getByText('Elige una pista de audio.')).toBeTruthy();
+  expect(screen.getByRole('radio', { name: 'Solo video' })).not.toBeChecked();
+  expect(screen.getByRole('button', { name: 'Descargar' })).toBeDisabled();
 });
 
 test('720p selection is dynamic and remains opaque to React Native', async () => {
@@ -698,6 +851,7 @@ test('720p selection is dynamic and remains opaque to React Native', async () =>
 test.each([
   ['DOWNLOADING_VIDEO', 'VIDEO_HTTP_ERROR'],
   ['DOWNLOADING_AUDIO', 'AUDIO_HTTP_ERROR'],
+  ['MUXING', 'MUX_OUTPUT_INVALID'],
 ] as const)('combined %s failure remains specific', async (phase, code) => {
   await render(<TestCard />);
   await fireEvent.press(screen.getByRole('button', { name: 'Analizar' }));
@@ -718,6 +872,8 @@ test.each([
     });
   });
   expect(screen.getByRole('alert')).toHaveTextContent(localCombinedError(code));
+  expect(publishDownloadAsset).not.toHaveBeenCalled();
+  expect(native.startVideoDownload).not.toHaveBeenCalled();
 });
 
 test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
@@ -749,6 +905,7 @@ test.each(['DOWNLOADING_VIDEO', 'DOWNLOADING_AUDIO', 'MUXING'] as const)(
       });
     });
     expect(screen.queryByText('✓ Descarga completada')).toBeNull();
+    expect(publishDownloadAsset).not.toHaveBeenCalled();
   },
 );
 

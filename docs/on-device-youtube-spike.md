@@ -44,6 +44,32 @@ estable. `v1.0.1` permanece etiquetada y estable; la rama
   números o valores estrictamente validados; no se transfieren URL, queries,
   cookies, Authorization ni headers arbitrarios.
 
+## Contrato de selección de audio
+
+- El catálogo acotado conserva la pista AAC preferida y prioriza opciones
+  utilizables de distintos idiomas. Cada elección se transmite como ID de
+  pista asociado al análisis. Resolverla de nuevo requiere la misma identidad,
+  aunque cambien la URL temporal o el orden de los formatos.
+- Un desplegable cerrado muestra la pista elegida o pide elegir una.
+  Usa nombres de idioma en español y conserva región y escritura. Agrupa
+  rendiciones AAC equivalentes de idioma conocido, priorizando la selección
+  vigente, la preferida y la mayor tasa de bits. Conserva por separado
+  identidades opacas, perfiles distintos e idiomas sin identificar.
+  «Original» exige un indicador explícito; una preferencia sola se muestra
+  como «Preferida».
+- Si hay video y audio elegidos, con duración válida, se preselecciona
+  «Video + audio». Si falta una preferencia inequívoca, se muestra el selector
+  de pistas. La interfaz distingue esa elección pendiente de la ausencia de
+  audio compatible y de un tamaño superior al límite.
+- «Solo video» requiere una elección explícita para el análisis actual.
+  Al cambiar de enlace se limpian las selecciones. Al reanalizar un intento
+  interrumpido solo se recupera automáticamente una pista identificada
+  inequívocamente. Una pista ausente requiere elegir de nuevo.
+- El combinado solo entra en Biblioteca tras la validación nativa del MP4
+  con H.264 y AAC. Un fallo o cancelación no publica un video sin sonido.
+  Se conservan los límites de transferencia, la reserva de disco y la
+  publicación idempotente de A+B.
+
 ## Validado físicamente en «iPhone de Odín»
 
 - YouTube: análisis local, Video + audio, Solo video y Solo audio; selección

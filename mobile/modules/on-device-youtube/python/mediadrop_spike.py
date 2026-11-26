@@ -651,6 +651,24 @@ def build_video_descriptor(payload, format_id):
     }
 
 
+def bounded_audio_catalog(audio, preferred_id):
+    if len(audio) <= 30:
+        return audio
+
+    direct = [item for item in audio if item["directDownload"]]
+    eligible = [item for item in direct if (item["estimatedSize"] or 0) <= MAX_AUDIO_BYTES]
+    first_by_language = {}
+    for item in eligible:
+        first_by_language.setdefault((item["language"] or "").lower(), item)
+    preferred = [item for item in eligible if item["id"] == preferred_id]
+    prioritized = {}
+    for item in [*preferred, *first_by_language.values(), *eligible, *direct, *audio]:
+        prioritized.setdefault(item["id"], item)
+        if len(prioritized) == 30:
+            break
+    return list(prioritized.values())
+
+
 def normalize(payload, analysis_id=None, selected_audio=None, selected_video=None):
     if payload.get("_type") in {"playlist", "multi_video"}:
         raise ValueError("PLAYLIST_NOT_SUPPORTED")
@@ -670,6 +688,12 @@ def normalize(payload, analysis_id=None, selected_audio=None, selected_video=Non
     formats = payload.get("formats", [])
     if formats and all(item.get("has_drm") for item in formats):
         raise ValueError("DRM_NOT_SUPPORTED")
+    direct_audio_ids = {
+        audio_public_id(item, formats) for item in unique_audio_tracks(formats)
+    }
+    preferred_audio_id = (
+        audio_public_id(selected_audio, formats) if selected_audio else None
+    )
     video, audio = [], []
     for item in formats:
         if item.get("has_drm") or item.get("ext") not in {"mp4", "m4a", "webm"}:
@@ -705,9 +729,18 @@ def normalize(payload, analysis_id=None, selected_audio=None, selected_video=Non
             "directDownload": (
                 is_selectable_direct_video(item)
                 if has_video
-                else is_direct_m4a_audio(item)
+                else False
             ),
         }
+        if not has_video:
+            language = item.get("language")
+            record["language"] = (
+                language
+                if isinstance(language, str)
+                and re.fullmatch(r"[A-Za-z0-9-]{1,35}", language)
+                else None
+            )
+            record["directDownload"] = record["id"] in direct_audio_ids
         (video if has_video else audio).append(record)
     if not video and not audio:
         raise ValueError("FORMAT_NOT_AVAILABLE")
@@ -724,14 +757,12 @@ def normalize(payload, analysis_id=None, selected_audio=None, selected_video=Non
         "duration": number(payload.get("duration")),
         "thumbnail": thumbnail,
         "videoFormats": bounded_video_catalog(video),
-        "audioFormats": audio[:30],
+        "audioFormats": bounded_audio_catalog(audio, preferred_audio_id),
         "resolutions": sorted({item["height"] for item in video if item["height"]}),
     }
     if analysis_id is not None:
         result["analysisId"] = analysis_id
-        result["preferredAudioFormatId"] = (
-            audio_public_id(selected_audio, formats) if selected_audio else None
-        )
+        result["preferredAudioFormatId"] = preferred_audio_id
         result["preferredVideoFormatId"] = (
             str(selected_video.get("format_id")) if selected_video else None
         )

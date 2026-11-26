@@ -99,9 +99,13 @@ export function isDirectAudio(format: LocalYoutubeAudioFormat) {
 }
 
 export function isAudioWithinLimit(format: LocalYoutubeAudioFormat) {
-  return (
-    format.estimatedSize === null ||
-    format.estimatedSize <= LOCAL_AUDIO_MAX_BYTES
+  const bytes = format.exactSize ?? format.estimatedSize;
+  return bytes === null || bytes <= LOCAL_AUDIO_MAX_BYTES;
+}
+
+export function selectLocalAudioOptions(formats: LocalYoutubeAudioFormat[]) {
+  return formats.filter(
+    (format) => isDirectAudio(format) && isAudioWithinLimit(format),
   );
 }
 

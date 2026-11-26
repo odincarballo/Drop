@@ -1475,6 +1475,7 @@ test('synchronous video and audio actions cannot start two native jobs', async (
   jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
   await render(<NavigableSession />);
   await analyzeYoutube();
+  await fireEvent.press(screen.getByRole('radio', { name: 'Solo video' }));
   await act(() => {
     session.spike.downloadVideo();
     session.spike.downloadAudio();
@@ -2083,46 +2084,77 @@ test.each(['youtube', 'direct'] as const)(
   },
 );
 
-test('a foreground round trip invalidates the old reservation and requires an explicit retry', async () => {
-  const native = localYoutubeNativeEngine();
-  native.startAudioDownload.mockReturnValue(nativeJob);
-  jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
-  const previous = AppState.currentState;
-  AppState.currentState = 'active';
-  await render(<NavigableSession />);
-  await analyzeYoutube();
-  await fireEvent.press(await screen.findByText('Solo audio'));
-  const commit = holdReservationCommit();
-  try {
-    await act(async () => {
-      const start = session.spike.downloadAudio();
-      await commit.reached;
-      changeAppState('background');
-      changeAppState('active');
-      commit.release();
-      await start;
-    });
-    expect(native.startAudioDownload).not.toHaveBeenCalled();
-    const interrupted = await readRawDownloadRecovery();
-    await act(() => native.emit('onAudioDownloadState', completeNative));
-    expect(publishDownloadAsset).not.toHaveBeenCalled();
-    expect(await readRawDownloadRecovery()).toBe(interrupted);
-    await fireEvent.press(
-      await screen.findByRole('button', { name: 'Reintentar desde cero' }),
+test.each(['legacy itag', 'opaque track ID'] as const)(
+  'a foreground round trip requires an explicit retry with a %s',
+  async (identity) => {
+    const native = localYoutubeNativeEngine();
+    const audioId =
+      identity === 'legacy itag' ? '140' : `140@${'b'.repeat(24)}`;
+    native.analyze.mockResolvedValue(
+      JSON.stringify({
+        ...localYoutubeMetadata,
+        metadata: {
+          ...localYoutubeMetadata.metadata,
+          preferredAudioFormatId: audioId,
+          audioFormats: [
+            {
+              ...localYoutubeMetadata.metadata.audioFormats[0],
+              id: audioId,
+              language: 'es-MX',
+            },
+          ],
+        },
+      }),
     );
-    const download = await screen.findByRole('button', { name: 'Descargar' });
-    expect(native.startAudioDownload).not.toHaveBeenCalled();
-    await fireEvent.press(download);
-    expect(native.startAudioDownload).toHaveBeenCalledTimes(1);
-    expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
-      source: 'youtube',
-      status: 'pending',
-    });
-  } finally {
-    commit.release();
-    AppState.currentState = previous;
-  }
-});
+    native.startAudioDownload.mockReturnValue(nativeJob);
+    jest.mocked(requireOptionalNativeModule).mockReturnValue(native);
+    const previous = AppState.currentState;
+    AppState.currentState = 'active';
+    await render(<NavigableSession />);
+    await analyzeYoutube();
+    await fireEvent.press(await screen.findByText('Solo audio'));
+    const commit = holdReservationCommit();
+    try {
+      await act(async () => {
+        const start = session.spike.downloadAudio();
+        await commit.reached;
+        changeAppState('background');
+        changeAppState('active');
+        commit.release();
+        await start;
+      });
+      expect(native.startAudioDownload).not.toHaveBeenCalled();
+      const interrupted = await readRawDownloadRecovery();
+      await act(() => native.emit('onAudioDownloadState', completeNative));
+      expect(publishDownloadAsset).not.toHaveBeenCalled();
+      expect(await readRawDownloadRecovery()).toBe(interrupted);
+      await fireEvent.press(
+        await screen.findByRole('button', { name: 'Reintentar desde cero' }),
+      );
+      const download = await screen.findByRole('button', { name: 'Descargar' });
+      expect(native.startAudioDownload).not.toHaveBeenCalled();
+      if (identity === 'legacy itag') {
+        expect(download).toBeDisabled();
+        await fireEvent.press(
+          screen.getByRole('button', { name: 'Pista de audio' }),
+        );
+        await fireEvent.press(
+          screen.getByRole('radio', { name: /español.*México/i }),
+        );
+      }
+      await fireEvent.press(download);
+      expect(native.startAudioDownload).toHaveBeenCalledTimes(1);
+      expect(native.startAudioDownload.mock.calls[0][1]).toBe(audioId);
+      expect(JSON.parse((await readRawDownloadRecovery())!)).toMatchObject({
+        source: 'youtube',
+        status: 'pending',
+      });
+    } finally {
+      commit.release();
+      AppState.currentState = previous;
+    }
+  },
+);
 
 test('a foreground rejection at the native boundary is persisted as an interruption', async () => {
   const native = localYoutubeNativeEngine();

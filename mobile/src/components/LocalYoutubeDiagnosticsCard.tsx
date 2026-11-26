@@ -45,9 +45,7 @@ export function LocalYoutubeDiagnosticsCard({ spike }: { spike: Spike }) {
   const selectedVideo = metadata?.videoFormats.find(
     (format) => format.id === spike.selectedVideoFormatId,
   );
-  const selectedAudio = metadata?.audioFormats.find(
-    (format) => format.id === metadata.preferredAudioFormatId,
-  );
+  const { selectedAudio } = spike;
   const videoHttp =
     spike.videoState.status === 'completed' ||
     spike.videoState.status === 'error'

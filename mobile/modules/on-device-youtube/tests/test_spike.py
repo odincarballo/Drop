@@ -238,6 +238,57 @@ class SpikeTests(unittest.TestCase):
 
         self.assertEqual(spike.preferred_audio(payload["formats"])["format_id"], "140")
 
+    def test_bounded_audio_catalog_keeps_aac_preferred_at_position_36(self):
+        payload = self.audio_payload()
+        source = payload["formats"][0]
+        other = [
+            {**source, "language": f"es-{i}", "language_preference": -1}
+            for i in range(35)
+        ]
+        original = {**source, "language": "en-US", "language_preference": 10}
+        payload["formats"] = [*other, original]
+        with patch.object(spike.LocalYoutubeDL, "extract_info", return_value=payload):
+            metadata = json.loads(spike.analyze("https://youtu.be/AWGPaFraPN4"))["metadata"]
+        preferred = metadata["preferredAudioFormatId"]
+        self.assertLessEqual(len(metadata["audioFormats"]), 30)
+        self.assertIn(preferred, {item["id"] for item in metadata["audioFormats"]})
+        self.assertEqual(
+            next(item for item in metadata["audioFormats"] if item["id"] == preferred)["language"],
+            "en-US",
+        )
+
+    def test_bounded_audio_catalog_keeps_eligible_languages_ahead_of_other_formats(self):
+        payload = self.audio_payload()
+        source = payload["formats"][0]
+        payload["formats"] = [
+            {**source, "format_id": str(i), "ext": "webm", "acodec": "opus"}
+            for i in range(30)
+        ] + [
+            {**source, "language": "en-US"},
+            {**source, "language": "es-MX"},
+        ]
+        with patch.object(spike.LocalYoutubeDL, "extract_info", return_value=payload):
+            metadata = json.loads(spike.analyze("https://youtu.be/AWGPaFraPN4"))["metadata"]
+        self.assertIsNone(metadata["preferredAudioFormatId"])
+        choices = [item for item in metadata["audioFormats"] if item["directDownload"]]
+        self.assertEqual({item["language"] for item in choices}, {"en-US", "es-MX"})
+        self.assertEqual(len({item["id"] for item in choices}), 2)
+
+    def test_bounded_audio_catalog_preserves_evidence_of_an_oversized_aac_track(self):
+        payload = self.audio_payload()
+        source = payload["formats"][0]
+        payload["formats"] = [
+            {**source, "format_id": str(i), "ext": "webm", "acodec": "opus"}
+            for i in range(30)
+        ] + [{**source, "filesize": spike.MAX_AUDIO_BYTES + 1}]
+        with patch.object(spike.LocalYoutubeDL, "extract_info", return_value=payload):
+            metadata = json.loads(spike.analyze("https://youtu.be/AWGPaFraPN4"))["metadata"]
+        self.assertIsNone(metadata["preferredAudioFormatId"])
+        self.assertEqual(
+            [item["estimatedSize"] for item in metadata["audioFormats"] if item["directDownload"]],
+            [spike.MAX_AUDIO_BYTES + 1],
+        )
+
     def test_audio_selection_rejects_non_m4a_and_manifest(self):
         for changes in [
             {"ext": "webm", "acodec": "opus"},
