@@ -1,9 +1,22 @@
 # Estado operativo de Drop
 
-Actualizado: 25 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
+Actualizado: 26 de noviembre de 2026. Snapshot humano: verificar Git antes de actuar.
 No contiene autorizaciones nuevas ni resultados inferidos.
 
-## Descargas persistentes · C.4 cerrado funcionalmente · integración preparada
+## Estado vigente
+
+- **Audio YouTube.** El catálogo conserva la pista preferida en catálogos
+  acotados. El selector compacto conserva el ID seleccionado, muestra nombres
+  de idioma y exige consentimiento explícito para «Solo video». La selección
+  manual y la reproducción con el audio elegido se validaron físicamente en
+  modo claro y oscuro.
+- **Pendiente.** La validación física de idiomas sin preferencia inequívoca
+  queda abierta. Las pruebas automatizadas acreditan que el combinado exige
+  elegir cuando falta una preferencia y transmite el ID exacto al bridge.
+  La publicación sigue pendiente. El estado operativo detallado y las
+  evidencias de dispositivos se conservan fuera de los commits.
+
+## Histórico · Descargas persistentes · C.4 cerrado funcionalmente
 
 - **GO para integración por fast-forward.** `main` está en `16de8d26` y
   `codex/download-recovery-c3` contiene, en orden, `b6003e7` (contrato

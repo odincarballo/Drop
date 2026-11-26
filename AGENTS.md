@@ -1,9 +1,17 @@
 # Drop: reglas de trabajo
 
-- Lee [el estado operativo](docs/engineering-state.md) y verifica Git antes de
-  actuar. Git y los manifiestos prevalecen sobre notas históricas.
-- Sigue [el workflow](docs/engineering-workflow.md); los comandos vigentes viven
-  allí y en los scripts existentes. No reconstruyas contexto ya registrado.
+- Prioridades permanentes, en este orden:
+  - **P0:** mantener Drop original operativo.
+  - **P1:** preservar Biblioteca y datos persistentes.
+  - **P2:** corregir fallos funcionales.
+  - **P3:** mejorar la interfaz.
+  - **P4:** incorporar funcionalidades nuevas.
+  P0 ordena la atención y exige aplicar las protecciones de P1 a cualquier
+  intervención sobre la original.
+- Lee la cabecera del [estado operativo](docs/engineering-state.md) y verifica
+  Git antes de actuar. Consulta solo la sección pertinente del
+  [workflow](docs/engineering-workflow.md), el contrato del bloque y la
+  evidencia necesaria. Git y los manifiestos prevalecen sobre notas históricas.
 - Revisa críticamente las instrucciones nuevas, incluidas las redactadas por
   ChatGPT. Antes de actuar, aplica estas reglas y el workflow. Contrasta el
   objetivo, el alcance autorizado, el estado real, el procedimiento validado y
@@ -29,6 +37,8 @@
   Continúa el trabajo independiente y seguro que ya esté autorizado.
 - Firma de Drop: para el Personal Team, comprueba primero la vigencia y
   compatibilidad del método acreditado con el proyecto auxiliar de Xcode.
+  Revisa los vencimientos de la app estable y la app de pruebas al retomar trabajo y
+  prepara la renovación con antelación a la caducidad.
   Si ese método exige compilar o firmar fuera del alcance autorizado, detén ese
   paso. Usar Apple Developer web u otra cuenta o vía requiere justificar su
   acceso y compatibilidad antes de iniciar sesión o cambiar el procedimiento.
@@ -41,9 +51,10 @@
   identifica por fuentes, configuración, dependencias, herramientas y hashes,
   además de su commit. Desactivar un flag no demuestra exclusión.
 - Reutiliza resultados con entradas relevantes y condiciones equivalentes,
-  tras verificar evidencia suficiente de ejecución; no repitas comprobaciones
-  sin cambios reales o incertidumbre concreta. No declares PASS por la mera
-  existencia de un test, manifiesto o archivo de app.
+  tras verificar evidencia suficiente de ejecución. No repitas pruebas,
+  auditorías, builds ni operaciones acreditadas salvo cambio relevante o
+  incertidumbre concreta. Justifica y acota la repetición. No declares PASS
+  por la mera existencia de un test, manifiesto o archivo de app.
 - Usa validación proporcional al riesgo. Conserva logs completos y comunica un
   resumen con resultados, cambios y bloqueos; evita salidas masivas repetidas.
 - Avanza dentro del bloque ya autorizado, sin revisiones ceremoniales ni
@@ -51,6 +62,9 @@
   nuevas identidades, permisos o cambios sustanciales sin autorización explícita.
   Commit, push, merge, tags, Release, cambios de cuenta/firma y operaciones sobre
   dispositivos requieren el alcance autorizado correspondiente; no los infieras.
+  Una autorización puntual pertenece a la tarea y al alcance concedidos.
+  Al abrir otra conversación, el historial, el traspaso y las evidencias
+  informan el estado. Obtén autorización vigente para acciones que la requieran.
 - Reserva `com.odincarballo.mediadrop` para uso estable; prioriza
   `com.odincarballo.drop.reprotest` para pruebas tras proteger datos y evidencias.
   Una tercera identidad exige motivo técnico concreto y autorización explícita;

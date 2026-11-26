@@ -12,7 +12,15 @@ por versión son registros históricos, no resultados actuales automáticos.
 Registrar objetivo, base/branch, archivos permitidos, contratos, verificaciones,
 acciones autorizadas y condición de cierre. Leer primero estado y diff relevante;
 ampliar la exploración si aparece una razón concreta. No repetir una auditoría
-completa por cada paso. La autorización se conserva dentro de su alcance.
+completa por cada paso. La autorización se conserva durante la tarea en curso,
+dentro del alcance concedido.
+
+Para cambios funcionales, seguir **SDD → RED → GREEN → evidencia**. Definir
+comportamiento, límites y criterios de aceptación en el contrato vigente.
+Reproducir el defecto con una prueba focal y conservar su salida RED.
+Aplicar el cambio mínimo y comprobar GREEN con las regresiones afectadas.
+Registrar entradas, comandos, resultados y limitaciones. Distinguir las
+pruebas reutilizadas, las ejecutadas y la confirmación física del usuario.
 
 Evaluar si los pasos pedidos contribuyen al objetivo antes de ejecutarlos, sin
 crear otra fase de aprobación. No ejecutar mecánicamente instrucciones
@@ -238,7 +246,20 @@ artefacto; no se presume APFS/reflink en todos los volúmenes. El runner permite
 a una build iOS. No proporcionar secretos en argumentos ni comandos que los
 impriman. Los logs son locales y necesitan revisión antes de compartirlos.
 
-## 5. Interrupciones
+## 5. Interrupciones y continuidad entre conversaciones
+
+Antes de cerrar o pausar un objetivo, actualizar la cabecera del estado
+operativo con rama, worktree, HEAD, cambios pendientes, último paso
+confirmado, evidencias, bloqueos y siguiente acción exacta. Mantener juntos
+los pasos dependientes de una operación. Abrir otro hilo para un objetivo
+independiente después de dejar ese punto de continuación.
+
+Empezar el nuevo hilo en el worktree indicado, con una comprobación de solo
+lectura. Confirmar reglas, Git, estado y evidencia pertinente. Identificar
+qué ya ocurrió, qué falta y qué requiere autorización vigente. Si hubo una
+interrupción, verificar el proceso, el resultado durable y cualquier marca
+de operación irreversible antes de repetirla. El traspaso no concede
+permisos ni convierte autorizaciones históricas en vigentes.
 
 Leer estado, manifiesto y resultado durable; localizar proceso/supervisor y log.
 No iniciar otra build activa. Si el supervisor falta, restablecer vigilancia o
@@ -264,10 +285,54 @@ de proponer instalación. Consultar solo los campos de perfil necesarios; no
 versionar certificados, perfiles, UDIDs, Keychain ni material privado. Renovar
 aprovisionamiento/cambiar cuenta exige el alcance autorizado; no improvisar.
 
+**Renovación preventiva.** Consultar el vencimiento vigente en el estado y
+contrastarlo con el perfil acreditado. Preparar el respaldo y reservar una
+ventana anterior a la caducidad. Para el Personal Team, reutilizar
+`ProfileRenewal` en Xcode para el Bundle ID autorizado. Verificar Team,
+certificado, entitlements, dispositivo y nueva vigencia. Refirmar una copia
+aislada del artefacto de esa app y acreditar que el código funcional coincide.
+Con autorización, actualizar una sola vez in-place y verificar los datos
+antes de pedir la apertura física. Las referencias a los scripts y resultados
+vigentes están en [el estado](engineering-state.md#estado-vigente).
+El mínimo de disco de Xcode se mantiene salvo excepción expresa para esa
+ejecución. Una excepción anterior queda como evidencia de aquel intento.
+
 Antes de actualizar datos: backup consistente con SQLite/WAL/SHM cuando aplique,
 medios/portadas, integridad/FK y hashes. Conservar original y copia verificable.
 Si no puede respaldarse, detener instalación. No restaurar automáticamente.
 Verificar datos después; distinguir progreso/consumo legítimos de pérdidas.
+
+### Captura de la app de pruebas cuando CoreDevice aún lista su proceso
+
+`devicectl device info processes` entrega PID y ruta del ejecutable en el
+JSON observado. Esos campos no distinguen ejecución, suspensión ni una
+entrada desactualizada. Contrastar una consulta nueva, con resultado exitoso,
+con `device info apps --bundle-id <bundle-id-autorizado>`. Confirmar
+el dispositivo autorizado, la versión y build instaladas, y la ruta exacta
+del ejecutable dentro del bundle. Normalizar la URL, incluida la variante
+`/private/var`. Conservar las respuestas fuera del checkout.
+
+Con cierre manual confirmado, verificar instalación y procesos al inicio,
+durante y al final de la captura. Un PID residual ya observado después del
+cierre puede persistir o desaparecer. Detener ante un PID nuevo o que
+reaparezca, cambio de identidad, consulta incompleta o cambio de datos
+persistentes. La sola presencia del mismo PID no justifica pedir otro cierre.
+Conservar esta comprobación como evidencia del proceso reportado, con su
+estado efectivo indeterminado.
+
+Copiar solo el dominio `appDataContainer` de la app de pruebas con `device copy from`
+a un directorio de evidencia nuevo. Comparar inventarios persistentes antes,
+entre lecturas y al final. Comparar por ruta, tamaño y SHA-256 dos lecturas
+independientes de los archivos persistentes. Se puede reutilizar una lectura
+acreditada si el inventario y los hashes de la lectura nueva coinciden con
+ella. Si se esperan cambios desde el respaldo, tomar dos lecturas nuevas y
+usar el respaldo para evaluar la preservación de datos. Verificar ambas
+bases SQLite en una copia local con sus auxiliares WAL/SHM cuando existan,
+`integrity_check` y `foreign_key_check`. Conservar copias, manifiestos y logs,
+y declarar la captura consistente solo tras completar esos controles.
+
+Este procedimiento de lectura no concede autorización para terminar procesos
+ni para instalar. Conservar las referencias al precedente en evidencia local.
 
 Pruebas destructivas solo con fixtures nuevas autorizadas, IDs/rutas/hash
 registrados y recuperación verificada. Observaciones del usuario, comprobaciones
