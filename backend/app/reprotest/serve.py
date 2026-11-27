@@ -1,9 +1,9 @@
 """Expose C.1 over the reprotest service with synthetic fixtures only."""
 
 import asyncio
-import hashlib
 import hmac
 import json
+import os
 import re
 from pathlib import Path
 
@@ -12,17 +12,18 @@ from starlette.responses import JSONResponse
 
 from app.core.config import Settings
 from app.main import create_app
+from app.reprotest.fixtures import FIXTURE_DIRECTORY, LARGE, LEGACY_NAME, SMALL
 from app.reprotest.legacy_job_response import LegacySyntheticJobResponse
 from app.reprotest.range_audit import RangeAudit
 from app.services.analysis import AnalysisService
 from app.services.http import SafeHTTPClient
 from app.services.url_safety import URLSafetyPolicy
 
-FIXTURE_NAME = "c4-synthetic.m4a"
-LEGACY_NAME = "c4-legacy.m4a"
-FIXTURE_HASH = "76c73ce767d3cfa93778ccbd70fc250d1c5568a57ca3229f96de07a4be8ccaf6"
-FIXTURE_SIZE = 2440018
-FIXTURE_URLS = {f"https://media.example.net/{name}" for name in (FIXTURE_NAME, LEGACY_NAME)}
+FIXTURE_ORIGIN = "https://media.example.net"
+FIXTURE_URLS = {f"{FIXTURE_ORIGIN}/{name}" for name in (SMALL.name, LARGE.name, LEGACY_NAME)}
+PERFORMANCE_RATE_LIMIT = 180
+PERFORMANCE_WINDOW_SECONDS = 60
+PERFORMANCE_MIN_TTL_SECONDS = 900
 ALLOWED = re.compile(
     r"GET /health|POST /(?:analyze|jobs)|(?:GET|DELETE) /jobs/[a-f0-9]{32}"
     r"|GET /jobs/[a-f0-9]{32}/file"
@@ -32,30 +33,39 @@ NO_STORE = {"Cache-Control": "private, no-store"}
 
 class FixtureResponse:
     status = 200
-    headers = {"Content-Type": "audio/mp4", "Content-Length": str(FIXTURE_SIZE)}
 
-    def __init__(self, data: bytes):
-        self.data = data
+    def __init__(self, path: Path, size: int, *, include_body: bool):
+        self.headers = {"Content-Type": "audio/mp4", "Content-Length": str(size)}
+        self.source = path.open("rb") if include_body else None
 
     async def iter_bytes(self, chunk_size: int):
-        for start in range(0, len(self.data), chunk_size):
-            yield self.data[start : start + chunk_size]
+        if self.source is not None:
+            while chunk := self.source.read(chunk_size):
+                yield chunk
 
     async def read_prefix(self, maximum: int) -> bytes:
-        return self.data[:maximum]
+        return self.source.read(maximum) if self.source is not None else b""
 
     async def close(self) -> None:
-        pass
+        if self.source is not None:
+            self.source.close()
 
 
 class FixtureTransport:
-    def __init__(self, fixture: bytes):
-        self.fixture = fixture
+    def __init__(self, directory: Path):
+        small = SMALL.verify(directory)
+        large = LARGE.verify(directory)
+        self.files = {
+            f"{FIXTURE_ORIGIN}/{SMALL.name}": (small, SMALL.size),
+            f"{FIXTURE_ORIGIN}/{LEGACY_NAME}": (small, SMALL.size),
+            f"{FIXTURE_ORIGIN}/{LARGE.name}": (large, LARGE.size),
+        }
 
     async def open(self, method, destination, headers):
-        if method not in {"GET", "HEAD"} or str(destination.url) not in FIXTURE_URLS:
+        fixture = self.files.get(str(destination.url))
+        if method not in {"GET", "HEAD"} or fixture is None:
             raise OSError("Destination outside reprotest fixtures")
-        return FixtureResponse(self.fixture if method == "GET" else b"")
+        return FixtureResponse(*fixture, include_body=method == "GET")
 
 
 async def fixture_dns(host, port):
@@ -72,8 +82,9 @@ def error(status, code, message):
 
 
 class ReprotestGate:
-    def __init__(self, app, token):
+    def __init__(self, app, token, *, performance: bool):
         self.app = app
+        self.performance = performance
         self.authorization = ("Bearer " + token).encode("ascii")
 
     async def __call__(self, scope, receive, send):
@@ -127,7 +138,11 @@ class ReprotestGate:
 
             receive = receive_body
 
-        if path.endswith("/file") and any(name == b"range" for name, _ in scope["headers"]):
+        if (
+            not self.performance
+            and path.endswith("/file")
+            and any(name == b"range" for name, _ in scope["headers"])
+        ):
             await asyncio.sleep(3)
 
         async def prevent_caching(event):
@@ -139,25 +154,29 @@ class ReprotestGate:
         return await self.app(scope, receive, prevent_caching)
 
 
-def create_reprotest(settings: Settings):
-    fixture = Path(__file__).with_name(FIXTURE_NAME).read_bytes()
-    if len(fixture) != FIXTURE_SIZE or hashlib.sha256(fixture).hexdigest() != FIXTURE_HASH:
-        raise ValueError("Unexpected reprotest fixture")
+def create_reprotest(
+    settings: Settings, *, fixture_directory: Path = FIXTURE_DIRECTORY, performance: bool = False
+):
     if settings.environment != "production" or settings.analysis_provider != "direct":
         raise ValueError("Reprotest requires production security and the direct provider")
 
-    constrained = settings.model_copy(
-        update={
-            "max_file_size": FIXTURE_SIZE,
-            "max_input_bytes": FIXTURE_SIZE,
-            "max_output_bytes": FIXTURE_SIZE,
-            "max_temp_work_bytes": FIXTURE_SIZE * 3,
-            "max_active_jobs": 1,
-        }
-    )
+    limits = {
+        "max_file_size": LARGE.size,
+        "max_input_bytes": LARGE.size,
+        "max_output_bytes": LARGE.size,
+        "max_temp_work_bytes": LARGE.size * 3,
+        "max_active_jobs": 1,
+    }
+    if performance:
+        limits.update(
+            rate_limit_requests=PERFORMANCE_RATE_LIMIT,
+            rate_limit_window_seconds=PERFORMANCE_WINDOW_SECONDS,
+            temp_file_ttl=max(settings.temp_file_ttl, PERFORMANCE_MIN_TTL_SECONDS),
+        )
+    constrained = settings.model_copy(update=limits)
     app = create_app(constrained)
     policy = URLSafetyPolicy(constrained, resolver=fixture_dns)
-    client = SafeHTTPClient(policy, FixtureTransport(fixture), constrained)
+    client = SafeHTTPClient(policy, FixtureTransport(fixture_directory), constrained)
     direct = app.state.direct_provider
     direct.http_client = client
     app.state.job_manager.http_client = client
@@ -165,15 +184,17 @@ def create_reprotest(settings: Settings):
     app.state.analysis_service = AnalysisService(direct, policy, constrained)
 
     legacy = LegacySyntheticJobResponse(
-        app, fixture_name=LEGACY_NAME, fixture_size=FIXTURE_SIZE, fixture_sha256=FIXTURE_HASH
+        app, fixture_name=LEGACY_NAME, fixture_size=SMALL.size, fixture_sha256=SMALL.sha256
     )
-    return RangeAudit(ReprotestGate(legacy, constrained.api_token.get_secret_value()))
+    return RangeAudit(
+        ReprotestGate(legacy, constrained.api_token.get_secret_value(), performance=performance)
+    )
 
 
 def main():
     settings = Settings()
     uvicorn.run(
-        create_reprotest(settings),
+        create_reprotest(settings, performance=os.environ.get("REPROTEST_PERFORMANCE") == "1"),
         host="0.0.0.0",
         port=settings.port,
         workers=1,
